@@ -116,6 +116,26 @@ export async function dispatchNext(ctx: MutationCtx, participantId: Id<'particip
   return turnId;
 }
 
+// Only a running ordinary turn takes a steer. A follow-up to a review or
+// decision always runs as its own turn, so it neither takes nor gives one.
+export function takesSteer(turn: Doc<'turns'> | null): turn is Doc<'turns'> {
+  return turn?.status === 'running' && !turn.followUp;
+}
+
+// "Steer now": hand a waiting message to the runner for the agent's running
+// turn. The runner reports the harness's verdict through steerResult.
+export async function steerMessage(ctx: MutationCtx, message: Doc<'messages'>, turn: Doc<'turns'>, runnerId: Id<'runners'>, actorParticipantId: Id<'participants'>) {
+  const commandId = await ctx.db.insert('commands', {
+    runnerId,
+    type: 'steer',
+    turnId: turn._id,
+    status: 'pending',
+    payload: { messageId: message._id, text: await renderMessage(ctx, message, 'steered') },
+  });
+  await ctx.db.patch(message._id, { delivery: 'steering', steering: { turnId: turn._id, commandId } });
+  await record(ctx, { roomId: message.roomId, type: 'message.steer_requested', actorParticipantId, subjectId: message._id, payload: { turnId: turn._id } });
+}
+
 // The runner could not put a steered message into the running turn. It goes
 // back to the queue, and starts a turn now if the agent is already idle.
 export async function steerRejected(ctx: MutationCtx, message: Doc<'messages'>) {

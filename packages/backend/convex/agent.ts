@@ -2,13 +2,11 @@ import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel';
 import { mutation, query } from './_generated/server';
 import { requireMember } from './lib/auth';
-import { activeOrdinaryTurn, dispatchNext, offlineReason, OFFLINE_AFTER_MS, runnerOnline } from './lib/dispatch';
-import { record } from './lib/ledger';
-import { renderMessage } from './lib/prompt';
+import { activeOrdinaryTurn, dispatchNext, offlineReason, OFFLINE_AFTER_MS, runnerOnline, steerMessage, takesSteer } from './lib/dispatch';
 
 // "Steer now": put a queued message into the agent's running turn instead of
 // waiting for it to end. With no turn running, the message is dispatched as
-// usual. The runner reports the harness's verdict through steerResult.
+// usual.
 export const steer = mutation({
   args: { messageId: v.id('messages') },
   handler: async (ctx, { messageId }): Promise<{ status: 'steering' | 'delivered' | 'queued'; turnId?: Id<'turns'> }> => {
@@ -23,16 +21,8 @@ export const steer = mutation({
     if (!room || !runnerOnline(runner)) throw new Error(offlineReason(runner));
 
     const active = await activeOrdinaryTurn(ctx, message.toParticipantId);
-    if (active?.status === 'running' && !active.followUp) {
-      const commandId = await ctx.db.insert('commands', {
-        runnerId: room.runnerId,
-        type: 'steer',
-        turnId: active._id,
-        status: 'pending',
-        payload: { messageId, text: await renderMessage(ctx, message, 'steered') },
-      });
-      await ctx.db.patch(messageId, { delivery: 'steering', steering: { turnId: active._id, commandId } });
-      await record(ctx, { roomId: message.roomId, type: 'message.steer_requested', actorParticipantId: participant._id, subjectId: messageId, payload: { turnId: active._id } });
+    if (takesSteer(active)) {
+      await steerMessage(ctx, message, active, room.runnerId, participant._id);
       return { status: 'steering', turnId: active._id };
     }
     const turnId = await dispatchNext(ctx, message.toParticipantId);

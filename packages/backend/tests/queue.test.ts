@@ -325,6 +325,33 @@ test('steering when no turn is running dispatches the message normally', async (
   expect(turns[1]!.prompt).toContain('LEFT-QUEUED');
 });
 
+test('sending with steer to a busy agent stores the message and steers it into the running turn', async () => {
+  const { t, owner, dana, roomId, claude } = await setup();
+  const first = (await owner.mutation(api.messages.send, { roomId, body: 'Start', toParticipantId: claude._id }))!;
+  await startTurn(t, first);
+
+  expect(await dana.mutation(api.messages.send, { roomId, body: 'STEER-ON-SEND', toParticipantId: claude._id, steer: true })).toBeNull();
+  const message = await messageWithBody(t, 'STEER-ON-SEND');
+  expect(message).toMatchObject({ delivery: 'steering', steering: { turnId: first } });
+  const steers = (await allCommands(t)).filter(c => c.type === 'steer');
+  expect(steers).toHaveLength(1);
+  expect(steers[0]).toMatchObject({ turnId: first, status: 'pending', payload: { messageId: message._id } });
+  expect(message.steering!.commandId).toBe(steers[0]!._id);
+  expect(await ordinaryTurns(t, claude._id)).toHaveLength(1);
+  await t.run(async ctx => {
+    const types = (await ctx.db.query('ledger').collect()).filter(e => e.subjectId === message._id).map(e => e.type);
+    expect(types).toEqual(['message.posted', 'message.steer_requested']);
+  });
+});
+
+test('sending with steer to an idle agent starts a turn as a normal send does', async () => {
+  const { t, dana, roomId, claude } = await setup();
+  const turnId = await dana.mutation(api.messages.send, { roomId, body: 'IDLE-STEER', toParticipantId: claude._id, steer: true });
+  expect(turnId).not.toBeNull();
+  expect((await allCommands(t)).some(c => c.type === 'steer')).toBe(false);
+  expect(await messageWithBody(t, 'IDLE-STEER')).toMatchObject({ delivery: 'delivered', deliveredTurnId: turnId });
+});
+
 test('a steer rejected after the turn finished returns the message to the queue and dispatches it at once', async () => {
   const { t, owner, dana, roomId, claude } = await setup();
   const first = (await owner.mutation(api.messages.send, { roomId, body: 'Start', toParticipantId: claude._id }))!;

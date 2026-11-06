@@ -4,7 +4,7 @@ import type { Id } from './_generated/dataModel';
 import { mutation, query, type QueryCtx } from './_generated/server';
 import { requireMember } from './lib/auth';
 import { answerCard, closeOpenCards, ownerOnlyCard, waitingCard } from './lib/cards';
-import { dispatchNext, offlineReason, runnerOnline } from './lib/dispatch';
+import { activeOrdinaryTurn, dispatchNext, offlineReason, runnerOnline, steerMessage, takesSteer } from './lib/dispatch';
 import { record } from './lib/ledger';
 
 // The room timeline: visible messages plus every turn that hasn't produced a
@@ -52,12 +52,14 @@ export const timeline = query({
 
 // Post a message to one agent (Claude by default). An idle agent starts a
 // turn at once; a busy one gets it, with anything else waiting, when its
-// current turn ends. Returns the new turn, or null when the message waits.
+// current turn ends. Returns the new turn, or null when no turn started.
 // Following up a review or decision is the owner's alone. A message to an
-// agent waiting on its own question card answers that card instead.
+// agent waiting on its own question card answers that card instead. With
+// `steer`, a message to an agent mid-turn goes into that turn at once, as
+// agent.steer does; a follow-up never steers.
 export const send = mutation({
-  args: { roomId: v.id('rooms'), body: v.string(), toParticipantId: v.optional(v.id('participants')), decisionId: v.optional(v.id('decisions')), reviewTurnId: v.optional(v.id('turns')) },
-  handler: async (ctx, { roomId, body, toParticipantId, decisionId, reviewTurnId }): Promise<Id<'turns'> | null> => {
+  args: { roomId: v.id('rooms'), body: v.string(), toParticipantId: v.optional(v.id('participants')), decisionId: v.optional(v.id('decisions')), reviewTurnId: v.optional(v.id('turns')), steer: v.optional(v.boolean()) },
+  handler: async (ctx, { roomId, body, toParticipantId, decisionId, reviewTurnId, steer }): Promise<Id<'turns'> | null> => {
     const { participant: human, isOwner } = await requireMember(ctx, roomId);
     if ((decisionId || reviewTurnId) && !isOwner) throw new Error('Only the owner can follow up a review');
     const text = body.trim();
@@ -130,6 +132,13 @@ export const send = mutation({
       subjectId: messageId,
       payload: { to: target._id },
     });
+    if (steer && !followUpRitualId) {
+      const active = await activeOrdinaryTurn(ctx, target._id);
+      if (takesSteer(active)) {
+        await steerMessage(ctx, (await ctx.db.get(messageId))!, active, room.runnerId, human._id);
+        return null;
+      }
+    }
     return await dispatchNext(ctx, target._id);
   },
 });

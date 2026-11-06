@@ -17,7 +17,6 @@ const TEAM_DEFAULT = 360;
 export function RoomView({ roomId, isOwner }: { roomId: Id<'rooms'>; isOwner: boolean }) {
   const data = useQuery(api.rooms.get, { roomId });
   const pane = useQuery(api.agent.pane, { roomId });
-  const me = useQuery(api.me.get, {});
   // Ticks so the offline banner appears when heartbeats stop, with no new data.
   const now = useNow(5_000);
   const narrow = useMediaQuery('(max-width: 759px)');
@@ -30,8 +29,6 @@ export function RoomView({ roomId, isOwner }: { roomId: Id<'rooms'>; isOwner: bo
   if (data === null) return null;
 
   const names = namesFrom(data.participants);
-  const userId = me?.signedIn ? me.userId : null;
-  const myParticipantId = data.participants.find((p) => userId !== null && p.userId === userId)?._id ?? null;
   const offline = pane ? isOffline(pane, now) : false;
 
   const resizeTo = (clientX: number) => {
@@ -68,7 +65,7 @@ export function RoomView({ roomId, isOwner }: { roomId: Id<'rooms'>; isOwner: bo
           {pane === undefined ? (
             <PageSpinner />
           ) : (
-            <AgentPane roomId={roomId} pane={pane} names={names} myParticipantId={myParticipantId} offline={offline} />
+            <AgentPane roomId={roomId} pane={pane} names={names} offline={offline} />
           )}
         </div>
         {narrow ? (

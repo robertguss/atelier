@@ -179,21 +179,20 @@ describe('composers', () => {
     expect(screen.getByRole('textbox', { name: 'To Codex' })).toBeInTheDocument();
   });
 
-  it('offers "Send and steer now" while the target agent works, and steers the sent message', async () => {
+  it('offers "Send and steer now" while the target agent works, and sends the message as a steer', async () => {
     pane.agents = [agent(CLAUDE, 'claude', 'Claude', { status: 'running', activeTurnId: 't1' })];
     pane.turns = [turn({})];
-    backend.mutations['messages:send'] = vi.fn(async ({ body }: { body: string }) => {
-      pane.messages = [message({ id: 'm-new', at: 5_000, authorParticipantId: ROBERT, body, delivery: 'queued' })];
-      return null;
-    });
     await openRoom();
 
     const toClaude = screen.getByRole('textbox', { name: 'To Claude' });
     fireEvent.change(toClaude, { target: { value: 'Stop, keep it short' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send and steer now' }));
 
-    await waitFor(() => expect(backend.mutations['agent:steer']).toHaveBeenCalledWith({ messageId: 'm-new' }));
-    expect(backend.mutations['messages:send']).toHaveBeenCalledWith({ roomId: ROOM, body: 'Stop, keep it short', toParticipantId: CLAUDE });
+    await waitFor(() =>
+      expect(backend.mutations['messages:send']).toHaveBeenCalledWith({ roomId: ROOM, body: 'Stop, keep it short', toParticipantId: CLAUDE, steer: true }),
+    );
+    expect(backend.mutations['messages:send']).toHaveBeenCalledTimes(1);
+    expect(backend.mutations['agent:steer']).not.toHaveBeenCalled();
   });
 
   it('offers only "Send" while the target agent is idle', async () => {

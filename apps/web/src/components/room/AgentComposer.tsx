@@ -1,6 +1,6 @@
 import { api } from '@atelier/backend/api';
 import type { Id } from '@atelier/backend/dataModel';
-import { useConvex, useMutation } from 'convex/react';
+import { useMutation } from 'convex/react';
 import { useState, type KeyboardEvent } from 'react';
 import { Button } from '~/components/ui/button';
 import { Textarea } from '~/components/ui/textarea';
@@ -14,7 +14,6 @@ interface AgentComposerProps {
   target: PaneAgent | null;
   onPickTarget: (participantId: Id<'participants'>) => void;
   onSent: (participantId: Id<'participants'>) => void;
-  myParticipantId: Id<'participants'> | null;
   offline: boolean;
 }
 
@@ -22,10 +21,8 @@ interface AgentComposerProps {
  * Writes to one agent. A busy agent queues the message; "Send and steer now"
  * puts it into the running turn instead. Enter sends only from this box.
  */
-export function AgentComposer({ roomId, agents, target, onPickTarget, onSent, myParticipantId, offline }: AgentComposerProps) {
-  const convex = useConvex();
+export function AgentComposer({ roomId, agents, target, onPickTarget, onSent, offline }: AgentComposerProps) {
   const send = useMutation(api.messages.send);
-  const steer = useMutation(api.agent.steer);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,23 +41,9 @@ export function AgentComposer({ roomId, agents, target, onPickTarget, onSent, my
     setBusy(true);
     setError(null);
     try {
-      const turnId = await send({ roomId, body, toParticipantId: to });
+      await send(steerNow ? { roomId, body, toParticipantId: to, steer: true } : { roomId, body, toParticipantId: to });
       setDraft('');
       onSent(to);
-      // A message that started a turn or answered a card has nothing left to steer.
-      if (steerNow && turnId === null) {
-        const fresh = await convex.query(api.agent.pane, { roomId });
-        const sent = fresh.messages
-          .filter(
-            (m) =>
-              m.delivery === 'queued' &&
-              m.toParticipantId === to &&
-              m.body === body &&
-              (myParticipantId === null || m.authorParticipantId === myParticipantId),
-          )
-          .at(-1);
-        if (sent) await steer({ messageId: sent.id });
-      }
     } catch (e) {
       setError(errorText(e));
     }

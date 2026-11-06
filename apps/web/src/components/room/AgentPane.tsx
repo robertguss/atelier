@@ -26,12 +26,11 @@ interface AgentPaneProps {
   roomId: Id<'rooms'>;
   pane: Pane;
   names: Names;
-  myParticipantId: Id<'participants'> | null;
   offline: boolean;
 }
 
 /** The agents' work, live and the same for everyone in the room. */
-export function AgentPane({ roomId, pane, names, myParticipantId, offline }: AgentPaneProps) {
+export function AgentPane({ roomId, pane, names, offline }: AgentPaneProps) {
   const { scrollRef, contentRef } = useStickToBottom<HTMLDivElement, HTMLOListElement>();
   const [picked, setPicked] = useState<Id<'participants'> | null>(null);
   const [lastTarget, setLastTarget] = useState(() => readLastTarget(roomId));
@@ -105,7 +104,6 @@ export function AgentPane({ roomId, pane, names, myParticipantId, offline }: Age
             target={target}
             onPickTarget={setPicked}
             onSent={onSent}
-            myParticipantId={myParticipantId}
             offline={offline}
           />
         </div>
