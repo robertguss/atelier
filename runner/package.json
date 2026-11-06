@@ -1,0 +1,19 @@
+{
+  "name": "@atelier/runner",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env.local --watch src/index.ts",
+    "start": "node --env-file-if-exists=.env.local src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@atelier/backend": "workspace:*",
+    "@atelier/shared": "workspace:*",
+    "convex": "^1.49.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2"
+  }
+}

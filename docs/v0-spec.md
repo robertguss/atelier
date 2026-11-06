@@ -111,14 +111,15 @@ Versions checked on npm on 2026-11-06: convex 1.49.0, @convex-dev/workflow
 
 ```
 atelier/
-  convex/            schema, functions, rituals (workflows), ledger, commands, push, auth.config.ts
+  packages/backend/  Convex: convex/ holds schema, functions, rituals (workflows), ledger, commands, push, auth.config.ts
+  packages/shared/   harness event types, normalization, constants
   runner/            service entry, command loop, adapters/{claude,codex,pi}, mcp/, transcripts/
   apps/mobile/       Expo app: iPhone and iPad
-  packages/shared/   harness event types, normalization, constants
   docs/              this spec, the handbook
 ```
 
-`apps/web/` comes later for the Mac.
+`apps/web/` comes later for the Mac. Convex lives in `packages/backend` so the
+app and the runner import its generated API like any other workspace package.
 
 ## Data model (Convex)
 
