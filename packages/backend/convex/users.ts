@@ -5,5 +5,8 @@ import { ensureUser } from "./lib/auth";
 // row and, for the owner, links rooms that predate memberships.
 export const ensure = mutation({
   args: {},
-  handler: async (ctx) => (await ensureUser(ctx))._id,
+  handler: async (ctx) => {
+    const user = await ensureUser(ctx);
+    return user._id;
+  },
 });

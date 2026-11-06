@@ -1,6 +1,8 @@
 import { v } from "convex/values";
 
+import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { NOTICE_VERSION, requireMember, requireOwner } from "./lib/auth";
 import { cancelMessage } from "./lib/dispatch";
 import { record } from "./lib/ledger";
@@ -14,26 +16,28 @@ export const list = query({
       .query("roomMembers")
       .withIndex("by_room", (q) => q.eq("roomId", roomId))
       .collect();
-    const members = [];
-    for (const m of rows.filter((m) => m.removedAt === undefined)) {
-      const user = await ctx.db.get(m.userId);
-      const participant = await ctx.db.get(m.participantId);
-      members.push({
-        _id: m._id,
-        displayName: participant?.displayName ?? null,
-        email: user?.email ?? null,
-        noticeVersion: m.noticeVersion ?? null,
-        participantId: m.participantId,
-        role: m.role,
-      });
-    }
+    const members = await Promise.all(
+      rows
+        .filter((m) => m.removedAt === undefined)
+        .map(async (m) => {
+          const user = await ctx.db.get(m.userId);
+          const participant = await ctx.db.get(m.participantId);
+          return {
+            _id: m._id,
+            displayName: participant?.displayName ?? null,
+            email: user?.email ?? null,
+            noticeVersion: m.noticeVersion ?? null,
+            participantId: m.participantId,
+            role: m.role,
+          };
+        })
+    );
     const now = Date.now();
-    const invites = (
-      await ctx.db
-        .query("roomInvites")
-        .withIndex("by_room", (q) => q.eq("roomId", roomId))
-        .collect()
-    )
+    const roomInvites = await ctx.db
+      .query("roomInvites")
+      .withIndex("by_room", (q) => q.eq("roomId", roomId))
+      .collect();
+    const invites = roomInvites
       .filter((i) => i.status === "pending")
       .map((i) => ({
         _id: i._id,
@@ -70,6 +74,25 @@ export const acceptNotice = mutation({
   },
 });
 
+// A message the removed person left waiting for an agent. A steer the runner
+// has not picked up yet must not reach the agent either.
+const cancelWaiting = async (
+  ctx: MutationCtx,
+  message: Doc<"messages">,
+  ownerId: Id<"participants">
+) => {
+  const command = message.steering
+    ? await ctx.db.get(message.steering.commandId)
+    : null;
+  if (command?.status === "pending") {
+    await ctx.db.patch(command._id, {
+      error: "The author was removed from the room",
+      status: "failed",
+    });
+  }
+  await cancelMessage(ctx, message, "removed", ownerId);
+};
+
 export const remove = mutation({
   args: { memberId: v.id("roomMembers") },
   handler: async (ctx, { memberId }) => {
@@ -89,28 +112,18 @@ export const remove = mutation({
     // Whatever the removed person left waiting for an agent is never delivered,
     // including a steer the runner has not yet answered: a late rejection would
     // otherwise put it back in the queue.
-    const waiting = (
-      await ctx.db
-        .query("messages")
-        .withIndex("by_room", (q) => q.eq("roomId", member.roomId))
-        .collect()
-    ).filter(
+    const roomMessages = await ctx.db
+      .query("messages")
+      .withIndex("by_room", (q) => q.eq("roomId", member.roomId))
+      .collect();
+    const waiting = roomMessages.filter(
       (m) =>
         m.authorParticipantId === member.participantId &&
         (m.delivery === "queued" || m.delivery === "steering")
     );
     for (const m of waiting) {
-      // A steer the runner has not picked up yet must not reach the agent.
-      const command = m.steering
-        ? await ctx.db.get(m.steering.commandId)
-        : null;
-      if (command?.status === "pending") {
-        await ctx.db.patch(command._id, {
-          status: "failed",
-          error: "The author was removed from the room",
-        });
-      }
-      await cancelMessage(ctx, m, "removed", owner._id);
+      // oxlint-disable-next-line eslint/no-await-in-loop -- cancellations are recorded in the ledger in send order
+      await cancelWaiting(ctx, m, owner._id);
     }
     await record(ctx, {
       actorParticipantId: owner._id,

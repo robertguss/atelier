@@ -2,7 +2,9 @@ import { WorkflowManager, start } from "@convex-dev/workflow";
 import { v } from "convex/values";
 
 import { components, internal } from "./_generated/api";
+import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, internalMutation } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { requireMember, requireOwner } from "./lib/auth";
 import { record } from "./lib/ledger";
 
@@ -14,6 +16,7 @@ export const collect = workflow
   })
   .handler(async (step, { ritualId, turnIds }): Promise<null> => {
     for (const id of turnIds) {
+      // oxlint-disable-next-line eslint/no-await-in-loop -- each wait is a journaled workflow step; waiting in parallel would change the step journal that workflows already in flight replay against
       await step.awaitEvent({ name: id });
     }
     await step.runMutation(internal.rituals.reveal, { ritualId });
@@ -46,12 +49,15 @@ export const reveal = internalMutation({
       revealedAt: Date.now(),
       status: "revealed",
     });
-    for (const message of await ctx.db
+    const messages = await ctx.db
       .query("messages")
       .withIndex("by_ritual", (q) => q.eq("ritualId", ritualId))
-      .collect()) {
-      await ctx.db.patch(message._id, { visibility: "room" });
-    }
+      .collect();
+    await Promise.all(
+      messages.map(async (message) => {
+        await ctx.db.patch(message._id, { visibility: "room" });
+      })
+    );
     await record(ctx, {
       roomId: ritual.roomId,
       subjectId: ritualId,
@@ -60,6 +66,37 @@ export const reveal = internalMutation({
     return true;
   },
 });
+// One participant's review turn, its run command and its ledger row.
+const queueReviewTurn = async (
+  ctx: MutationCtx,
+  room: Doc<"rooms">,
+  ritualId: Id<"rituals">,
+  participantId: Id<"participants">,
+  { parentLedgerId, prompt }: { parentLedgerId: Id<"ledger">; prompt: string }
+) => {
+  const turnId = await ctx.db.insert("turns", {
+    participantId,
+    prompt,
+    ritualId,
+    roomId: room._id,
+    status: "queued",
+  });
+  await ctx.db.insert("commands", {
+    runnerId: room.runnerId,
+    status: "pending",
+    turnId,
+    type: "run_turn",
+  });
+  await record(ctx, {
+    actorParticipantId: participantId,
+    parentLedgerId,
+    roomId: room._id,
+    subjectId: turnId,
+    type: "turn.queued",
+  });
+  return turnId;
+};
+
 export const begin = mutation({
   args: {
     participantIds: v.array(v.id("participants")),
@@ -80,7 +117,7 @@ export const begin = mutation({
       throw new Error("Choose participants and enter a request");
     }
     const participants = await Promise.all(
-      participantIds.map(async (id) => ctx.db.get(id))
+      participantIds.map(async (id) => await ctx.db.get(id))
     );
     if (
       participants.some(
@@ -112,27 +149,12 @@ export const begin = mutation({
     const prompt = `Independent read-only review. Write your own answer. Do not seek other participants' answers.\nRoom: ${room.name}\nHandbook:\n${room.handbook}\nRecent decisions:\n${decisions.map((d) => `${d.choice}: ${d.rationale ?? ""}`).join("\n")}\nRequest:\n${request.trim()}`;
     const turnIds = [];
     for (const participantId of participantIds) {
-      const turnId = await ctx.db.insert("turns", {
-        participantId,
+      // oxlint-disable-next-line eslint/no-await-in-loop -- turns, commands and ledger rows are written in participant order, which the runner's claims and the ledger show
+      const turnId = await queueReviewTurn(ctx, room, ritualId, participantId, {
+        parentLedgerId,
         prompt,
-        ritualId,
-        roomId,
-        status: "queued",
       });
       turnIds.push(turnId);
-      await ctx.db.insert("commands", {
-        runnerId: room.runnerId,
-        status: "pending",
-        turnId,
-        type: "run_turn",
-      });
-      await record(ctx, {
-        actorParticipantId: participantId,
-        parentLedgerId,
-        roomId,
-        subjectId: turnId,
-        type: "turn.queued",
-      });
     }
     const workflowId = await start(ctx, internal.rituals.collect, {
       ritualId,
@@ -146,13 +168,16 @@ export const list = query({
   args: { roomId: v.id("rooms") },
   handler: async (ctx, { roomId }) => {
     await requireOwner(ctx);
-    return (
-      await ctx.db
-        .query("rituals")
-        .withIndex("by_room", (q) => q.eq("roomId", roomId))
-        .order("desc")
-        .collect()
-    ).map((r) => ({ _id: r._id, request: r.request, status: r.status }));
+    const rituals = await ctx.db
+      .query("rituals")
+      .withIndex("by_room", (q) => q.eq("roomId", roomId))
+      .order("desc")
+      .collect();
+    return rituals.map((r) => ({
+      _id: r._id,
+      request: r.request,
+      status: r.status,
+    }));
   },
 });
 export const get = query({
@@ -175,12 +200,11 @@ export const get = query({
       .query("cruxes")
       .withIndex("by_ritual", (q) => q.eq("ritualId", ritualId))
       .collect();
-    const decisions = (
-      await ctx.db
-        .query("decisions")
-        .withIndex("by_room", (q) => q.eq("roomId", ritual.roomId))
-        .collect()
-    ).filter((d) => d.ritualId === ritualId);
+    const roomDecisions = await ctx.db
+      .query("decisions")
+      .withIndex("by_room", (q) => q.eq("roomId", ritual.roomId))
+      .collect();
+    const decisions = roomDecisions.filter((d) => d.ritualId === ritualId);
     return {
       _id: ritualId,
       cruxes,
@@ -195,14 +219,14 @@ export const get = query({
         .collect(),
       turns: turns.map((t) => ({
         _id: t._id,
-        participantId: t.participantId,
         name:
           participants.find((p) => p._id === t.participantId)?.displayName ??
           "Participant",
+        participantId: t.participantId,
         status: t.status,
-        ...(ritual.status !== "collecting"
-          ? { answer: t.finalText, error: t.error }
-          : {}),
+        ...(ritual.status === "collecting"
+          ? {}
+          : { answer: t.finalText, error: t.error }),
       })),
     };
   },

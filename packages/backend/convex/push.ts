@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 
 import { internal } from "./_generated/api";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
   mutation,
   query,
@@ -8,13 +9,47 @@ import {
   internalMutation,
   internalAction,
 } from "./_generated/server";
+import type { ActionCtx } from "./_generated/server";
 import { requireOwner } from "./lib/auth";
+
+const BATCH_SIZE = 100;
+
+// Expo's push tickets, read field by field from the parsed response.
+const ticketStatus = (ticket: unknown) =>
+  typeof ticket === "object" && ticket !== null && "status" in ticket
+    ? ticket.status
+    : undefined;
+
+const ticketError = (ticket: unknown) => {
+  const details =
+    typeof ticket === "object" && ticket !== null && "details" in ticket
+      ? ticket.details
+      : undefined;
+  return typeof details === "object" && details !== null && "error" in details
+    ? details.error
+    : undefined;
+};
+
+const ticketsOf = (payload: unknown): unknown[] | undefined => {
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    !("data" in payload) ||
+    !Array.isArray(payload.data)
+  ) {
+    return undefined;
+  }
+  const tickets: unknown[] = payload.data;
+  return tickets;
+};
 
 export const register = mutation({
   args: { platform: v.string(), token: v.string() },
   handler: async (ctx, { token, platform }) => {
     const owner = await requireOwner(ctx);
-    if (!/^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]+\]$/.test(token)) {
+    if (
+      !/^(?:ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]+\]$/u.test(token)
+    ) {
       throw new Error("Invalid Expo push token");
     }
     const tokens = await ctx.db
@@ -23,9 +58,9 @@ export const register = mutation({
       .collect();
     if (!tokens.some((t) => t.token === token)) {
       await ctx.db.insert("pushTokens", {
-        userSubject: owner.subject,
-        token,
         platform,
+        token,
+        userSubject: owner.subject,
       });
     }
   },
@@ -34,27 +69,29 @@ export const readiness = query({
   args: {},
   handler: async (ctx) => {
     const owner = await requireOwner(ctx);
-    return {
-      registered:
-        (
-          await ctx.db
-            .query("pushTokens")
-            .withIndex("by_user", (q) => q.eq("userSubject", owner.subject))
-            .collect()
-        ).length > 0,
-    };
+    const tokens = await ctx.db
+      .query("pushTokens")
+      .withIndex("by_user", (q) => q.eq("userSubject", owner.subject))
+      .collect();
+    return { registered: tokens.length > 0 };
   },
 });
 export const recipients = internalQuery({
   args: { ritualId: v.id("rituals") },
   handler: async (ctx, { ritualId }) => {
     const ritual = await ctx.db.get(ritualId);
-    if (!ritual || ritual.status === "collecting" || !ritual.ownerSubject) {
+    const ownerSubject = ritual?.ownerSubject;
+    if (
+      !ritual ||
+      ritual.status === "collecting" ||
+      ownerSubject === undefined ||
+      ownerSubject === ""
+    ) {
       return [];
     }
     return await ctx.db
       .query("pushTokens")
-      .withIndex("by_user", (q) => q.eq("userSubject", ritual.ownerSubject!))
+      .withIndex("by_user", (q) => q.eq("userSubject", ownerSubject))
       .collect();
   },
 });
@@ -70,11 +107,66 @@ export const result = internalMutation({
   },
   handler: async (ctx, { ritualId, status, invalidTokens }) => {
     await ctx.db.patch(ritualId, { pushStatus: status });
-    for (const id of invalidTokens) {
-      await ctx.db.delete(id);
-    }
+    await Promise.all(
+      invalidTokens.map(async (id) => {
+        await ctx.db.delete(id);
+      })
+    );
   },
 });
+// Sends one batch of at most BATCH_SIZE notifications and records the outcome.
+// Returns how many Expo accepted; throws if Expo rejected any.
+const sendBatch = async (
+  ctx: ActionCtx,
+  ritualId: Id<"rituals">,
+  batch: Doc<"pushTokens">[]
+) => {
+  const accessToken = process.env.EXPO_ACCESS_TOKEN;
+  const response = await fetch("https://exp.host/--/api/v2/push/send", {
+    body: JSON.stringify(
+      batch.map((t) => ({
+        body: "All participants have finished. Open Atelier to read their answers.",
+        data: { ritualId },
+        sound: "default",
+        title: "Review ready",
+        to: t.token,
+      }))
+    ),
+    headers: {
+      "Content-Type": "application/json",
+      ...(accessToken !== undefined && accessToken !== ""
+        ? { Authorization: `Bearer ${accessToken}` }
+        : {}),
+    },
+    method: "POST",
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Expo push HTTP ${response.status}`);
+  }
+  const payload: unknown = await response.json();
+  const tickets = ticketsOf(payload);
+  if (tickets?.length !== batch.length) {
+    throw new Error("Invalid Expo push response");
+  }
+  const accepted = tickets.filter((t) => ticketStatus(t) === "ok").length;
+  const invalidTokens = batch
+    .filter((_, n) => ticketError(tickets[n]) === "DeviceNotRegistered")
+    .map((t) => t._id);
+  const failed = tickets.some(
+    (t) => ticketStatus(t) !== "ok" && ticketError(t) !== "DeviceNotRegistered"
+  );
+  await ctx.runMutation(internal.push.result, {
+    invalidTokens,
+    ritualId,
+    status: failed ? "failed" : "sent",
+  });
+  if (failed) {
+    throw new Error("Expo rejected a push ticket");
+  }
+  return accepted;
+};
+
 // Invoked as a durable workflow step. Only generic text leaves Convex.
 // Expo may accept a request before a network timeout; retries can duplicate a
 // notification, so the ritual id is also the client's navigation/dedup key.
@@ -92,63 +184,18 @@ export const send = internalAction({
     }
     try {
       let accepted = 0;
-      for (let i = 0; i < tokens.length; i += 100) {
-        const batch = tokens.slice(i, i + 100);
-        const response = await fetch("https://exp.host/--/api/v2/push/send", {
-          body: JSON.stringify(
-            batch.map((t) => ({
-              to: t.token,
-              title: "Review ready",
-              body: "All participants have finished. Open Atelier to read their answers.",
-              data: { ritualId },
-              sound: "default",
-            }))
-          ),
-          headers: {
-            "Content-Type": "application/json",
-            ...(process.env.EXPO_ACCESS_TOKEN
-              ? { Authorization: `Bearer ${process.env.EXPO_ACCESS_TOKEN}` }
-              : {}),
-          },
-          method: "POST",
-          signal: AbortSignal.timeout(15_000),
-        });
-        if (!response.ok) {
-          throw new Error(`Expo push HTTP ${response.status}`);
-        }
-        const payload = await response.json();
-        if (
-          !Array.isArray(payload.data) ||
-          payload.data.length !== batch.length
-        ) {
-          throw new Error("Invalid Expo push response");
-        }
-        accepted += payload.data.filter(
-          (ticket: { status?: string }) => ticket.status === "ok"
-        ).length;
-        const invalidTokens = batch
-          .filter(
-            (_, n) => payload.data[n]?.details?.error === "DeviceNotRegistered"
-          )
-          .map((t) => t._id);
-        const failed = payload.data.some(
-          (ticket: { status?: string; details?: { error?: string } }) =>
-            ticket.status !== "ok" &&
-            ticket.details?.error !== "DeviceNotRegistered"
-        );
-        await ctx.runMutation(internal.push.result, {
-          invalidTokens,
+      for (let i = 0; i < tokens.length; i += BATCH_SIZE) {
+        // oxlint-disable-next-line eslint/no-await-in-loop -- batches go out one at a time so a rejected batch stops the rest
+        accepted += await sendBatch(
+          ctx,
           ritualId,
-          status: failed ? "failed" : "sent",
-        });
-        if (failed) {
-          throw new Error("Expo rejected a push ticket");
-        }
+          tokens.slice(i, i + BATCH_SIZE)
+        );
       }
       await ctx.runMutation(internal.push.result, {
         invalidTokens: [],
         ritualId,
-        status: accepted ? "sent" : "skipped",
+        status: accepted > 0 ? "sent" : "skipped",
       });
       return null;
     } catch (error) {

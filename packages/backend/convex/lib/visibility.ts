@@ -6,11 +6,11 @@ import type { Doc } from "../_generated/dataModel";
 
 // The timeline shows the owner review answers; the agent pane shows them to
 // no one, so it passes `ownerSeesReviewAnswers: false`.
-export function visibleMessage(
+export const visibleMessage = (
   m: Doc<"messages">,
   isOwner: boolean,
   { ownerSeesReviewAnswers }: { ownerSeesReviewAnswers: boolean }
-) {
+) => {
   if (m.visibility !== "room") {
     return false;
   }
@@ -18,9 +18,8 @@ export function visibleMessage(
     return isOwner && ownerSeesReviewAnswers;
   }
   return isOwner || !m.followUpRitualId;
-}
+};
 
 // Review turns are shown on neither path; follow-up turns only to the owner.
-export function visibleTurn(t: Doc<"turns">, isOwner: boolean) {
-  return !t.ritualId && (isOwner || !t.followUp);
-}
+export const visibleTurn = (t: Doc<"turns">, isOwner: boolean) =>
+  !t.ritualId && (isOwner || !t.followUp);

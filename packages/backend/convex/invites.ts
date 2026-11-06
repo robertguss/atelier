@@ -22,6 +22,89 @@ import { resetSoloFollowUpSessions } from "./lib/sessions";
 const INVITE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 const CLERK_API = "https://api.clerk.com/v1";
 
+const hashToken = async (token: string) => {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(token)
+  );
+  return Array.from(new Uint8Array(digest), (b) =>
+    b.toString(16).padStart(2, "0")
+  ).join("");
+};
+
+const findInvite = async (ctx: QueryCtx, token: string) => {
+  const tokenHash = await hashToken(token);
+  return await ctx.db
+    .query("roomInvites")
+    .withIndex("by_token_hash", (q) => q.eq("tokenHash", tokenHash))
+    .unique();
+};
+
+// A verified email on the signed-in identity must equal the invited one.
+const emailMatches = (
+  identity: { email?: string; emailVerified?: boolean } | null,
+  email: string
+) =>
+  identity?.email !== undefined &&
+  identity.email !== "" &&
+  identity.emailVerified !== false &&
+  identity.email.toLowerCase() === email;
+
+const maskEmail = (email: string) => {
+  const [local = "", domain = ""] = email.split("@");
+  return `${local.slice(0, 1)}***@${domain}`;
+};
+
+const randomToken = () => {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCodePoint(...bytes))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/[=]+$/u, "");
+};
+
+// Clerk's parsed JSON response, for the caller to narrow.
+const clerk = async (
+  method: "GET" | "POST",
+  path: string,
+  body?: object
+): Promise<unknown> => {
+  const key = process.env.CLERK_SECRET_KEY;
+  if (key === undefined || key === "") {
+    throw new Error("CLERK_SECRET_KEY is not set");
+  }
+  const init: RequestInit = {
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+    },
+    method,
+  };
+  if (body !== undefined) {
+    init.body = JSON.stringify(body);
+  }
+  const response = await fetch(`${CLERK_API}${path}`, init);
+  if (!response.ok) {
+    throw new Error(
+      `Clerk ${method} ${path.split("?")[0]} failed: ${response.status}`
+    );
+  }
+  const json: unknown = await response.json();
+  return json;
+};
+
+const invitationIdOf = (invitation: unknown) => {
+  if (
+    typeof invitation === "object" &&
+    invitation !== null &&
+    "id" in invitation &&
+    typeof invitation.id === "string"
+  ) {
+    return invitation.id;
+  }
+  throw new Error("Clerk returned an invitation without an id");
+};
+
 export const create = action({
   args: { email: v.string(), roomId: v.id("rooms") },
   handler: async (
@@ -34,32 +117,32 @@ export const create = action({
   }> => {
     await requireOwner(ctx);
     const email = rawEmail.trim().toLowerCase();
-    if (!/^[^@\s]+@[^@\s]+$/.test(email)) {
+    if (!/^[^@\s]+@[^@\s]+$/u.test(email)) {
       throw new Error("Enter an email address");
     }
     if (!(await ctx.runQuery(internal.invites.roomExists, { roomId }))) {
       throw new Error("Unknown room");
     }
     const webUrl = process.env.ATELIER_WEB_URL;
-    if (!webUrl) {
+    if (webUrl === undefined || webUrl === "") {
       throw new Error("ATELIER_WEB_URL is not set");
     }
 
     const token = randomToken();
-    const url = `${webUrl.replace(/\/+$/, "")}/invite/${token}`;
-    const users = await clerk<unknown[]>(
+    const url = `${webUrl.replace(/\/+$/u, "")}/invite/${token}`;
+    const users = await clerk(
       "GET",
       `/users?email_address=${encodeURIComponent(email)}`
     );
     let clerkInvitationId: string | undefined;
-    if (users.length === 0) {
-      const invitation = await clerk<{ id: string }>("POST", "/invitations", {
+    if (Array.isArray(users) && users.length === 0) {
+      const invitation = await clerk("POST", "/invitations", {
         email_address: email,
         ignore_existing: true,
         notify: true,
         redirect_url: url,
       });
-      clerkInvitationId = invitation.id;
+      clerkInvitationId = invitationIdOf(invitation);
     }
     const inviteId: Id<"roomInvites"> = await ctx.runMutation(
       internal.invites.insert,
@@ -113,7 +196,7 @@ export const revoke = action({
       internal.invites.markRevoked,
       { inviteId }
     );
-    if (!clerkInvitationId) {
+    if (clerkInvitationId === null || clerkInvitationId === "") {
       return;
     }
     await clerk(
@@ -136,7 +219,11 @@ export const markRevoked = internalMutation({
     if (!invite) {
       throw new Error("Unknown invite");
     }
-    if (invite.status === "revoked" && invite.clerkInvitationId) {
+    if (
+      invite.status === "revoked" &&
+      invite.clerkInvitationId !== undefined &&
+      invite.clerkInvitationId !== ""
+    ) {
       return invite.clerkInvitationId;
     }
     if (invite.status !== "pending") {
@@ -241,7 +328,11 @@ export const accept = mutation({
     let participantId = existing?.participantId;
     if (!existing) {
       participantId = await ctx.db.insert("participants", {
-        displayName: agentName(identity.name || identity.email),
+        displayName: agentName(
+          identity.name !== undefined && identity.name !== ""
+            ? identity.name
+            : identity.email
+        ),
         kind: "human",
         roomId,
         userId: user._id,
@@ -275,71 +366,3 @@ export const accept = mutation({
     return { ok: true, roomId };
   },
 });
-
-async function findInvite(ctx: QueryCtx, token: string) {
-  const tokenHash = await hashToken(token);
-  return await ctx.db
-    .query("roomInvites")
-    .withIndex("by_token_hash", (q) => q.eq("tokenHash", tokenHash))
-    .unique();
-}
-
-// A verified email on the signed-in identity must equal the invited one.
-function emailMatches(
-  identity: { email?: string; emailVerified?: boolean } | null,
-  email: string
-) {
-  return (
-    !!identity?.email &&
-    identity.emailVerified !== false &&
-    identity.email.toLowerCase() === email
-  );
-}
-
-function maskEmail(email: string) {
-  const [local = "", domain = ""] = email.split("@");
-  return `${local.slice(0, 1)}***@${domain}`;
-}
-
-function randomToken() {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  return btoa(String.fromCharCode(...bytes))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/[=]+$/, "");
-}
-
-async function hashToken(token: string) {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(token)
-  );
-  return Array.from(new Uint8Array(digest), (b) =>
-    b.toString(16).padStart(2, "0")
-  ).join("");
-}
-
-async function clerk<T = unknown>(
-  method: "GET" | "POST",
-  path: string,
-  body?: object
-): Promise<T> {
-  const key = process.env.CLERK_SECRET_KEY;
-  if (!key) {
-    throw new Error("CLERK_SECRET_KEY is not set");
-  }
-  const response = await fetch(`${CLERK_API}${path}`, {
-    body: body ? JSON.stringify(body) : undefined,
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    method,
-  });
-  if (!response.ok) {
-    throw new Error(
-      `Clerk ${method} ${path.split("?")[0]} failed: ${response.status}`
-    );
-  }
-  return (await response.json()) as T;
-}

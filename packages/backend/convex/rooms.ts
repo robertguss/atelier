@@ -1,6 +1,8 @@
 import { v } from "convex/values";
 
+import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import {
   ensureUser,
   getMembership,
@@ -11,6 +13,15 @@ import {
 } from "./lib/auth";
 import { record } from "./lib/ledger";
 import { agentName } from "./lib/prompt";
+
+// Reviews in the room that have finished collecting.
+const readyReviewCount = async (ctx: QueryCtx, roomId: Id<"rooms">) => {
+  const rituals = await ctx.db
+    .query("rituals")
+    .withIndex("by_room", (q) => q.eq("roomId", roomId))
+    .collect();
+  return rituals.filter((r) => r.status !== "collecting").length;
+};
 
 export const list = query({
   args: {},
@@ -23,17 +34,21 @@ export const list = query({
     if (!user) {
       return [];
     }
-    const memberships = (
-      await ctx.db
-        .query("roomMembers")
-        .withIndex("by_user", (q) => q.eq("userId", user._id))
-        .collect()
-    ).filter((m) => m.removedAt === undefined);
+    const userMemberships = await ctx.db
+      .query("roomMembers")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect();
+    const memberships = userMemberships.filter(
+      (m) => m.removedAt === undefined
+    );
+    const memberRooms = await Promise.all(
+      memberships.map(async (m) => await ctx.db.get(m.roomId))
+    );
     const rooms = [];
-    for (const m of memberships) {
-      const room = await ctx.db.get(m.roomId);
+    for (const [i, m] of memberships.entries()) {
+      const room = memberRooms[i];
       if (room && room.archivedAt === undefined) {
-        rooms.push({ room, role: m.role });
+        rooms.push({ role: m.role, room });
       }
     }
     rooms.sort((a, b) => b.room._creationTime - a.room._creationTime);
@@ -42,14 +57,7 @@ export const list = query({
       rooms.map(async ({ room, role }) => ({
         ...room,
         readyReviews:
-          role === "owner"
-            ? (
-                await ctx.db
-                  .query("rituals")
-                  .withIndex("by_room", (q) => q.eq("roomId", room._id))
-                  .collect()
-              ).filter((r) => r.status !== "collecting").length
-            : undefined,
+          role === "owner" ? await readyReviewCount(ctx, room._id) : undefined,
         role,
       }))
     );
@@ -123,7 +131,12 @@ export const create = mutation({
     });
 
     const humanId = await ctx.db.insert("participants", {
-      displayName: agentName(owner.name || owner.email, "You"),
+      displayName: agentName(
+        owner.name !== undefined && owner.name !== ""
+          ? owner.name
+          : owner.email,
+        "You"
+      ),
       kind: "human",
       roomId,
       userId: user._id,
@@ -181,7 +194,7 @@ export const addParticipant = mutation({
       return found._id;
     }
     const runner = await ctx.db.get(room.runnerId);
-    if (!runner?.harnesses.some((h) => h.id === harness)) {
+    if (runner?.harnesses.some((h) => h.id === harness) !== true) {
       throw new Error("Harness unavailable on this runner");
     }
     const id = await ctx.db.insert("participants", {
@@ -199,6 +212,37 @@ export const addParticipant = mutation({
     return id;
   },
 });
+
+// Tells one running turn about the new edit switch, and interrupts a Codex or
+// Pi turn that started with edits on when they are turned off.
+const sendEditsChange = async (
+  ctx: MutationCtx,
+  room: Doc<"rooms">,
+  turn: Doc<"turns">,
+  on: boolean
+) => {
+  await ctx.db.insert("commands", {
+    payload: { editsEnabled: on },
+    runnerId: room.runnerId,
+    status: "pending",
+    turnId: turn._id,
+    type: "settings",
+  });
+  const agent = await ctx.db.get(turn.participantId);
+  if (
+    !on &&
+    turn.editsEnabled === true &&
+    (agent?.harness === "codex" || agent?.harness === "pi")
+  ) {
+    await ctx.db.insert("commands", {
+      payload: { reason: "File edits were turned off" },
+      runnerId: room.runnerId,
+      status: "pending",
+      turnId: turn._id,
+      type: "interrupt",
+    });
+  }
+};
 
 // The owner's "agents may edit files in this folder" switch. Running turns
 // get the new value as a settings command. Codex and Pi fix their
@@ -225,34 +269,14 @@ export const setEditsEnabled = mutation({
       type: "room.edits_changed",
     });
 
-    const running = (
-      await ctx.db
-        .query("turns")
-        .withIndex("by_room", (q) => q.eq("roomId", roomId))
-        .collect()
-    ).filter((t) => t.status === "running" && !t.ritualId);
+    const turns = await ctx.db
+      .query("turns")
+      .withIndex("by_room", (q) => q.eq("roomId", roomId))
+      .collect();
+    const running = turns.filter((t) => t.status === "running" && !t.ritualId);
     for (const turn of running) {
-      await ctx.db.insert("commands", {
-        payload: { editsEnabled: on },
-        runnerId: room.runnerId,
-        status: "pending",
-        turnId: turn._id,
-        type: "settings",
-      });
-      const agent = await ctx.db.get(turn.participantId);
-      if (
-        !on &&
-        turn.editsEnabled === true &&
-        (agent?.harness === "codex" || agent?.harness === "pi")
-      ) {
-        await ctx.db.insert("commands", {
-          payload: { reason: "File edits were turned off" },
-          runnerId: room.runnerId,
-          status: "pending",
-          turnId: turn._id,
-          type: "interrupt",
-        });
-      }
+      // oxlint-disable-next-line eslint/no-await-in-loop -- commands are inserted in turn order, settings before interrupt, and the runner claims pending commands in that order
+      await sendEditsChange(ctx, room, turn, on);
     }
   },
 });

@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import { requireMember } from "./lib/auth";
 import {
@@ -60,6 +60,24 @@ export const PANE_PAGE = 40;
 const MAX_TURNS = 400;
 const MESSAGES_PER_TURN = 4;
 
+// Deduplicated by id, oldest first.
+const oldestFirst = <T extends { _id: string; _creationTime: number }>(
+  docs: T[]
+): T[] =>
+  [...new Map(docs.map((d) => [d._id, d])).values()].toSorted(
+    (a, b) => a._creationTime - b._creationTime
+  );
+
+const agentStatus = (active: Doc<"turns"> | null) => {
+  if (!active) {
+    return "idle";
+  }
+  if (active.status === "queued") {
+    return "starting";
+  }
+  return active.waitingOnHandId ? "waiting" : "running";
+};
+
 // The agent pane's history: the latest `limit` turns (PANE_PAGE by default)
 // with what was said around them, plus every active turn and waiting message
 // however old. Active turns come without text or tool calls, which `live`
@@ -69,7 +87,10 @@ export const pane = query({
   args: { limit: v.optional(v.number()), roomId: v.id("rooms") },
   handler: async (ctx, { roomId, limit }) => {
     const { isOwner } = await requireMember(ctx, roomId);
-    const room = (await ctx.db.get(roomId))!;
+    const room = await ctx.db.get(roomId);
+    if (room === null) {
+      throw new Error("Unknown room");
+    }
     const runner = await ctx.db.get(room.runnerId);
     const participants = await ctx.db
       .query("participants")
@@ -95,23 +116,28 @@ export const pane = query({
     const moreTurns = recentTurns.length > turnLimit;
     const moreMessages = recentMessages.length > messageLimit;
     // Start both lists where the shorter-reaching one starts, so the timeline has no gaps.
+    const oldestTurn = moreTurns ? recentTurns[turnLimit - 1] : undefined;
+    const oldestMessage = moreMessages
+      ? recentMessages[messageLimit - 1]
+      : undefined;
     const since = Math.max(
-      moreTurns ? recentTurns[turnLimit - 1]!._creationTime : 0,
-      moreMessages ? recentMessages[messageLimit - 1]!._creationTime : 0
+      oldestTurn?._creationTime ?? 0,
+      oldestMessage?._creationTime ?? 0
     );
-    const waiting = [];
-    for (const p of harnesses) {
-      for (const delivery of ["queued", "steering"] as const) {
-        waiting.push(
-          ...(await ctx.db
-            .query("messages")
-            .withIndex("by_to_delivery", (q) =>
-              q.eq("toParticipantId", p._id).eq("delivery", delivery)
-            )
-            .collect())
-        );
-      }
-    }
+    const waitingLists = await Promise.all(
+      harnesses.flatMap((p) =>
+        (["queued", "steering"] as const).map(
+          async (delivery) =>
+            await ctx.db
+              .query("messages")
+              .withIndex("by_to_delivery", (q) =>
+                q.eq("toParticipantId", p._id).eq("delivery", delivery)
+              )
+              .collect()
+        )
+      )
+    );
+    const waiting = waitingLists.flat();
     const messages = oldestFirst([
       ...recentMessages.filter((m) => m._creationTime >= since),
       ...waiting,
@@ -123,45 +149,40 @@ export const pane = query({
       ...(await activeRoomTurns(ctx, roomId)),
     ]).filter((t) => visibleTurn(t, isOwner));
 
-    const agents = [];
-    for (const p of harnesses) {
-      const active = await activeOrdinaryTurn(ctx, p._id);
-      const status = active
-        ? active.status === "queued"
-          ? "starting"
-          : active.waitingOnHandId
-            ? "waiting"
-            : "running"
-        : "idle";
-      agents.push({
-        participantId: p._id,
-        displayName: p.displayName,
-        harness: p.harness ?? null,
-        status,
+    const activeTurns = await Promise.all(
+      harnesses.map(async (p) => await activeOrdinaryTurn(ctx, p._id))
+    );
+    const agents = harnesses.map((p, i) => {
+      const active = activeTurns[i] ?? null;
+      const status = agentStatus(active);
+      return {
         activeTurnId:
           active && visibleTurn(active, isOwner) ? active._id : null,
+        // Null until the runner reports it. An agent that cannot raise cards asks in plain text.
+        canRaiseCards:
+          runner?.harnessCapabilities?.find((c) => c.id === p.harness)
+            ?.canRaiseCards ?? null,
+        displayName: p.displayName,
+        harness: p.harness ?? null,
+        participantId: p._id,
         queued: messages.filter(
           (m) =>
             m.toParticipantId === p._id &&
             (m.delivery === "queued" || m.delivery === "steering")
         ).length,
-        // Null until the runner reports it. An agent that cannot raise cards asks in plain text.
-        canRaiseCards:
-          runner?.harnessCapabilities?.find((c) => c.id === p.harness)
-            ?.canRaiseCards ?? null,
-      });
-    }
+        status,
+      };
+    });
 
     // Open cards, then the most recent closed ones, only on turns the caller can see.
     const visibleTurnIds = new Set(turns.map((t) => t._id));
-    const hands = (
-      await ctx.db
-        .query("hands")
-        .withIndex("by_room_status", (q) => q.eq("roomId", roomId))
-        .collect()
-    )
+    const roomHands = await ctx.db
+      .query("hands")
+      .withIndex("by_room_status", (q) => q.eq("roomId", roomId))
+      .collect();
+    const hands = roomHands
       .filter((h) => visibleTurnIds.has(h.turnId))
-      .sort((a, b) => a.raisedAt - b.raisedAt);
+      .toSorted((a, b) => a.raisedAt - b.raisedAt);
     const cards = [
       ...hands.filter((h) => h.status === "raised"),
       ...hands.filter((h) => h.status !== "raised").slice(-RECENT_CARDS),
@@ -170,32 +191,32 @@ export const pane = query({
     return {
       agents,
       cards: cards.map((h) => ({
+        answeredAt: h.answeredAt ?? null,
+        answeredByParticipantId: h.answeredByParticipantId ?? null,
+        answers: h.answers ?? null,
+        closeReason: h.closeReason ?? null,
+        closedAt: h.closedAt ?? null,
         id: h._id,
-        turnId: h.turnId,
         participantId: h.participantId,
         questions: h.questions,
-        status: h.status,
-        answers: h.answers ?? null,
-        answeredByParticipantId: h.answeredByParticipantId ?? null,
-        answeredAt: h.answeredAt ?? null,
-        via: h.via ?? null,
         raisedAt: h.raisedAt,
-        closedAt: h.closedAt ?? null,
-        closeReason: h.closeReason ?? null,
+        status: h.status,
+        turnId: h.turnId,
+        via: h.via ?? null,
       })),
       editsEnabled: room.editsEnabled === true,
       hasOlder: moreTurns || moreMessages,
       messages: messages.map((m) => ({
-        id: m._id,
         at: m._creationTime,
         authorParticipantId: m.authorParticipantId,
         body: m.body,
+        cancelReason: m.cancelReason ?? null,
+        deliveredTurnId: m.deliveredTurnId ?? null,
+        delivery: m.delivery ?? null,
+        id: m._id,
         toParticipantId: m.toParticipantId ?? null,
         // Set on an agent's reply.
         turnId: m.turnId ?? null,
-        delivery: m.delivery ?? null,
-        deliveredTurnId: m.deliveredTurnId ?? null,
-        cancelReason: m.cancelReason ?? null,
       })),
       runner: {
         lastHeartbeatAt: runner?.lastHeartbeatAt ?? 0,
@@ -205,18 +226,18 @@ export const pane = query({
         turns.map(async (t) => {
           const ended = !isActiveTurnStatus(t.status);
           return {
-            id: t._id,
             at: t._creationTime,
-            participantId: t.participantId,
-            status: t.status,
-            partialText: ended ? await streamedText(ctx, t) : "",
-            error: t.error ?? null,
-            requestedByParticipantIds: t.requestedByParticipantIds ?? [],
-            waitingOnHandId: t.waitingOnHandId ?? null,
-            stoppedByParticipantId: t.stoppedByParticipantId ?? null,
-            startedAt: t.startedAt ?? null,
             endedAt: t.endedAt ?? null,
+            error: t.error ?? null,
+            id: t._id,
             items: ended ? await toolItems(ctx, t._id) : [],
+            partialText: ended ? await streamedText(ctx, t) : "",
+            participantId: t.participantId,
+            requestedByParticipantIds: t.requestedByParticipantIds ?? [],
+            startedAt: t.startedAt ?? null,
+            status: t.status,
+            stoppedByParticipantId: t.stoppedByParticipantId ?? null,
+            waitingOnHandId: t.waitingOnHandId ?? null,
           };
         })
       ),
@@ -230,9 +251,8 @@ export const live = query({
   args: { roomId: v.id("rooms") },
   handler: async (ctx, { roomId }) => {
     const { isOwner } = await requireMember(ctx, roomId);
-    const turns = (await activeRoomTurns(ctx, roomId)).filter((t) =>
-      visibleTurn(t, isOwner)
-    );
+    const active = await activeRoomTurns(ctx, roomId);
+    const turns = active.filter((t) => visibleTurn(t, isOwner));
     return await Promise.all(
       turns.map(async (t) => ({
         id: t._id,
@@ -242,12 +262,3 @@ export const live = query({
     );
   },
 });
-
-// Deduplicated by id, oldest first.
-function oldestFirst<T extends { _id: string; _creationTime: number }>(
-  docs: T[]
-): T[] {
-  return [...new Map(docs.map((d) => [d._id, d])).values()].sort(
-    (a, b) => a._creationTime - b._creationTime
-  );
-}
