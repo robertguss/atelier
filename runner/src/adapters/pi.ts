@@ -23,10 +23,14 @@ export function piHarness(opts: { cliPath?: string; onRaw: (id: string, event: u
       // Steers go into the run only while it streams. Once Pi has settled it
       // would hold a steer without starting a run to deliver it.
       let running = false;
+      // Pi accepted the steer while the run was streaming, so it delivers it
+      // before the next model call. The settle event can arrive in the same
+      // output chunk as Pi's reply, so it must not turn an accepted steer
+      // into a rejection.
       input.steer = async (text) => {
         if (!running) return 'rejected';
         await client.steer(text);
-        return running ? 'steered' : 'rejected';
+        return 'steered';
       };
       signal.throwIfAborted();
       if (req.mcpServers.length) throw new Error('Configure Pi MCP through your own extension until per-turn MCP support exists');
