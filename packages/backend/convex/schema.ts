@@ -206,6 +206,17 @@ export default defineSchema({
     .index('by_ritual', ['ritualId'])
     .index('by_participant', ['participantId']),
 
+  // An agent's tool activity during a turn, one row per tool call: its name
+  // and a one-line summary. Raw output stays on the runner's disk.
+  turnItems: defineTable({
+    turnId: v.id('turns'),
+    callId: v.string(),
+    seq: v.number(),
+    name: v.string(),
+    summary: v.string(),
+    ok: v.optional(v.boolean()),
+  }).index('by_turn_call', ['turnId', 'callId']),
+
   rituals: defineTable({
     roomId: v.id('rooms'),
     type: v.literal('independent_review'),

@@ -1,4 +1,4 @@
-import type { HarnessEvent } from '@atelier/shared';
+import type { HarnessEvent, QuestionAnswer, QuestionCard, TurnInput } from '@atelier/shared';
 export function eventQueue() {
   const queue: HarnessEvent[] = [];
   let wake: (() => void) | undefined;
@@ -13,4 +13,12 @@ export function eventQueue() {
       }
     },
   };
+}
+
+// A turn's input channel before its adapter installs its own handlers: steers
+// are rejected and settings changes wait for the next turn.
+export function turnInput(
+  onQuestion: (card: QuestionCard) => Promise<QuestionAnswer> = async () => { throw new Error('No one can answer questions here'); },
+): TurnInput {
+  return { onQuestion, steer: async () => 'rejected', setEditsEnabled: () => {} };
 }

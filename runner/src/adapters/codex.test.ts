@@ -4,6 +4,7 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { codexHarness } from './codex.ts';
+import { turnInput } from './events.ts';
 
 test('Codex review starts fresh with denied tools, disabled MCP, and never logs effective config', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'atelier-codex-test-'));
@@ -25,7 +26,7 @@ createInterface({input:process.stdin}).on('line', line => {
   const raw: unknown[] = [];
   try {
     const results = [];
-    for await (const event of codexHarness({ executable, onRaw(_id, e) { raw.push(e); } }).runTurn({ turnId: 'test', cwd: dir, prompt: 'review', resumeSessionId: 'ordinary', independentReview: true, readOnly: true, mcpServers: [] }, new AbortController().signal)) results.push(event);
+    for await (const event of codexHarness({ executable, onRaw(_id, e) { raw.push(e); } }).runTurn({ turnId: 'test', cwd: dir, prompt: 'review', resumeSessionId: 'ordinary', independentReview: true, editsEnabled: false, mcpServers: [] }, new AbortController().signal, turnInput())) results.push(event);
     const calls = (await readFile(join(dir, 'calls.jsonl'), 'utf8')).trim().split('\n').map(l => JSON.parse(l));
     const start = calls.find(c => c.method === 'thread/start');
     assert.equal(start.params.threadId, undefined);

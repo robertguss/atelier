@@ -43,9 +43,10 @@ export const steer = mutation({
 const RECENT_CARDS = 20;
 
 // Everything a member needs to draw the agent pane: messages to agents with
-// their delivery state, agent replies, turns with their streamed text, each
-// agent's status and whether it can raise question cards, open and recent
-// cards, the edit switch and the runner's last heartbeat. Members never see
+// their delivery state, agent replies, turns with their streamed text and
+// tool activity, each agent's status and whether it can raise question
+// cards, open and recent cards, the edit switch and the runner's last
+// heartbeat. Members never see
 // reviews, follow-ups to them, or any turn's prompt.
 export const pane = query({
   args: { roomId: v.id('rooms') },
@@ -112,7 +113,7 @@ export const pane = query({
         closedAt: h.closedAt ?? null,
         closeReason: h.closeReason ?? null,
       })),
-      turns: turns.map((t) => ({
+      turns: await Promise.all(turns.map(async (t) => ({
         id: t._id,
         at: t._creationTime,
         participantId: t.participantId,
@@ -124,7 +125,11 @@ export const pane = query({
         stoppedByParticipantId: t.stoppedByParticipantId ?? null,
         startedAt: t.startedAt ?? null,
         endedAt: t.endedAt ?? null,
-      })),
+        // Tool activity in call order: name, one-line summary, and whether it succeeded once known.
+        items: (await ctx.db.query('turnItems').withIndex('by_turn_call', (q) => q.eq('turnId', t._id)).collect())
+          .sort((a, b) => a.seq - b.seq)
+          .map((i) => ({ name: i.name, summary: i.summary, ok: i.ok ?? null })),
+      }))),
     };
   },
 });

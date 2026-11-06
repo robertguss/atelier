@@ -10,6 +10,7 @@ const run = promisify(execFile);
 export function claudeHarness(opts: { executable: string; onRaw: (turnId: string, msg: SDKMessage) => void }): Harness {
   return {
     id: 'claude',
+    capabilities: { canRaiseCards: true },
 
     async version() {
       const { stdout } = await run(opts.executable, ['--version'], { timeout: 10_000 });
@@ -65,7 +66,7 @@ export function claudeHarness(opts: { executable: string; onRaw: (turnId: string
             if (msg.parent_tool_use_id) break;
             for (const block of msg.message.content) {
               if (block.type === 'tool_use') {
-                yield { type: 'tool_call', name: block.name, summary: summarize(block.input) };
+                yield { type: 'tool_call', id: block.id, name: block.name, summary: summarize(block.input) };
               }
             }
             break;

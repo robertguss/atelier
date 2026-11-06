@@ -333,6 +333,29 @@ export const handTimedOut = mutation({
   },
 });
 
+const SUMMARY_MAX = 200;
+
+// Tool calls the running turn made, or results for them, since the last call.
+// Each item is keyed by the harness's call id, so a result updates its call.
+export const recordTurnItems = mutation({
+  args: {
+    secret: v.string(),
+    turnId: v.id('turns'),
+    items: v.array(v.object({ callId: v.string(), seq: v.number(), name: v.string(), summary: v.string(), ok: v.optional(v.boolean()) })),
+  },
+  handler: async (ctx, { secret, turnId, items }) => {
+    requireRunnerSecret(secret);
+    // A turn stopped from the room still keeps the activity of its last moments.
+    if (!(await ctx.db.get(turnId))) return;
+    for (const item of items) {
+      const row = { ...item, summary: item.summary.slice(0, SUMMARY_MAX) };
+      const existing = await ctx.db.query('turnItems').withIndex('by_turn_call', (q) => q.eq('turnId', turnId).eq('callId', item.callId)).unique();
+      if (existing) await ctx.db.patch(existing._id, row);
+      else await ctx.db.insert('turnItems', { turnId, ...row });
+    }
+  },
+});
+
 // What each harness on this runner can do, such as whether it can raise
 // question cards. The room shows it next to each agent.
 export const reportCapabilities = mutation({

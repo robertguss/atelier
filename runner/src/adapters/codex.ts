@@ -7,6 +7,8 @@ import { eventQueue } from './events.ts';
 export function codexHarness(opts: { executable: string; onRaw: (id: string, event: unknown) => void }): Harness {
   return {
     id: 'codex',
+    // Codex asks in plain text: its question prompt only reaches a client in Plan mode.
+    capabilities: { canRaiseCards: false },
     async version() { return (await promisify(execFile)(opts.executable, ['--version'])).stdout.trim(); },
     async *runTurn(req, signal) {
       signal.throwIfAborted();

@@ -4,6 +4,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { piHarness } from './pi.ts';
+import { turnInput } from './events.ts';
 
 test('Pi prompt rejection terminates instead of waiting for agent_end', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'atelier-pi-'));
@@ -15,7 +16,7 @@ console.log(JSON.stringify({type:'response',id:command.id,command:command.type,s
 });`);
   try {
     await assert.rejects(async () => {
-      for await (const event of piHarness({ cliPath, onRaw() {} }).runTurn({ turnId: 'test', cwd: dir, prompt: 'hello', readOnly: true, mcpServers: [] }, new AbortController().signal)) void event;
+      for await (const event of piHarness({ cliPath, onRaw() {} }).runTurn({ turnId: 'test', cwd: dir, prompt: 'hello', editsEnabled: false, mcpServers: [] }, new AbortController().signal, turnInput())) void event;
     }, /Please log in/);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

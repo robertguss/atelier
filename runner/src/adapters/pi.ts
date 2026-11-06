@@ -10,6 +10,8 @@ export function piHarness(opts: { cliPath?: string; onRaw: (id: string, event: u
   const cliPath = opts.cliPath ?? fileURLToPath(new URL('./pi-cli.mjs', import.meta.url));
   return {
     id: 'pi',
+    // Pi has no built-in question prompt, so it asks in plain text.
+    capabilities: { canRaiseCards: false },
     async version() { const result = await promisify(execFile)(process.execPath, [cliPath, '--version'], { timeout: 10_000 }); return (result.stdout || result.stderr).trim(); },
     async *runTurn(req, signal) {
       signal.throwIfAborted();
