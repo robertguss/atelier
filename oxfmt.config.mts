@@ -3,6 +3,8 @@ import ultracite from "ultracite/oxfmt";
 
 export default defineConfig({
   ...ultracite,
+  // Keep the hand-wrapped Markdown prose in the docs as written.
+  proseWrap: "preserve",
   ignorePatterns: [
     ...(ultracite.ignorePatterns ?? []),
     // TanStack Router regenerates this file on every dev server and build.
