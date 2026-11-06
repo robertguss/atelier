@@ -1,10 +1,10 @@
 import type { HarnessEvent, QuestionAnswer, QuestionCard, TurnInput } from '@atelier/shared';
-export function eventQueue() {
-  const queue: HarnessEvent[] = [];
+export function eventQueue<T = HarnessEvent>() {
+  const queue: T[] = [];
   let wake: (() => void) | undefined;
   let ended = false;
   return {
-    push(event: HarnessEvent) { queue.push(event); wake?.(); },
+    push(event: T) { queue.push(event); wake?.(); },
     end() { ended = true; wake?.(); },
     async *[Symbol.asyncIterator]() {
       while (!ended || queue.length) {

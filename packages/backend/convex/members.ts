@@ -4,7 +4,6 @@ import { NOTICE_VERSION, requireMember, requireOwner } from './lib/auth';
 import { cancelMessage } from './lib/dispatch';
 import { record } from './lib/ledger';
 
-// The owner's view of who is in a room and who has been invited.
 export const list = query({
   args: { roomId: v.id('rooms') },
   handler: async (ctx, { roomId }) => {
@@ -32,7 +31,6 @@ export const list = query({
   },
 });
 
-// Which version of the join notice the caller has accepted in this room.
 export const notice = query({
   args: { roomId: v.id('rooms') },
   handler: async (ctx, { roomId }) => {

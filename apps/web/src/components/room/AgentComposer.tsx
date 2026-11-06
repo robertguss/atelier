@@ -1,12 +1,11 @@
 import { api } from '@atelier/backend/api';
 import type { Id } from '@atelier/backend/dataModel';
 import { useMutation } from 'convex/react';
-import { useState, type KeyboardEvent } from 'react';
 import { Button } from '~/components/ui/button';
 import { Textarea } from '~/components/ui/textarea';
 import type { PaneAgent } from '~/lib/room';
 import { cn } from '~/lib/utils';
-import { errorText } from './errors';
+import { useComposer } from './useComposer';
 
 interface AgentComposerProps {
   roomId: Id<'rooms'>;
@@ -23,9 +22,12 @@ interface AgentComposerProps {
  */
 export function AgentComposer({ roomId, agents, target, onPickTarget, onSent, offline }: AgentComposerProps) {
   const send = useMutation(api.messages.send);
-  const [draft, setDraft] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { draft, setDraft, busy, error, submit, onKeyDown } = useComposer(async (body, steerNow) => {
+    if (!target) return;
+    const to = target.participantId;
+    await send(steerNow ? { roomId, body, toParticipantId: to, steer: true } : { roomId, body, toParticipantId: to });
+    onSent(to);
+  }, offline);
 
   if (!target) {
     return <p className="text-sm text-muted-foreground">This room has no agents.</p>;
@@ -33,28 +35,6 @@ export function AgentComposer({ roomId, agents, target, onPickTarget, onSent, of
 
   const working = target.status === 'running';
   const canSend = draft.trim().length > 0 && !busy && !offline;
-
-  const submit = async (steerNow: boolean) => {
-    const body = draft.trim();
-    if (!body || busy || offline) return;
-    const to = target.participantId;
-    setBusy(true);
-    setError(null);
-    try {
-      await send(steerNow ? { roomId, body, toParticipantId: to, steer: true } : { roomId, body, toParticipantId: to });
-      setDraft('');
-      onSent(to);
-    } catch (e) {
-      setError(errorText(e));
-    }
-    setBusy(false);
-  };
-
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
-    e.preventDefault();
-    void submit(false);
-  };
 
   return (
     <div className="space-y-2">

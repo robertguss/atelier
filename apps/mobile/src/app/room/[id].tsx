@@ -109,7 +109,6 @@ export default function Room() {
   );
 }
 
-// A message to an agent that has not gone in yet says so.
 function deliveryNote(m: { delivery: string | null; cancelReason: string | null } | undefined) {
   if (m?.delivery === 'queued' || m?.delivery === 'steering') return 'Queued';
   if (m?.delivery === 'cancelled') return `Not sent${m.cancelReason ? `: ${m.cancelReason}` : ''}`;

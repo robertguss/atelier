@@ -10,7 +10,6 @@ export type PaneCard = Pane['cards'][number];
 export type RoomData = NonNullable<FunctionReturnType<typeof api.rooms.get>>;
 export type Participant = RoomData['participants'][number];
 
-/** A participant's display name by id. */
 export type Names = (participantId: string | null | undefined) => string;
 
 export function namesFrom(participants: readonly Participant[]): Names {
@@ -88,7 +87,6 @@ export function toolItemsFor(pane: Pane, turn: PaneTurn): ToolItem[] {
     }));
 }
 
-/** The runner counts as offline after this long without a heartbeat. */
 export function isOffline(pane: Pane, now: number) {
   return now - pane.runner.lastHeartbeatAt > pane.runner.offlineAfterMs;
 }
@@ -104,7 +102,6 @@ export function formatTime(at: number) {
   return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-/** The current time, updated every `intervalMs`. */
 export function useNow(intervalMs: number) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {

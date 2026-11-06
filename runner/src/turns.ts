@@ -1,5 +1,3 @@
-// Runs the turns Convex assigns to this runner, and routes control commands
-// (steer, answer, settings, interrupt) into the turn they are for.
 // See docs/v0-spec.md, "Runner ↔ Convex protocol".
 
 import type { ConvexClient } from 'convex/browser';
@@ -12,8 +10,7 @@ import { reviewSnapshot } from './review.ts';
 
 const PROGRESS_MS = 500;
 const TURN_DEADLINE_MS = 30 * 60_000;
-// An unanswered card closes with no decision after this long.
-const CARD_CEILING_MS = 2 * 60 * 60_000;
+const CARD_ANSWER_TIMEOUT_MS = 2 * 60 * 60_000;
 
 export type TurnsClient = Pick<ConvexClient, 'mutation'>;
 
@@ -27,7 +24,6 @@ export interface TurnsOptions {
   defaultModels?: Partial<Record<HarnessId, string>>;
 }
 
-// What a control command can reach in a turn running here.
 interface RunningTurn {
   abort: AbortController;
   input: TurnInput;
@@ -125,7 +121,7 @@ export function createTurns({ client, secret, harnesses, appendTranscript, trans
         if (question) {
           question.ceiling = setTimeout(() => {
             client.mutation(api.runner.handTimedOut, { secret, handId }).catch((e) => console.error('card timeout failed:', e));
-          }, CARD_CEILING_MS);
+          }, CARD_ANSWER_TIMEOUT_MS);
         }
       } catch (e) {
         settle(card.requestId);
@@ -191,7 +187,6 @@ export function createTurns({ client, secret, harnesses, appendTranscript, trans
           model: effectiveModel,
           reasoning: parseReasoning(job.participant.reasoning),
           resumeSessionId: sessionId,
-          // Independent reviews never edit.
           editsEnabled: !job.turn.independentReview && started?.editsEnabled === true,
           mcpServers: [],
         },

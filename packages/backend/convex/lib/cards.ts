@@ -3,7 +3,7 @@ import type { Doc, Id } from '../_generated/dataModel';
 import type { MutationCtx, QueryCtx } from '../_generated/server';
 import type { cardAnswer } from '../schema';
 import { activeOrdinaryTurn } from './dispatch';
-import { record } from './ledger';
+import { findLedger, record } from './ledger';
 
 // Question cards. A card is answered whole, once: the first answer wins,
 // whether it comes from the card or from a chat message to the waiting agent.
@@ -20,7 +20,6 @@ export async function ownerOnlyCard(ctx: QueryCtx, hand: Doc<'hands'>) {
   return !turn || !!turn.ritualId || !!turn.followUp;
 }
 
-// Why a card can no longer be answered.
 export async function closedCardError(ctx: QueryCtx, hand: Doc<'hands'>) {
   if (hand.status === 'answered') {
     const by = hand.answeredByParticipantId ? await ctx.db.get(hand.answeredByParticipantId) : null;
@@ -29,7 +28,6 @@ export async function closedCardError(ctx: QueryCtx, hand: Doc<'hands'>) {
   return new Error('This question closed without an answer');
 }
 
-// The card the agent's running turn is waiting on, if any.
 export async function waitingCard(ctx: QueryCtx, participantId: Id<'participants'>) {
   const turn = await activeOrdinaryTurn(ctx, participantId);
   if (!turn || turn.status !== 'running' || !turn.waitingOnHandId) return null;
@@ -83,7 +81,6 @@ export async function answerCard(
       questionId: answer.questionId,
       answeredByParticipantId: answerer._id,
     });
-    // Team messages are linked by id only, never by text.
     await record(ctx, {
       roomId: hand.roomId,
       type: 'decision.recorded',
@@ -159,11 +156,7 @@ async function releaseTurn(ctx: MutationCtx, hand: Doc<'hands'>) {
 }
 
 async function raisedLedgerId(ctx: QueryCtx, hand: Doc<'hands'>) {
-  const row = await ctx.db
-    .query('ledger')
-    .withIndex('by_room_type', (q) => q.eq('roomId', hand.roomId).eq('type', 'hand.raised').eq('subjectId', hand._id))
-    .first();
-  return row?._id;
+  return (await findLedger(ctx, hand.roomId, 'hand.raised', hand._id))?._id;
 }
 
 function choiceText(answer: CardAnswer) {

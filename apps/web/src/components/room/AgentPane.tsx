@@ -29,7 +29,6 @@ interface AgentPaneProps {
   offline: boolean;
 }
 
-/** The agents' work, live and the same for everyone in the room. */
 export function AgentPane({ roomId, pane, names, offline }: AgentPaneProps) {
   const { scrollRef, contentRef } = useStickToBottom<HTMLDivElement, HTMLOListElement>();
   const [picked, setPicked] = useState<Id<'participants'> | null>(null);

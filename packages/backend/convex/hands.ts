@@ -2,7 +2,7 @@ import { v } from 'convex/values';
 import { mutation } from './_generated/server';
 import { requireMember } from './lib/auth';
 import { answerCard, closedCardError, ownerOnlyCard } from './lib/cards';
-import { offlineReason, runnerOnline } from './lib/dispatch';
+import { requireRunnerOnline } from './lib/dispatch';
 import { cardAnswer } from './schema';
 
 // Answer an agent's question card. Any member can; the first answer wins and
@@ -16,9 +16,7 @@ export const answer = mutation({
     if (!isOwner && (await ownerOnlyCard(ctx, hand))) throw new Error('Only the owner can answer this question');
     if (hand.status !== 'raised') throw await closedCardError(ctx, hand);
     // An answer the runner cannot deliver would record a decision the agent never saw.
-    const room = await ctx.db.get(hand.roomId);
-    const runner = room ? await ctx.db.get(room.runnerId) : null;
-    if (!runnerOnline(runner)) throw new Error(offlineReason(runner));
+    await requireRunnerOnline(ctx, await ctx.db.get(hand.roomId));
     await answerCard(ctx, hand, participant, answers, 'card');
   },
 });

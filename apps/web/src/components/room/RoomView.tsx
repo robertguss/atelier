@@ -13,7 +13,6 @@ import { TeamPane } from './TeamPane';
 const TEAM_MIN = 260;
 const TEAM_DEFAULT = 360;
 
-/** The shared room: the agent pane and the team pane side by side. */
 export function RoomView({ roomId, isOwner }: { roomId: Id<'rooms'>; isOwner: boolean }) {
   const data = useQuery(api.rooms.get, { roomId });
   const pane = useQuery(api.agent.pane, { roomId });

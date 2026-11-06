@@ -69,11 +69,6 @@ export type QuestionAnswer =
 export type SteerOutcome = 'steered' | 'rejected';
 
 /**
- * The live channel into a running turn. The runner creates one per turn.
- *
- * The runner implements `onQuestion`: the adapter calls it when the agent asks
- * a question, and it resolves with the answer.
- *
  * The adapter replaces `steer` and `setEditsEnabled` with its own as soon as
  * its turn can take them, before its first `await`, so no change made after
  * `TurnRequest.editsEnabled` was read is lost. Until then, a steer is

@@ -3,7 +3,6 @@ import { mutation, query } from './_generated/server';
 import { ensureUser, getMembership, getOwner, getUser, requireMember, requireOwner } from './lib/auth';
 import { record } from './lib/ledger';
 
-// The caller's rooms, newest first, with their role in each.
 export const list = query({
   args: {},
   handler: async (ctx) => {

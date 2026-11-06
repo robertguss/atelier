@@ -5,6 +5,7 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path
 import { promisify } from 'node:util';
 import { query, type CanUseTool, type Options, type PermissionResult, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { Harness, HarnessEvent, QuestionAnswer, QuestionCard, SteerOutcome } from '@atelier/shared';
+import { eventQueue } from './events.ts';
 
 const run = promisify(execFile);
 
@@ -184,20 +185,8 @@ export function claudeHarness(opts: { executable: string; onRaw: (turnId: string
 
 // A prompt the SDK reads as a stream, so steers can follow the first message.
 function messageStream() {
-  const queue: SDKUserMessage[] = [];
-  let wake: (() => void) | undefined;
-  let closed = false;
-  return {
-    push(message: SDKUserMessage) { queue.push(message); wake?.(); },
-    close() { closed = true; wake?.(); },
-    async *[Symbol.asyncIterator]() {
-      for (;;) {
-        if (queue.length) yield queue.shift()!;
-        else if (closed) return;
-        else await new Promise<void>((r) => { wake = r; });
-      }
-    },
-  };
+  const stream = eventQueue<SDKUserMessage>();
+  return Object.assign(stream, { close: stream.end });
 }
 
 // Takes a pushed message back out of the CLI's queue. The SDK has this

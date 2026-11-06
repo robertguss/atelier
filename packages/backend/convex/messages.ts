@@ -1,11 +1,11 @@
-import { reviewFinished } from './lib/review';
 import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel';
-import { mutation, query, type QueryCtx } from './_generated/server';
+import { mutation, query } from './_generated/server';
 import { requireMember } from './lib/auth';
 import { answerCard, closeOpenCards, ownerOnlyCard, waitingCard } from './lib/cards';
-import { activeOrdinaryTurn, dispatchNext, offlineReason, runnerOnline, steerMessage, takesSteer } from './lib/dispatch';
-import { record } from './lib/ledger';
+import { activeOrdinaryTurn, dispatchNext, isActiveTurnStatus, requireRunnerOnline, steerMessage, takesSteer } from './lib/dispatch';
+import { findLedger, record } from './lib/ledger';
+import { reviewFinished } from './lib/review';
 
 // The room timeline: visible messages plus every turn that hasn't produced a
 // message yet (queued, running, failed, interrupted), so the phone can show
@@ -66,8 +66,7 @@ export const send = mutation({
     if (!text) throw new Error('Empty message');
     const room = await ctx.db.get(roomId);
     if (!room) throw new Error('Unknown room');
-    const runner = await ctx.db.get(room.runnerId);
-    if (!runnerOnline(runner)) throw new Error(offlineReason(runner));
+    await requireRunnerOnline(ctx, room);
 
     const participants = await ctx.db
       .query('participants')
@@ -101,7 +100,7 @@ export const send = mutation({
       const decision = await ctx.db.get(decisionId);
       if (!decision || decision.roomId !== roomId) throw new Error('Invalid decision');
       followUpRitualId = decision.ritualId;
-      parentLedgerId = await ledgerIdFor(ctx, roomId, 'decision.recorded', decisionId);
+      parentLedgerId = (await findLedger(ctx, roomId, 'decision.recorded', decisionId))?._id;
       if (!parentLedgerId) throw new Error('Decision has no ledger entry');
     }
     if (reviewTurnId) {
@@ -111,7 +110,7 @@ export const send = mutation({
       if (!source || source.roomId !== roomId || !ritual || ritual.status === 'collecting') throw new Error('Review is not available for follow-up');
       if (source.participantId !== target._id) throw new Error('Choose the participant who wrote this answer');
       followUpRitualId = ritual._id;
-      parentLedgerId = await ledgerIdFor(ctx, roomId, 'ritual.revealed', ritual._id);
+      parentLedgerId = (await findLedger(ctx, roomId, 'ritual.revealed', ritual._id))?._id;
     }
     const messageId = await ctx.db.insert('messages', {
       roomId,
@@ -143,14 +142,6 @@ export const send = mutation({
   },
 });
 
-async function ledgerIdFor(ctx: QueryCtx, roomId: Id<'rooms'>, type: string, subjectId: string) {
-  const row = await ctx.db
-    .query('ledger')
-    .withIndex('by_room_type', (q) => q.eq('roomId', roomId).eq('type', type).eq('subjectId', subjectId))
-    .first();
-  return row?._id;
-}
-
 // Any member can stop an ordinary turn; review turns are the owner's.
 export const cancel = mutation({
   args: { turnId: v.id('turns') },
@@ -159,7 +150,7 @@ export const cancel = mutation({
     if (!turn) throw new Error('Unknown turn');
     const { participant, isOwner } = await requireMember(ctx, turn.roomId);
     if (turn.ritualId && !isOwner) throw new Error('Only the owner can stop a review');
-    if (!['queued', 'running'].includes(turn.status)) return;
+    if (!isActiveTurnStatus(turn.status)) return;
     const reason = isOwner ? 'Cancelled by owner' : `Cancelled by ${participant.displayName}`;
     await ctx.db.patch(turnId, {
       status: turn.ritualId ? 'failed' : 'interrupted',
@@ -169,12 +160,8 @@ export const cancel = mutation({
     });
     await closeOpenCards(ctx, turnId, 'cancelled', reason);
     await reviewFinished(ctx, turn);
-    const room = await ctx.db.get(turn.roomId);
-    if (room) {
-      for (const status of ['pending', 'claimed'] as const) {
-        const commands = await ctx.db.query('commands').withIndex('by_runner_status', q => q.eq('runnerId', room.runnerId).eq('status', status)).collect();
-        for (const command of commands.filter(c => c.turnId === turnId)) await ctx.db.patch(command._id, { status: 'failed', error: reason, leaseExpiresAt: undefined });
-      }
+    for (const command of await ctx.db.query('commands').withIndex('by_turn', (q) => q.eq('turnId', turnId)).collect()) {
+      if (command.status === 'pending' || command.status === 'claimed') await ctx.db.patch(command._id, { status: 'failed', error: reason, leaseExpiresAt: undefined });
     }
     await record(ctx, { roomId: turn.roomId, type: 'turn.interrupted', actorParticipantId: participant._id, subjectId: turnId, payload: { error: reason } });
     if (!turn.ritualId) await dispatchNext(ctx, turn.participantId);

@@ -1,25 +1,14 @@
+import type { api } from '@atelier/backend/api';
+import type { FunctionArgs } from 'convex/server';
 import {
   buildPendingUserInputAnswers,
   type PendingUserInputDraftAnswer,
   type PendingUserInputQuestion,
 } from './pendingUserInput';
+import type { PaneCard } from './room';
 
-/** One question on an agent's question card, as the backend stores it. */
-export interface CardQuestion {
-  id: string;
-  header: string;
-  text: string;
-  options: { label: string; description?: string }[];
-  multiSelect: boolean;
-  allowFreeText: boolean;
-}
-
-/** The answer to one question, in the shape `hands.answer` takes. */
-export interface CardAnswer {
-  questionId: string;
-  labels: string[];
-  freeText?: string;
-}
+export type CardQuestion = PaneCard['questions'][number];
+export type CardAnswer = FunctionArgs<typeof api.hands.answer>['answers'][number];
 
 export type CardDrafts = Record<string, PendingUserInputDraftAnswer>;
 
@@ -48,7 +37,6 @@ export function buildCardAnswers(questions: readonly CardQuestion[], drafts: Car
   });
 }
 
-/** One answer as people read it: chosen labels joined with ", ", then any free text. */
 export function describeCardAnswer(answer: CardAnswer): string {
   return [...answer.labels, ...(answer.freeText ? [answer.freeText] : [])].join(', ');
 }

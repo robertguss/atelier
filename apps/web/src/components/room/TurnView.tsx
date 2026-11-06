@@ -22,7 +22,6 @@ interface TurnViewProps {
   offline: boolean;
 }
 
-/** One agent turn: who asked, its status, tool activity, streamed text and final answer. */
 export function TurnView({ roomId, turn, replies, cards, tools, names, offline }: TurnViewProps) {
   const agentName = names(turn.participantId);
   const active = turn.status === 'queued' || turn.status === 'running';

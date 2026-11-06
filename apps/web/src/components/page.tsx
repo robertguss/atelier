@@ -12,7 +12,6 @@ export function PageSpinner() {
   );
 }
 
-// A centered card with a title, a description and optional actions below.
 export function MessagePage({ title, description, children }: { title: ReactNode; description: ReactNode; children?: ReactNode }) {
   return (
     <StandalonePage>
@@ -34,7 +33,6 @@ export function SignInScreen({ title, description }: { title: ReactNode; descrip
   );
 }
 
-// Renders children only for a signed-in person; everyone else gets the sign-in form.
 export function SignedInOnly({ children }: { children: ReactNode }) {
   const { isLoading, isAuthenticated } = useConvexAuth();
   if (isLoading) return <PageSpinner />;

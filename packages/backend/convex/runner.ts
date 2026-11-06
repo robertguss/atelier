@@ -1,17 +1,18 @@
-import { reviewFinished } from './lib/review';
 import { v } from 'convex/values';
 import type { Doc, Id } from './_generated/dataModel';
 import { internalMutation, mutation, query, type MutationCtx } from './_generated/server';
 import { hasActiveTeammate, requireRunnerSecret } from './lib/auth';
 import { closeOpenCards, expireUnanswered } from './lib/cards';
-import { dispatchNext, steerRejected } from './lib/dispatch';
+import { dispatchNext, isActiveTurnStatus, steerRejected } from './lib/dispatch';
 import { record } from './lib/ledger';
+import { reviewFinished } from './lib/review';
 import { cardQuestion, harnessId } from './schema';
 
 // Functions the runner calls. Each takes the runner secret instead of a Clerk
 // session. See docs/v0-spec.md, "Runner ↔ Convex protocol".
 
 const LEASE_MS = 5 * 60_000;
+const LEASE_RENEW_AFTER_MS = 30_000;
 
 export const pendingCommands = query({
   args: { secret: v.string(), runnerId: v.id('runners') },
@@ -95,7 +96,7 @@ export const start = mutation({
   handler: async (ctx, { secret, turnId, harnessVersion }) => {
     requireRunnerSecret(secret);
     const turn = await ctx.db.get(turnId);
-    if (!turn || !['queued', 'running'].includes(turn.status)) return null;
+    if (!turn || !isActiveTurnStatus(turn.status)) return null;
     const room = await ctx.db.get(turn.roomId);
     const editsEnabled = room?.editsEnabled === true;
     await ctx.db.patch(turnId, { status: 'running', startedAt: Date.now(), harnessVersion, editsEnabled });
@@ -110,7 +111,7 @@ export const start = mutation({
   },
 });
 
-// Throttled by the runner to about two writes a second. Also renews the lease.
+// Throttled by the runner to about two calls a second. Also renews the lease.
 export const progress = mutation({
   args: { secret: v.string(), turnId: v.id('turns'), commandId: v.id('commands'), partialText: v.string() },
   handler: async (ctx, { secret, turnId, commandId, partialText }) => {
@@ -119,8 +120,9 @@ export const progress = mutation({
     if (!turn || turn.status !== 'running') return false;
     const command = await ctx.db.get(commandId);
     if (!command || command.turnId !== turnId || command.status !== 'claimed') return false;
-    await ctx.db.patch(turnId, { partialText });
-    await ctx.db.patch(commandId, { leaseExpiresAt: Date.now() + LEASE_MS });
+    if (turn.partialText !== partialText) await ctx.db.patch(turnId, { partialText });
+    const now = Date.now();
+    if ((command.leaseExpiresAt ?? 0) < now + LEASE_MS - LEASE_RENEW_AFTER_MS) await ctx.db.patch(commandId, { leaseExpiresAt: now + LEASE_MS });
     return true;
   },
 });
@@ -139,7 +141,7 @@ export const finish = mutation({
   handler: async (ctx, args) => {
     requireRunnerSecret(args.secret);
     const turn = await ctx.db.get(args.turnId);
-    if (!turn || !['queued', 'running'].includes(turn.status)) return;
+    if (!turn || !isActiveTurnStatus(turn.status)) return;
     const command = await ctx.db.get(args.commandId);
     if (!command || command.turnId !== args.turnId || command.status !== 'claimed') throw new Error('Invalid turn command');
     // The streamed text stays on the turn, so the pane can keep showing it.
@@ -223,27 +225,24 @@ export const reclaimExpiredLeases = internalMutation({
   handler: async (ctx) => {
     const now = Date.now();
     let reclaimed = 0;
-    for (const runner of await ctx.db.query('runners').collect()) {
-      const claimed = await ctx.db
-        .query('commands')
-        .withIndex('by_runner_status', (q) => q.eq('runnerId', runner._id).eq('status', 'claimed'))
-        .collect();
-      for (const command of claimed) {
-        if (command.type !== 'run_turn' || command.leaseExpiresAt === undefined || command.leaseExpiresAt > now) continue;
-        const turn = await ctx.db.get(command.turnId);
-        if (!turn || !['queued', 'running'].includes(turn.status)) {
-          await ctx.db.patch(command._id, { status: 'failed', error: 'Lease expired', leaseExpiresAt: undefined });
-          continue;
-        }
-        await failTurn(ctx, command.turnId, command._id, 'The runner stopped responding during this turn', true, undefined, { runnerLost: true });
-        reclaimed++;
+    const expired = await ctx.db
+      .query('commands')
+      .withIndex('by_status_lease', (q) => q.eq('status', 'claimed').lte('leaseExpiresAt', now))
+      .collect();
+    for (const command of expired) {
+      if (command.type !== 'run_turn' || command.leaseExpiresAt === undefined) continue;
+      const turn = await ctx.db.get(command.turnId);
+      if (!turn || !isActiveTurnStatus(turn.status)) {
+        await ctx.db.patch(command._id, { status: 'failed', error: 'Lease expired', leaseExpiresAt: undefined });
+        continue;
       }
+      await failTurn(ctx, command.turnId, command._id, 'The runner stopped responding during this turn', true, undefined, { runnerLost: true });
+      reclaimed++;
     }
     return reclaimed;
   },
 });
 
-// The runner passed a control command to the running turn (ok) or could not.
 export const commandHandled = mutation({
   args: { secret: v.string(), commandId: v.id('commands'), ok: v.boolean(), error: v.optional(v.string()) },
   handler: async (ctx, { secret, commandId, ok, error }) => {
@@ -287,7 +286,7 @@ export const sessionStarted = mutation({
   handler: async (ctx, { secret, turnId, sessionId }) => {
     requireRunnerSecret(secret);
     const turn = await ctx.db.get(turnId);
-    if (!turn || turn.ritualId || !['queued', 'running'].includes(turn.status)) return;
+    if (!turn || turn.ritualId || !isActiveTurnStatus(turn.status)) return;
     await saveSession(ctx, turn, sessionId);
   },
 });
@@ -323,7 +322,6 @@ export const raiseHand = mutation({
   },
 });
 
-// The runner's 2-hour timer for an unanswered card ran out.
 export const handTimedOut = mutation({
   args: { secret: v.string(), handId: v.id('hands') },
   handler: async (ctx, { secret, handId }) => {
@@ -356,8 +354,6 @@ export const recordTurnItems = mutation({
   },
 });
 
-// What each harness on this runner can do, such as whether it can raise
-// question cards. The room shows it next to each agent.
 export const reportCapabilities = mutation({
   args: {
     secret: v.string(),
@@ -385,7 +381,7 @@ async function failTurn(
   { runnerLost = false }: { runnerLost?: boolean } = {},
 ) {
   const turn = await ctx.db.get(turnId);
-  if (!turn || !['queued', 'running'].includes(turn.status)) return;
+  if (!turn || !isActiveTurnStatus(turn.status)) return;
   const command = await ctx.db.get(commandId);
   if (!command || command.turnId !== turnId || !['pending', 'claimed'].includes(command.status)) throw new Error('Invalid turn command');
   await ctx.db.patch(commandId, { status: 'failed', error, leaseExpiresAt: undefined });
@@ -414,9 +410,9 @@ async function failTurn(
 // A runner that died or restarted will never answer the control commands it
 // held for a turn, so its steers in flight go back to the queue.
 async function abandonControlCommands(ctx: MutationCtx, turn: Doc<'turns'>, runnerId: Id<'runners'>, error: string) {
-  for (const status of ['pending', 'claimed'] as const) {
-    const commands = await ctx.db.query('commands').withIndex('by_runner_status', (q) => q.eq('runnerId', runnerId).eq('status', status)).collect();
-    for (const c of commands) if (c.turnId === turn._id && c.type !== 'run_turn') await ctx.db.patch(c._id, { status: 'failed', error });
+  const commands = await ctx.db.query('commands').withIndex('by_turn', (q) => q.eq('turnId', turn._id)).collect();
+  for (const c of commands) {
+    if (c.runnerId === runnerId && (c.status === 'pending' || c.status === 'claimed') && c.type !== 'run_turn') await ctx.db.patch(c._id, { status: 'failed', error });
   }
   const steering = await ctx.db
     .query('messages')
@@ -436,7 +432,7 @@ async function saveFollowUpSession(ctx: MutationCtx, ritualId: Id<'rituals'>, pa
   await ctx.db.patch(ritualId, { followUpSessions: [...others, { participantId, sessionId }] });
 }
 
-function providerOf(harness: string | undefined) {
+function providerOf(harness: Doc<'participants'>['harness']) {
   if (harness === 'claude') return 'anthropic';
   if (harness === 'codex') return 'openai';
   return harness;

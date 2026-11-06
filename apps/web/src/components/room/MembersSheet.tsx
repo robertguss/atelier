@@ -25,7 +25,6 @@ interface MembersSheetProps {
   onOpenChange: (open: boolean) => void;
 }
 
-/** The owner's room setup: invite people, revoke invites, remove members, add agents. */
 export function MembersSheet({ roomId, participants, open, onOpenChange }: MembersSheetProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>

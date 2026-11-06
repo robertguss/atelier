@@ -15,7 +15,6 @@ declare module '@tanstack/react-router' {
   }
 }
 
-// Follow the system appearance; the theme tokens key off the `dark` class.
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
 const applyAppearance = () => document.documentElement.classList.toggle('dark', darkQuery.matches);
 applyAppearance();

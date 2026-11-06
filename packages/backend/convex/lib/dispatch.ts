@@ -1,15 +1,14 @@
 import type { Doc, Id } from '../_generated/dataModel';
 import type { MutationCtx, QueryCtx } from '../_generated/server';
-import { record } from './ledger';
-import { contextBlock, loadRoomContext, renderMessage, turnPrompt } from './prompt';
+import { findLedger, record } from './ledger';
+import { contextBlock, loadRoomContext, renderMessage, roomMembers, turnPrompt } from './prompt';
 
 // Each agent has at most one active ordinary turn. Messages sent while it
 // works wait as `queued` and go in together, in send order, as the next turn.
 // Independent review turns stay outside this queue.
 
-// The runner sends a heartbeat every 15 seconds. Three missed beats mean the
-// machine is offline, and messages to agents are refused rather than held.
-export const OFFLINE_AFTER_MS = 45_000;
+const HEARTBEAT_MS = 15_000;
+export const OFFLINE_AFTER_MS = 3 * HEARTBEAT_MS;
 
 export function runnerOnline(runner: Doc<'runners'> | null) {
   return !!runner && Date.now() - runner.lastHeartbeatAt <= OFFLINE_AFTER_MS;
@@ -19,11 +18,27 @@ export function offlineReason(runner: Doc<'runners'> | null) {
   return `The runner${runner ? ` "${runner.name}"` : ''} is offline: no heartbeat in the last 45 seconds, so agents cannot receive messages.`;
 }
 
-const ACTIVE = ['queued', 'running'];
+export async function requireRunnerOnline(ctx: QueryCtx, room: Doc<'rooms'> | null): Promise<Doc<'rooms'>> {
+  const runner = room ? await ctx.db.get(room.runnerId) : null;
+  if (!room || !runnerOnline(runner)) throw new Error(offlineReason(runner));
+  return room;
+}
+
+export function isActiveTurnStatus(status: Doc<'turns'>['status']) {
+  return status === 'queued' || status === 'running';
+}
 
 export async function activeOrdinaryTurn(ctx: QueryCtx, participantId: Id<'participants'>) {
-  const turns = await ctx.db.query('turns').withIndex('by_participant', (q) => q.eq('participantId', participantId)).collect();
-  return turns.find((t) => !t.ritualId && ACTIVE.includes(t.status)) ?? null;
+  const oldest = (status: 'queued' | 'running') =>
+    ctx.db
+      .query('turns')
+      .withIndex('by_participant_status', (q) => q.eq('participantId', participantId).eq('status', status))
+      .filter((q) => q.eq(q.field('ritualId'), undefined))
+      .first();
+  const queued = await oldest('queued');
+  const running = await oldest('running');
+  if (queued && running) return queued._creationTime < running._creationTime ? queued : running;
+  return queued ?? running;
 }
 
 // A steer still in flight waits for the runner's verdict. Once its turn has
@@ -31,7 +46,7 @@ export async function activeOrdinaryTurn(ctx: QueryCtx, participantId: Id<'parti
 async function steerIsStale(ctx: QueryCtx, message: Doc<'messages'>) {
   if (!message.steering) return true;
   const turn = await ctx.db.get(message.steering.turnId);
-  if (turn && ACTIVE.includes(turn.status)) return false;
+  if (turn && isActiveTurnStatus(turn.status)) return false;
   const command = await ctx.db.get(message.steering.commandId);
   return !command || command.status === 'pending' || command.status === 'failed';
 }
@@ -48,14 +63,6 @@ async function waitingMessages(ctx: QueryCtx, participantId: Id<'participants'>)
 export async function cancelMessage(ctx: MutationCtx, message: Doc<'messages'>, reason: string, actorParticipantId?: Id<'participants'>) {
   await ctx.db.patch(message._id, { delivery: 'cancelled', cancelReason: reason, steering: undefined });
   await record(ctx, { roomId: message.roomId, type: 'message.cancelled', actorParticipantId, subjectId: message._id, payload: { reason } });
-}
-
-async function postedLedgerId(ctx: QueryCtx, message: Doc<'messages'>) {
-  const row = await ctx.db
-    .query('ledger')
-    .withIndex('by_room_type', (q) => q.eq('roomId', message.roomId).eq('type', 'message.posted').eq('subjectId', message._id))
-    .first();
-  return row?._id;
 }
 
 // Start the agent's next turn from everything waiting for it, if it is idle.
@@ -77,8 +84,9 @@ export async function dispatchNext(ctx: MutationCtx, participantId: Id<'particip
 
   const first = waiting[0]!;
   const batch = first.followUpRitualId ? [first] : takeWhile(waiting, (m) => !m.followUpRitualId);
+  const members = await roomMembers(ctx, room._id);
   const messages = [];
-  for (const m of batch) messages.push(await renderMessage(ctx, m, 'queued'));
+  for (const m of batch) messages.push(await renderMessage(ctx, m, 'queued', members));
   const previous = await ctx.db
     .query('turns')
     .withIndex('by_participant', (q) => q.eq('participantId', participantId))
@@ -86,7 +94,7 @@ export async function dispatchNext(ctx: MutationCtx, participantId: Id<'particip
     .filter((q) => q.eq(q.field('ritualId'), undefined))
     .first();
   const stopper = previous?.status === 'interrupted' && previous.stoppedByParticipantId ? await ctx.db.get(previous.stoppedByParticipantId) : null;
-  const prompt = turnPrompt({ context: contextBlock(await loadRoomContext(ctx, room)), stoppedBy: stopper?.displayName, messages });
+  const prompt = turnPrompt({ context: contextBlock(await loadRoomContext(ctx, room, members)), stoppedBy: stopper?.displayName, messages });
 
   const turnId = await ctx.db.insert('turns', {
     roomId: room._id,
@@ -101,8 +109,8 @@ export async function dispatchNext(ctx: MutationCtx, participantId: Id<'particip
   const messageLedgerIds = [];
   for (const m of batch) {
     await ctx.db.patch(m._id, { delivery: 'delivered', deliveredTurnId: turnId, steering: undefined });
-    const ledgerId = await postedLedgerId(ctx, m);
-    if (ledgerId) messageLedgerIds.push(ledgerId);
+    const posted = await findLedger(ctx, m.roomId, 'message.posted', m._id);
+    if (posted) messageLedgerIds.push(posted._id);
   }
   await record(ctx, {
     roomId: room._id,

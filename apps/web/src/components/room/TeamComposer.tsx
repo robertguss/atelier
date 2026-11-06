@@ -1,37 +1,14 @@
 import { api } from '@atelier/backend/api';
 import type { Id } from '@atelier/backend/dataModel';
 import { useMutation } from 'convex/react';
-import { useState, type KeyboardEvent } from 'react';
 import { Button } from '~/components/ui/button';
 import { Textarea } from '~/components/ui/textarea';
-import { errorText } from './errors';
+import { useComposer } from './useComposer';
 
 /** Writes to the people in the room only. Enter sends only from this box, and focus stays here. */
 export function TeamComposer({ roomId }: { roomId: Id<'rooms'> }) {
   const post = useMutation(api.team.post);
-  const [draft, setDraft] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const submit = async () => {
-    const body = draft.trim();
-    if (!body || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await post({ roomId, body });
-      setDraft('');
-    } catch (e) {
-      setError(errorText(e));
-    }
-    setBusy(false);
-  };
-
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
-    e.preventDefault();
-    void submit();
-  };
+  const { draft, setDraft, busy, error, submit, onKeyDown } = useComposer((body) => post({ roomId, body }));
 
   return (
     <div className="space-y-2">

@@ -2,7 +2,7 @@ import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel';
 import { mutation, query } from './_generated/server';
 import { requireMember } from './lib/auth';
-import { activeOrdinaryTurn, dispatchNext, offlineReason, OFFLINE_AFTER_MS, runnerOnline, steerMessage, takesSteer } from './lib/dispatch';
+import { activeOrdinaryTurn, dispatchNext, OFFLINE_AFTER_MS, requireRunnerOnline, steerMessage, takesSteer } from './lib/dispatch';
 
 // "Steer now": put a queued message into the agent's running turn instead of
 // waiting for it to end. With no turn running, the message is dispatched as
@@ -14,11 +14,8 @@ export const steer = mutation({
     if (!message) throw new Error('Unknown message');
     const { participant } = await requireMember(ctx, message.roomId);
     if (message.delivery !== 'queued' || !message.toParticipantId) throw new Error('This message is no longer waiting');
-    // A follow-up to a review or decision always runs as its own turn.
     if (message.followUpRitualId) throw new Error('A follow-up runs as its own turn');
-    const room = await ctx.db.get(message.roomId);
-    const runner = room ? await ctx.db.get(room.runnerId) : null;
-    if (!room || !runnerOnline(runner)) throw new Error(offlineReason(runner));
+    const room = await requireRunnerOnline(ctx, await ctx.db.get(message.roomId));
 
     const active = await activeOrdinaryTurn(ctx, message.toParticipantId);
     if (takesSteer(active)) {
@@ -32,12 +29,7 @@ export const steer = mutation({
 
 const RECENT_CARDS = 20;
 
-// Everything a member needs to draw the agent pane: messages to agents with
-// their delivery state, agent replies, turns with their streamed text and
-// tool activity, each agent's status and whether it can raise question
-// cards, open and recent cards, the edit switch and the runner's last
-// heartbeat. Members never see
-// reviews, follow-ups to them, or any turn's prompt.
+// Members never see reviews, follow-ups to them, or any turn's prompt.
 export const pane = query({
   args: { roomId: v.id('rooms') },
   handler: async (ctx, { roomId }) => {
@@ -115,7 +107,6 @@ export const pane = query({
         stoppedByParticipantId: t.stoppedByParticipantId ?? null,
         startedAt: t.startedAt ?? null,
         endedAt: t.endedAt ?? null,
-        // Tool activity in call order: name, one-line summary, and whether it succeeded once known.
         items: (await ctx.db.query('turnItems').withIndex('by_turn_call', (q) => q.eq('turnId', t._id)).collect())
           .sort((a, b) => a.seq - b.seq)
           .map((i) => ({ name: i.name, summary: i.summary, ok: i.ok ?? null })),

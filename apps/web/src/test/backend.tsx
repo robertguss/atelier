@@ -65,7 +65,6 @@ export const convexMock = {
     backend.actions[name] ??= vi.fn(async () => null);
     return backend.actions[name];
   },
-  // One-off reads, as `useConvex().query(...)` does.
   useConvex: () => ({ query: async (ref: never, args?: Record<string, unknown>) => runQuery(ref, args) }),
 };
 

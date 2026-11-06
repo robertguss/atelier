@@ -85,13 +85,11 @@ function FullPageSpinner() {
   );
 }
 
-// The signed-in person's primary email, or null while signed out.
 export function useSignedInEmail(): string | null {
   const { user } = useUser();
   return user?.primaryEmailAddress?.emailAddress ?? null;
 }
 
-// Signs out and comes back to the current page, signed out.
 export function useSignOut(): () => Promise<void> {
   const clerk = useClerk();
   return () => clerk.signOut({ redirectUrl: window.location.pathname });

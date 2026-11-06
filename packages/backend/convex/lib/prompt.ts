@@ -1,5 +1,6 @@
 import type { Doc, Id } from '../_generated/dataModel';
 import type { QueryCtx } from '../_generated/server';
+import { findLedger } from './ledger';
 
 // Every piece of text an agent reads about the room or its people is built
 // here. Nothing in this module reads team chat: the team channel stays
@@ -80,11 +81,16 @@ function reviewFollowUpContext(request: string, answer: string | undefined) {
 
 // A queued message in its envelope. The owner's follow-up to a decision or a
 // review also carries what it follows up, read at delivery time.
-export async function renderMessage(ctx: QueryCtx, message: Doc<'messages'>, delivery: Envelope['delivery']) {
+export async function renderMessage(
+  ctx: QueryCtx,
+  message: Doc<'messages'>,
+  delivery: Envelope['delivery'],
+  members?: Doc<'roomMembers'>[],
+) {
   const author = await ctx.db.get(message.authorParticipantId);
   const text = envelope({
     author: author?.displayName ?? 'Someone',
-    role: await roleOf(ctx, message.roomId, message.authorParticipantId),
+    role: roleIn(members ?? (await roomMembers(ctx, message.roomId)), message.authorParticipantId),
     sentAt: message._creationTime,
     delivery,
     body: message.body,
@@ -101,19 +107,20 @@ export async function renderMessage(ctx: QueryCtx, message: Doc<'messages'>, del
   return followUp ? `${text}\n\n${followUp}` : text;
 }
 
-// A turn's whole prompt: the room context, a note if a person stopped the
-// previous turn, then each message in send order.
 export function turnPrompt(p: { context: string; stoppedBy?: string; messages: string[] }) {
   return [p.context, ...(p.stoppedBy ? [stoppedNote(p.stoppedBy)] : []), ...p.messages].join('\n\n');
 }
 
-export async function roleOf(ctx: QueryCtx, roomId: Id<'rooms'>, participantId: Id<'participants'>): Promise<MemberRole> {
-  const members = await ctx.db.query('roomMembers').withIndex('by_room', (q) => q.eq('roomId', roomId)).collect();
+export async function roomMembers(ctx: QueryCtx, roomId: Id<'rooms'>) {
+  return await ctx.db.query('roomMembers').withIndex('by_room', (q) => q.eq('roomId', roomId)).collect();
+}
+
+function roleIn(members: Doc<'roomMembers'>[], participantId: Id<'participants'>): MemberRole {
   return members.find((m) => m.participantId === participantId)?.role === 'owner' ? 'owner' : 'teammate';
 }
 
-export async function loadRoomContext(ctx: QueryCtx, room: Doc<'rooms'>): Promise<RoomContext> {
-  const rows = await ctx.db.query('roomMembers').withIndex('by_room', (q) => q.eq('roomId', room._id)).collect();
+export async function loadRoomContext(ctx: QueryCtx, room: Doc<'rooms'>, rows?: Doc<'roomMembers'>[]): Promise<RoomContext> {
+  rows ??= await roomMembers(ctx, room._id);
   const members = [];
   for (const m of rows.filter((m) => m.removedAt === undefined)) {
     const participant = await ctx.db.get(m.participantId);
@@ -134,7 +141,8 @@ export async function loadRoomContext(ctx: QueryCtx, room: Doc<'rooms'>): Promis
 // follow-up, which stay the owner's.
 export async function agentDecisions(ctx: QueryCtx, roomId: Id<'rooms'>): Promise<AgentDecision[]> {
   const shown = [];
-  for (const d of await ctx.db.query('decisions').withIndex('by_room', (q) => q.eq('roomId', roomId)).collect()) {
+  for await (const d of ctx.db.query('decisions').withIndex('by_room', (q) => q.eq('roomId', roomId)).order('desc')) {
+    if (shown.length === RECENT_DECISIONS) break;
     if (d.ritualId !== undefined) continue;
     const hand = d.handId ? await ctx.db.get(d.handId) : null;
     if (hand) {
@@ -144,20 +152,12 @@ export async function agentDecisions(ctx: QueryCtx, roomId: Id<'rooms'>): Promis
     shown.push({ decision: d, hand });
   }
   const out: AgentDecision[] = [];
-  for (const { decision: d, hand } of shown.slice(-RECENT_DECISIONS)) {
+  for (const { decision: d, hand } of shown.reverse()) {
     const crux = d.cruxId ? await ctx.db.get(d.cruxId) : null;
     const question = hand ? hand.questions.find((q) => q.id === d.questionId)?.text : crux?.statement;
-    const answererId = d.answeredByParticipantId ?? (await recordedBy(ctx, roomId, d._id));
+    const answererId = d.answeredByParticipantId ?? (await findLedger(ctx, roomId, 'decision.recorded', d._id))?.actorParticipantId;
     const answerer = answererId ? await ctx.db.get(answererId) : null;
     out.push({ question: question ?? '', choice: d.choice, answeredBy: answerer?.displayName ?? 'someone', at: d._creationTime });
   }
   return out;
-}
-
-async function recordedBy(ctx: QueryCtx, roomId: Id<'rooms'>, decisionId: Id<'decisions'>) {
-  const recorded = await ctx.db
-    .query('ledger')
-    .withIndex('by_room_type', (q) => q.eq('roomId', roomId).eq('type', 'decision.recorded').eq('subjectId', decisionId))
-    .first();
-  return recorded?.actorParticipantId;
 }

@@ -40,7 +40,6 @@ export const cardQuestion = v.object({
   allowFreeText: v.boolean(),
 });
 
-// The answer to one question: the chosen option labels, free text, or both.
 export const cardAnswer = v.object({
   questionId: v.string(),
   labels: v.array(v.string()),
@@ -53,7 +52,6 @@ export default defineSchema({
     machine: v.string(),
     lastHeartbeatAt: v.number(),
     harnesses: v.array(v.object({ id: harnessId, version: v.string() })),
-    // What each harness can do on this runner, as the runner last reported.
     // Kept apart from `harnesses`, which every heartbeat replaces.
     harnessCapabilities: v.optional(v.array(v.object({ id: harnessId, canRaiseCards: v.boolean() }))),
   }).index('by_name', ['name']),
@@ -115,7 +113,6 @@ export default defineSchema({
     reasoning: v.optional(v.string()),
     displayName: v.string(),
     harnessSessionId: v.optional(v.string()),
-    // The signed-in person behind a human participant.
     userId: v.optional(v.id('users')),
   }).index('by_room', ['roomId']),
 
@@ -137,7 +134,6 @@ export default defineSchema({
     // replies and older messages have no delivery state.
     toParticipantId: v.optional(v.id('participants')),
     delivery: v.optional(deliveryState),
-    // The turn that carried the message to the agent.
     deliveredTurnId: v.optional(v.id('turns')),
     // Set while a steer is in flight to a running turn.
     steering: v.optional(v.object({ turnId: v.id('turns'), commandId: v.id('commands') })),
@@ -195,7 +191,6 @@ export default defineSchema({
     ),
     // The people whose queued messages this turn carries.
     requestedByParticipantIds: v.optional(v.array(v.id('participants'))),
-    // The room's edit switch when the turn was dispatched.
     editsEnabled: v.optional(v.boolean()),
     // Set while the agent waits on an open question card. The turn stays running.
     waitingOnHandId: v.optional(v.id('hands')),
@@ -204,7 +199,8 @@ export default defineSchema({
   })
     .index('by_room', ['roomId'])
     .index('by_ritual', ['ritualId'])
-    .index('by_participant', ['participantId']),
+    .index('by_participant', ['participantId'])
+    .index('by_participant_status', ['participantId', 'status']),
 
   // An agent's tool activity during a turn, one row per tool call: its name
   // and a one-line summary. Raw output stays on the runner's disk.
@@ -301,7 +297,10 @@ export default defineSchema({
     ),
     leaseExpiresAt: v.optional(v.number()),
     error: v.optional(v.string()),
-  }).index('by_runner_status', ['runnerId', 'status']),
+  })
+    .index('by_runner_status', ['runnerId', 'status'])
+    .index('by_turn', ['turnId'])
+    .index('by_status_lease', ['status', 'leaseExpiresAt']),
 
   ledger: defineTable({
     roomId: v.optional(v.id('rooms')),
