@@ -8,10 +8,20 @@
   "scripts": {
     "dev": "turbo run dev",
     "typecheck": "turbo run typecheck",
-    "lint": "turbo run lint"
+    "check": "ultracite check && knip",
+    "fix": "ultracite fix",
+    "test": "turbo run test",
+    "coverage": "turbo run coverage",
+    "prepare": "lefthook install"
   },
   "devDependencies": {
+    "knip": "^6.44.1",
+    "lefthook": "^2.2.2",
+    "oxfmt": "^0.77.0",
+    "oxlint": "^1.92.0",
+    "oxlint-tsgolint": "^7.0.2006",
     "turbo": "^2.11.10",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "ultracite": "^8.1.1"
   }
 }
