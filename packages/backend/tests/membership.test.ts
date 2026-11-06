@@ -1,7 +1,16 @@
-import workflow from "@convex-dev/workflow/test";
 /// <reference types="vite/client" />
+import { register as registerWorkflow } from "@convex-dev/workflow/test";
 import { convexTest } from "convex-test";
-import { beforeEach, afterEach, test, expect, vi } from "vitest";
+import type { TestConvex } from "convex-test";
+import {
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
@@ -11,51 +20,67 @@ const modules = import.meta.glob("../convex/**/*.ts");
 
 const DAY = 24 * 60 * 60 * 1000;
 
-beforeEach(() => {
-  vi.useFakeTimers();
-  process.env.ATELIER_OWNER_EMAILS = "owner@example.com";
-  process.env.ATELIER_RUNNER_SECRET = "test-secret";
-  process.env.CLERK_SECRET_KEY = "sk_test";
-  process.env.ATELIER_WEB_URL = "https://atelier.example.com/";
-});
-afterEach(() => {
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-});
+type T = TestConvex<typeof schema>;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+// The message a call was rejected with, or "resolved" if it was not rejected.
+const rejectionOf = async (call: Promise<unknown>) => {
+  try {
+    await call;
+  } catch (error) {
+    assert(error instanceof Error, "the call rejected with an Error");
+    return error.message;
+  }
+  return "resolved";
+};
 
 // A fake Clerk Backend API. `existing` lists emails that already have accounts.
-function mockClerk(existing: string[] = []) {
-  const calls: { method: string; url: string; body?: any }[] = [];
-  const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+const mockClerk = (existing: string[] = []) => {
+  const calls: { method: string; url: string; body?: unknown }[] = [];
+  const fetchMock = vi.fn<
+    (input: string | URL, init?: RequestInit) => Promise<Response>
+  >(async (input, init) => {
     const url = String(input);
     const method = init?.method ?? "GET";
+    const rawBody = init?.body;
     calls.push({
-      body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      body:
+        typeof rawBody === "string" && rawBody !== ""
+          ? (JSON.parse(rawBody) as unknown)
+          : undefined,
       method,
       url,
     });
-    expect((init?.headers as Record<string, string>).Authorization).toBe(
+    expect(new Headers(init?.headers).get("Authorization")).toBe(
       "Bearer sk_test"
     );
     if (method === "GET" && url.startsWith("https://api.clerk.com/v1/users?")) {
       const email = new URL(url).searchParams.get("email_address");
-      return Response.json(existing.includes(email!) ? [{ id: "user_1" }] : []);
+      return await Promise.resolve(
+        Response.json(
+          email !== null && existing.includes(email) ? [{ id: "user_1" }] : []
+        )
+      );
     }
     if (method === "POST" && url === "https://api.clerk.com/v1/invitations") {
-      return Response.json({ id: `inv_${calls.length}` });
+      return await Promise.resolve(
+        Response.json({ id: `inv_${calls.length}` })
+      );
     }
-    if (method === "POST" && /\/v1\/invitations\/[^/]+\/revoke$/.test(url)) {
-      return Response.json({ status: "revoked" });
+    if (method === "POST" && /\/v1\/invitations\/[^/]+\/revoke$/u.test(url)) {
+      return await Promise.resolve(Response.json({ status: "revoked" }));
     }
-    return new Response("unexpected", { status: 500 });
+    return await Promise.resolve(new Response("unexpected", { status: 500 }));
   });
   vi.stubGlobal("fetch", fetchMock);
   return calls;
-}
+};
 
-async function setup() {
+const setup = async () => {
   const t = convexTest(schema, modules);
-  workflow.register(t);
+  registerWorkflow(t);
   const owner = t.withIdentity({
     email: "owner@example.com",
     name: "Robert",
@@ -91,493 +116,589 @@ async function setup() {
     runnerId,
   });
   return { dana, eve, otherRoomId, owner, roomId, runnerId, t };
-}
+};
 
-function tokenOf(url: string) {
-  return url.split("/invite/")[1]!;
-}
+const tokenOf = (url: string) => {
+  const [, token] = url.split("/invite/");
+  assert(token !== undefined, "invite url has a token");
+  return token;
+};
 
-test("an invited teammate joins one room, sees only it, and has no owner powers", async () => {
-  const { t, owner, dana, runnerId, roomId, otherRoomId } = await setup();
-  const calls = mockClerk();
-  await expect(dana.query(api.rooms.list, {})).resolves.toEqual([]);
-  await expect(dana.query(api.rooms.access, { roomId })).resolves.toBe("none");
+const getInvite = async (t: T, inviteId: Id<"roomInvites">) => {
+  const invite = await t.run(async (ctx) => await ctx.db.get(inviteId));
+  assert(invite, "the invite exists");
+  return invite;
+};
 
-  const invite = await owner.action(api.invites.create, {
-    email: " Dana@Example.com ",
-    roomId,
+describe("room membership", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    process.env.ATELIER_OWNER_EMAILS = "owner@example.com";
+    process.env.ATELIER_RUNNER_SECRET = "test-secret";
+    process.env.CLERK_SECRET_KEY = "sk_test";
+    process.env.ATELIER_WEB_URL = "https://atelier.example.com/";
   });
-  expect(invite.emailed).toBe(true);
-  expect(invite.url).toMatch(
-    /^https:\/\/atelier\.example\.com\/invite\/[\w-]{40,}$/
-  );
-  const clerkInvite = calls.find((c) => c.method === "POST")!;
-  expect(clerkInvite.body).toMatchObject({
-    email_address: "dana@example.com",
-    redirect_url: invite.url,
-  });
-  await t.run(async (ctx) => {
-    const row = (await ctx.db.query("roomInvites").collect())[0]!;
-    expect(JSON.stringify(row)).not.toContain(tokenOf(invite.url));
-    expect(row.expiresAt - Date.now()).toBe(7 * DAY);
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
-  await expect(
-    dana.query(api.invites.lookup, { token: tokenOf(invite.url) })
-  ).resolves.toMatchObject({
-    email: "d***@example.com",
-    matches: true,
-    roomName: "Planning",
-    status: "pending",
-  });
-  await expect(
-    dana.mutation(api.invites.accept, { token: tokenOf(invite.url) })
-  ).resolves.toEqual({ ok: true, roomId });
-  await expect(
-    dana.query(api.invites.lookup, { token: tokenOf(invite.url) })
-  ).resolves.toMatchObject({ status: "accepted" });
+  it("an invited teammate joins one room, sees only it, and has no owner powers", async () => {
+    const { t, owner, dana, runnerId, roomId, otherRoomId } = await setup();
+    const calls = mockClerk();
+    const roomsBefore = await dana.query(api.rooms.list, {});
+    const accessBefore = await dana.query(api.rooms.access, { roomId });
 
-  const list = await dana.query(api.rooms.list, {});
-  expect(list.map((r) => [r._id, r.role])).toEqual([[roomId, "member"]]);
-  await expect(dana.query(api.rooms.access, { roomId })).resolves.toBe(
-    "member"
-  );
-  await expect(
-    dana.query(api.rooms.access, { roomId: otherRoomId })
-  ).resolves.toBe("none");
-  await expect(
-    dana.query(api.rooms.access, { roomId: "not-an-id" })
-  ).resolves.toBe("none");
-  await expect(owner.query(api.rooms.access, { roomId })).resolves.toBe(
-    "owner"
-  );
-  expect((await dana.query(api.rooms.get, { roomId }))!.room.name).toBe(
-    "Planning"
-  );
-  await expect(
-    dana.query(api.rooms.get, { roomId: otherRoomId })
-  ).rejects.toThrow();
-
-  const room = await owner.query(api.rooms.get, { roomId });
-  const human = room!.participants.find(
-    (p) => p.kind === "human" && p.displayName === "Dana"
-  )!;
-  const me = await dana.query(api.me.get, {});
-  expect(me).toMatchObject({ isOwner: false, signedIn: true });
-  expect(human.userId).toBe((me as { userId: Id<"users"> }).userId);
-  const claude = room!.participants.find((p) => p.harness === "claude")!;
-
-  await expect(
-    dana.mutation(api.rooms.addParticipant, { harness: "pi", roomId })
-  ).rejects.toThrow();
-  await expect(
-    dana.mutation(api.rituals.begin, {
-      participantIds: [claude._id],
-      request: "Review",
+    const invite = await owner.action(api.invites.create, {
+      email: " Dana@Example.com ",
       roomId,
-    })
-  ).rejects.toThrow();
-  await expect(
-    dana.action(api.invites.create, { email: "friend@example.com", roomId })
-  ).rejects.toThrow();
-  await expect(
-    dana.mutation(api.rooms.create, { cwd: "/tmp", name: "Mine", runnerId })
-  ).rejects.toThrow();
+    });
+    const clerkInvite = calls.find((c) => c.method === "POST");
+    assert(clerkInvite, "a Clerk invitation was created");
+    const token = tokenOf(invite.url);
+    const storedRow = await t.run(async (ctx) => {
+      const [row] = await ctx.db.query("roomInvites").collect();
+      assert(row, "the invite is stored");
+      return {
+        expiresIn: row.expiresAt - Date.now(),
+        leaksToken: JSON.stringify(row).includes(token),
+      };
+    });
+    expect({
+      before: { access: accessBefore, rooms: roomsBefore },
+      clerkBody: clerkInvite.body,
+      emailed: invite.emailed,
+      storedRow,
+      urlIsInviteLink:
+        /^https:\/\/atelier\.example\.com\/invite\/[\w-]{40,}$/u.test(
+          invite.url
+        ),
+    }).toMatchObject({
+      before: { access: "none", rooms: [] },
+      clerkBody: {
+        email_address: "dana@example.com",
+        redirect_url: invite.url,
+      },
+      emailed: true,
+      storedRow: { expiresIn: 7 * DAY, leaksToken: false },
+      urlIsInviteLink: true,
+    });
 
-  await t.run(async (ctx) => {
-    const joined = (await ctx.db.query("ledger").collect()).filter(
-      (e) => e.type === "member.joined"
+    const lookupBefore = await dana.query(api.invites.lookup, { token });
+    const accepted = await dana.mutation(api.invites.accept, { token });
+    const lookupAfter = await dana.query(api.invites.lookup, { token });
+
+    const list = await dana.query(api.rooms.list, {});
+    const danaRoom = await dana.query(api.rooms.get, { roomId });
+    const room = await owner.query(api.rooms.get, { roomId });
+    assert(room, "owner can read the room");
+    const human = room.participants.find(
+      (p) => p.kind === "human" && p.displayName === "Dana"
     );
-    expect(joined).toHaveLength(1);
-    expect(joined[0]!.actorParticipantId).toBe(human._id);
-  });
-});
+    assert(human, "Dana has a participant");
+    const me = await dana.query(api.me.get, {});
+    expect({ lookupAfter, lookupBefore, me }).toMatchObject({
+      lookupAfter: { status: "accepted" },
+      lookupBefore: {
+        email: "d***@example.com",
+        matches: true,
+        roomName: "Planning",
+        status: "pending",
+      },
+      me: { isOwner: false, signedIn: true, userId: human.userId },
+    });
+    const claude = room.participants.find((p) => p.harness === "claude");
+    assert(claude, "room has a Claude participant");
+    const joined = await t.run(async (ctx) => {
+      const ledger = await ctx.db.query("ledger").collect();
+      return ledger
+        .filter((e) => e.type === "member.joined")
+        .map((e) => e.actorParticipantId);
+    });
+    expect({
+      accepted,
+      access: {
+        invalid: await dana.query(api.rooms.access, { roomId: "not-an-id" }),
+        member: await dana.query(api.rooms.access, { roomId }),
+        other: await dana.query(api.rooms.access, { roomId: otherRoomId }),
+        owner: await owner.query(api.rooms.access, { roomId }),
+      },
+      joined,
+      list: list.map((r) => [r._id, r.role]),
+      roomName: danaRoom?.room.name,
+    }).toStrictEqual({
+      accepted: { ok: true, roomId },
+      access: {
+        invalid: "none",
+        member: "member",
+        other: "none",
+        owner: "owner",
+      },
+      joined: [human._id],
+      list: [[roomId, "member"]],
+      roomName: "Planning",
+    });
 
-test("the join notice is stored by version on the member row", async () => {
-  const { owner, dana, roomId } = await setup();
-  mockClerk();
-  const invite = await owner.action(api.invites.create, {
-    email: "dana@example.com",
-    roomId,
+    const refusals = [
+      await rejectionOf(dana.query(api.rooms.get, { roomId: otherRoomId })),
+      await rejectionOf(
+        dana.mutation(api.rooms.addParticipant, { harness: "pi", roomId })
+      ),
+      await rejectionOf(
+        dana.mutation(api.rituals.begin, {
+          participantIds: [claude._id],
+          request: "Review",
+          roomId,
+        })
+      ),
+      await rejectionOf(
+        dana.action(api.invites.create, { email: "friend@example.com", roomId })
+      ),
+      await rejectionOf(
+        dana.mutation(api.rooms.create, { cwd: "/tmp", name: "Mine", runnerId })
+      ),
+    ];
+    expect(refusals).toStrictEqual([
+      "Not a member of this room",
+      "Not signed in as the Atelier owner",
+      "Not signed in as the Atelier owner",
+      "Not signed in as the Atelier owner",
+      "Not signed in as the Atelier owner",
+    ]);
   });
-  await dana.mutation(api.invites.accept, { token: tokenOf(invite.url) });
-  const before = await dana.query(api.members.notice, { roomId });
-  expect(before.acceptedVersion).toBeNull();
-  await expect(
-    dana.mutation(api.members.acceptNotice, {
+
+  it("the join notice is stored by version on the member row", async () => {
+    const { owner, dana, roomId } = await setup();
+    mockClerk();
+    const invite = await owner.action(api.invites.create, {
+      email: "dana@example.com",
       roomId,
-      version: before.currentVersion - 1,
-    })
-  ).rejects.toThrow();
-  await dana.mutation(api.members.acceptNotice, {
-    roomId,
-    version: before.currentVersion,
+    });
+    await dana.mutation(api.invites.accept, { token: tokenOf(invite.url) });
+    const before = await dana.query(api.members.notice, { roomId });
+    expect(before.acceptedVersion).toBeNull();
+    await expect(
+      dana.mutation(api.members.acceptNotice, {
+        roomId,
+        version: before.currentVersion - 1,
+      })
+    ).rejects.toThrow("The notice has changed; read it again");
+    await dana.mutation(api.members.acceptNotice, {
+      roomId,
+      version: before.currentVersion,
+    });
+    await expect(
+      dana.query(api.members.notice, { roomId })
+    ).resolves.toStrictEqual({
+      acceptedVersion: before.currentVersion,
+      currentVersion: before.currentVersion,
+    });
   });
-  await expect(dana.query(api.members.notice, { roomId })).resolves.toEqual({
-    acceptedVersion: before.currentVersion,
-    currentVersion: before.currentVersion,
-  });
-});
 
-test("an invite for another address shows the masked address and cannot be accepted", async () => {
-  const { t, owner, eve, roomId } = await setup();
-  mockClerk();
-  const invite = await owner.action(api.invites.create, {
-    email: "dana@example.com",
-    roomId,
-  });
-  const token = tokenOf(invite.url);
-  await expect(eve.query(api.invites.lookup, { token })).resolves.toMatchObject(
-    {
+  it("an invite for another address shows the masked address and cannot be accepted", async () => {
+    const { t, owner, eve, roomId } = await setup();
+    mockClerk();
+    const invite = await owner.action(api.invites.create, {
+      email: "dana@example.com",
+      roomId,
+    });
+    const token = tokenOf(invite.url);
+    await expect(
+      eve.query(api.invites.lookup, { token })
+    ).resolves.toMatchObject({
       email: "d***@example.com",
       matches: false,
       roomName: "Planning",
       status: "pending",
-    }
-  );
-  await expect(eve.mutation(api.invites.accept, { token })).resolves.toEqual({
-    ok: false,
-    reason: "email_mismatch",
-  });
-  await expect(eve.query(api.rooms.access, { roomId })).resolves.toBe("none");
-  await t.run(async (ctx) => {
-    expect((await ctx.db.query("roomInvites").collect())[0]!.status).toBe(
-      "pending"
-    );
-  });
-});
-
-test("an unknown token reveals nothing", async () => {
-  const { owner, dana, roomId } = await setup();
-  mockClerk();
-  await owner.action(api.invites.create, { email: "dana@example.com", roomId });
-  await expect(
-    dana.query(api.invites.lookup, { token: "made-up-token" })
-  ).resolves.toBeNull();
-  await expect(
-    dana.mutation(api.invites.accept, { token: "made-up-token" })
-  ).resolves.toEqual({ ok: false, reason: "not_found" });
-});
-
-test("expired and revoked invites are rejected and the row says why", async () => {
-  const { t, owner, dana, roomId, otherRoomId } = await setup();
-  const calls = mockClerk();
-  const expiring = await owner.action(api.invites.create, {
-    email: "dana@example.com",
-    roomId,
-  });
-  const revoked = await owner.action(api.invites.create, {
-    email: "dana@example.com",
-    roomId: otherRoomId,
-  });
-
-  await owner.action(api.invites.revoke, { inviteId: revoked.inviteId });
-  const clerkRevoke = calls.find((c) => c.url.endsWith("/revoke"))!;
-  const clerkInvites = calls.filter(
-    (c) => c.method === "POST" && c.url.endsWith("/invitations")
-  );
-  expect(clerkInvites).toHaveLength(2);
-  expect(clerkRevoke.url).toBe(
-    `https://api.clerk.com/v1/invitations/inv_${calls.indexOf(clerkInvites[1]!) + 1}/revoke`
-  );
-  await expect(
-    dana.query(api.invites.lookup, { token: tokenOf(revoked.url) })
-  ).resolves.toMatchObject({ status: "revoked" });
-  await expect(
-    dana.mutation(api.invites.accept, { token: tokenOf(revoked.url) })
-  ).resolves.toEqual({ ok: false, reason: "revoked" });
-
-  vi.setSystemTime(Date.now() + 7 * DAY + 1);
-  await expect(
-    dana.query(api.invites.lookup, { token: tokenOf(expiring.url) })
-  ).resolves.toMatchObject({ status: "expired" });
-  await expect(
-    dana.mutation(api.invites.accept, { token: tokenOf(expiring.url) })
-  ).resolves.toEqual({ ok: false, reason: "expired" });
-
-  await t.run(async (ctx) => {
-    const rows = await ctx.db.query("roomInvites").collect();
-    expect(rows.find((r) => r._id === expiring.inviteId)!.status).toBe(
-      "expired"
-    );
-    expect(rows.find((r) => r._id === revoked.inviteId)!.status).toBe(
-      "revoked"
-    );
-    await expect(ctx.db.query("roomMembers").collect()).resolves.toHaveLength(
-      2
-    );
-  });
-  await expect(dana.query(api.rooms.list, {})).resolves.toEqual([]);
-});
-
-test("a second-room invite for an existing account adds a member row without a Clerk invitation", async () => {
-  const { t, owner, dana, roomId, otherRoomId } = await setup();
-  const calls = mockClerk(["dana@example.com"]);
-  const first = await owner.action(api.invites.create, {
-    email: "dana@example.com",
-    roomId,
-  });
-  const second = await owner.action(api.invites.create, {
-    email: "dana@example.com",
-    roomId: otherRoomId,
-  });
-  expect(first.emailed).toBe(false);
-  expect(second.emailed).toBe(false);
-  expect(calls.filter((c) => c.method === "POST")).toHaveLength(0);
-  await dana.mutation(api.invites.accept, { token: tokenOf(first.url) });
-  await dana.mutation(api.invites.accept, { token: tokenOf(second.url) });
-  expect((await dana.query(api.rooms.list, {})).map((r) => r.role)).toEqual([
-    "member",
-    "member",
-  ]);
-  await t.run(async (ctx) => {
-    const users = await ctx.db.query("users").collect();
-    const danaUser = users.find((u) => u.email === "dana@example.com")!;
+    });
     await expect(
-      ctx.db
-        .query("roomMembers")
-        .withIndex("by_user", (q) => q.eq("userId", danaUser._id))
-        .collect()
-    ).resolves.toHaveLength(2);
+      eve.mutation(api.invites.accept, { token })
+    ).resolves.toStrictEqual({
+      ok: false,
+      reason: "email_mismatch",
+    });
+    await expect(eve.query(api.rooms.access, { roomId })).resolves.toBe("none");
+    await t.run(async (ctx) => {
+      const [row] = await ctx.db.query("roomInvites").collect();
+      expect(row?.status).toBe("pending");
+    });
   });
-});
 
-test("removing a member ends access at once and keeps their messages", async () => {
-  const { t, owner, dana, roomId } = await setup();
-  mockClerk();
-  const invite = await owner.action(api.invites.create, {
-    email: "dana@example.com",
-    roomId,
-  });
-  await dana.mutation(api.invites.accept, { token: tokenOf(invite.url) });
-  const { members } = await owner.query(api.members.list, { roomId });
-  const member = members.find((m) => m.role === "member")!;
-  await t.run(async (ctx) => {
-    await ctx.db.insert("messages", {
-      authorParticipantId: member.participantId,
-      body: "Dana was here",
+  it("an unknown token reveals nothing", async () => {
+    const { owner, dana, roomId } = await setup();
+    mockClerk();
+    await owner.action(api.invites.create, {
+      email: "dana@example.com",
       roomId,
-      visibility: "room",
+    });
+    await expect(
+      dana.query(api.invites.lookup, { token: "made-up-token" })
+    ).resolves.toBeNull();
+    await expect(
+      dana.mutation(api.invites.accept, { token: "made-up-token" })
+    ).resolves.toStrictEqual({ ok: false, reason: "not_found" });
+  });
+
+  it("expired and revoked invites are rejected and the row says why", async () => {
+    const { t, owner, dana, roomId, otherRoomId } = await setup();
+    const calls = mockClerk();
+    const expiring = await owner.action(api.invites.create, {
+      email: "dana@example.com",
+      roomId,
+    });
+    const revoked = await owner.action(api.invites.create, {
+      email: "dana@example.com",
+      roomId: otherRoomId,
+    });
+
+    await owner.action(api.invites.revoke, { inviteId: revoked.inviteId });
+    const clerkRevoke = calls.find((c) => c.url.endsWith("/revoke"));
+    assert(clerkRevoke, "Clerk was asked to revoke");
+    const clerkInvites = calls.filter(
+      (c) => c.method === "POST" && c.url.endsWith("/invitations")
+    );
+    const [, revokedClerkInvite] = clerkInvites;
+    assert(revokedClerkInvite, "the second invite reached Clerk");
+    expect({
+      clerkInvites: clerkInvites.length,
+      revokeUrl: clerkRevoke.url,
+    }).toStrictEqual({
+      clerkInvites: 2,
+      revokeUrl: `https://api.clerk.com/v1/invitations/inv_${calls.indexOf(revokedClerkInvite) + 1}/revoke`,
+    });
+    const lookupRevoked = await dana.query(api.invites.lookup, {
+      token: tokenOf(revoked.url),
+    });
+    const acceptRevoked = await dana.mutation(api.invites.accept, {
+      token: tokenOf(revoked.url),
+    });
+
+    vi.setSystemTime(Date.now() + 7 * DAY + 1);
+    const lookupExpired = await dana.query(api.invites.lookup, {
+      token: tokenOf(expiring.url),
+    });
+    const acceptExpired = await dana.mutation(api.invites.accept, {
+      token: tokenOf(expiring.url),
+    });
+    expect({ lookupExpired, lookupRevoked }).toMatchObject({
+      lookupExpired: { status: "expired" },
+      lookupRevoked: { status: "revoked" },
+    });
+
+    const stored = await t.run(async (ctx) => {
+      const rows = await ctx.db.query("roomInvites").collect();
+      const members = await ctx.db.query("roomMembers").collect();
+      return {
+        expiring: rows.find((r) => r._id === expiring.inviteId)?.status,
+        members: members.length,
+        revoked: rows.find((r) => r._id === revoked.inviteId)?.status,
+      };
+    });
+    expect({
+      acceptExpired,
+      acceptRevoked,
+      danaRooms: await dana.query(api.rooms.list, {}),
+      stored,
+    }).toStrictEqual({
+      acceptExpired: { ok: false, reason: "expired" },
+      acceptRevoked: { ok: false, reason: "revoked" },
+      danaRooms: [],
+      stored: { expiring: "expired", members: 2, revoked: "revoked" },
     });
   });
-  await expect(
-    dana.mutation(api.members.remove, { memberId: member._id })
-  ).rejects.toThrow();
 
-  await owner.mutation(api.members.remove, { memberId: member._id });
-  await expect(dana.query(api.rooms.get, { roomId })).rejects.toThrow();
-  await expect(dana.query(api.rooms.access, { roomId })).resolves.toBe(
-    "removed"
-  );
-  await expect(dana.query(api.rooms.list, {})).resolves.toEqual([]);
-  expect(
-    JSON.stringify(await owner.query(api.messages.timeline, { roomId }))
-  ).toContain("Dana was here");
-  expect(
-    (await owner.query(api.members.list, { roomId })).members.map((m) => m.role)
-  ).toEqual(["owner"]);
-  await t.run(async (ctx) => {
-    const removed = (await ctx.db.query("ledger").collect()).filter(
-      (e) => e.type === "member.removed"
-    );
-    expect(removed).toHaveLength(1);
-    expect(removed[0]!.subjectId).toBe(member._id);
-  });
-  const ownerMember = (await owner.query(api.members.list, { roomId }))
-    .members[0]!;
-  await expect(
-    owner.mutation(api.members.remove, { memberId: ownerMember._id })
-  ).rejects.toThrow();
-});
-
-test("a removed teammate rejoins through a new invite, and a repeat accept only lets her back in", async () => {
-  const { t, owner, dana, roomId } = await setup();
-  mockClerk();
-  const first = await owner.action(api.invites.create, {
-    email: "dana@example.com",
-    roomId,
-  });
-  await dana.mutation(api.invites.accept, { token: tokenOf(first.url) });
-  const member = (await owner.query(api.members.list, { roomId })).members.find(
-    (m) => m.role === "member"
-  )!;
-  await owner.mutation(api.members.remove, { memberId: member._id });
-  await owner.mutation(api.members.remove, { memberId: member._id });
-  await t.run(async (ctx) => {
-    expect(
-      (await ctx.db.query("ledger").collect()).filter(
-        (e) => e.type === "member.removed"
-      )
-    ).toHaveLength(1);
-  });
-
-  const second = await owner.action(api.invites.create, {
-    email: "dana@example.com",
-    roomId,
-  });
-  await expect(
-    dana.mutation(api.invites.accept, { token: tokenOf(second.url) })
-  ).resolves.toEqual({ ok: true, roomId });
-  await expect(dana.query(api.rooms.access, { roomId })).resolves.toBe(
-    "member"
-  );
-  await t.run(async (ctx) => {
-    const rows = (
-      await ctx.db
-        .query("roomMembers")
-        .withIndex("by_room", (q) => q.eq("roomId", roomId))
-        .collect()
-    ).filter((m) => m.role === "member");
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.removedAt).toBeUndefined();
-    const joined = (await ctx.db.query("ledger").collect()).filter(
-      (e) =>
-        e.type === "member.joined" && e.payload?.inviteId === second.inviteId
-    );
-    expect(joined).toHaveLength(1);
-    expect(joined[0]!.subjectId).toBe(member._id);
-  });
-
-  await expect(
-    dana.mutation(api.invites.accept, { token: tokenOf(second.url) })
-  ).resolves.toEqual({ ok: true, roomId });
-  const otherDana = t.withIdentity({
-    email: "dana@example.com",
-    name: "Other Dana",
-    subject: "dana-2",
-  });
-  await expect(
-    otherDana.mutation(api.invites.accept, { token: tokenOf(second.url) })
-  ).resolves.toEqual({ ok: false, reason: "accepted" });
-  await expect(otherDana.query(api.rooms.access, { roomId })).resolves.toBe(
-    "none"
-  );
-});
-
-test("a revoke whose Clerk call failed can be retried until Clerk revokes the invitation", async () => {
-  const { t, owner, roomId } = await setup();
-  const calls = mockClerk();
-  const clerkFetch = globalThis.fetch;
-  const invite = await owner.action(api.invites.create, {
-    email: "dana@example.com",
-    roomId,
-  });
-  const clerkInvitationId = (await t.run(async (ctx) =>
-    ctx.db.get(invite.inviteId)
-  ))!.clerkInvitationId!;
-  expect(clerkInvitationId).toBeTruthy();
-
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => new Response("down", { status: 503 }))
-  );
-  await expect(
-    owner.action(api.invites.revoke, { inviteId: invite.inviteId })
-  ).rejects.toThrow(/503/);
-  await expect(
-    t.run(async (ctx) => ctx.db.get(invite.inviteId))
-  ).resolves.toMatchObject({
-    clerkInvitationId,
-    status: "revoked",
-  });
-
-  vi.stubGlobal("fetch", clerkFetch);
-  await owner.action(api.invites.revoke, { inviteId: invite.inviteId });
-  expect(
-    calls.filter(
-      (c) =>
-        c.url ===
-        `https://api.clerk.com/v1/invitations/${clerkInvitationId}/revoke`
-    )
-  ).toHaveLength(1);
-  expect(
-    (await t.run(async (ctx) => ctx.db.get(invite.inviteId)))!.clerkInvitationId
-  ).toBeUndefined();
-  await t.run(async (ctx) => {
-    expect(
-      (await ctx.db.query("ledger").collect()).filter(
-        (e) => e.type === "invite.revoked"
-      )
-    ).toHaveLength(1);
-  });
-});
-
-test("the owner backfill links existing rooms once, however often it runs", async () => {
-  const t = convexTest(schema, modules);
-  workflow.register(t);
-  const owner = t.withIdentity({
-    email: "owner@example.com",
-    name: "Robert",
-    subject: "owner",
-  });
-  const roomIds = await t.run(async (ctx) => {
-    const runnerId = await ctx.db.insert("runners", {
-      harnesses: [],
-      lastHeartbeatAt: 0,
-      machine: "test",
-      name: "test",
+  it("a second-room invite for an existing account adds a member row without a Clerk invitation", async () => {
+    const { t, owner, dana, roomId, otherRoomId } = await setup();
+    const calls = mockClerk(["dana@example.com"]);
+    const first = await owner.action(api.invites.create, {
+      email: "dana@example.com",
+      roomId,
     });
-    const ids = [];
-    for (const name of ["Legacy A", "Legacy B"]) {
-      const roomId = await ctx.db.insert("rooms", {
-        cwd: "/tmp",
-        handbook: "",
-        name,
-        runnerId,
-      });
-      await ctx.db.insert("participants", {
-        displayName: "Robert",
-        kind: "human",
-        roomId,
-      });
-      await ctx.db.insert("participants", {
-        displayName: "Claude",
-        harness: "claude",
-        kind: "harness",
-        roomId,
-      });
-      ids.push(roomId);
-    }
-    return ids;
+    const second = await owner.action(api.invites.create, {
+      email: "dana@example.com",
+      roomId: otherRoomId,
+    });
+    expect({
+      first: first.emailed,
+      second: second.emailed,
+    }).toStrictEqual({ first: false, second: false });
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(0);
+    await dana.mutation(api.invites.accept, { token: tokenOf(first.url) });
+    await dana.mutation(api.invites.accept, { token: tokenOf(second.url) });
+    const rooms = await dana.query(api.rooms.list, {});
+    expect(rooms.map((r) => r.role)).toStrictEqual(["member", "member"]);
+    await t.run(async (ctx) => {
+      const users = await ctx.db.query("users").collect();
+      const danaUser = users.find((u) => u.email === "dana@example.com");
+      assert(danaUser, "Dana has a user row");
+      await expect(
+        ctx.db
+          .query("roomMembers")
+          .withIndex("by_user", (q) => q.eq("userId", danaUser._id))
+          .collect()
+      ).resolves.toHaveLength(2);
+    });
   });
-  await expect(owner.query(api.rooms.list, {})).resolves.toEqual([]);
-  const userId = await owner.mutation(api.users.ensure, {});
-  await expect(owner.mutation(api.users.ensure, {})).resolves.toBe(userId);
-  await t.run(async (ctx) => {
-    for (const roomId of roomIds) {
-      const rows = await ctx.db
+
+  it("removing a member ends access at once and keeps their messages", async () => {
+    const { t, owner, dana, roomId } = await setup();
+    mockClerk();
+    const invite = await owner.action(api.invites.create, {
+      email: "dana@example.com",
+      roomId,
+    });
+    await dana.mutation(api.invites.accept, { token: tokenOf(invite.url) });
+    const { members } = await owner.query(api.members.list, { roomId });
+    const member = members.find((m) => m.role === "member");
+    assert(member, "Dana is a member");
+    await t.run(async (ctx) => {
+      await ctx.db.insert("messages", {
+        authorParticipantId: member.participantId,
+        body: "Dana was here",
+        roomId,
+        visibility: "room",
+      });
+    });
+    const memberRemove = await rejectionOf(
+      dana.mutation(api.members.remove, { memberId: member._id })
+    );
+
+    await owner.mutation(api.members.remove, { memberId: member._id });
+    const removedGet = await rejectionOf(dana.query(api.rooms.get, { roomId }));
+    expect({
+      access: await dana.query(api.rooms.access, { roomId }),
+      rooms: await dana.query(api.rooms.list, {}),
+    }).toStrictEqual({ access: "removed", rooms: [] });
+    expect(
+      JSON.stringify(await owner.query(api.messages.timeline, { roomId }))
+    ).toContain("Dana was here");
+    const afterRemoval = await owner.query(api.members.list, { roomId });
+    const removed = await t.run(async (ctx) => {
+      const ledger = await ctx.db.query("ledger").collect();
+      return ledger
+        .filter((e) => e.type === "member.removed")
+        .map((e) => e.subjectId);
+    });
+    expect({
+      removed,
+      roles: afterRemoval.members.map((m) => m.role),
+    }).toStrictEqual({ removed: [member._id], roles: ["owner"] });
+    const [ownerMember] = afterRemoval.members;
+    assert(ownerMember, "the owner is still a member");
+    const ownerRemove = await rejectionOf(
+      owner.mutation(api.members.remove, { memberId: ownerMember._id })
+    );
+    expect({ memberRemove, ownerRemove, removedGet }).toStrictEqual({
+      memberRemove: "Not signed in as the Atelier owner",
+      ownerRemove: "The owner cannot be removed",
+      removedGet: "You are no longer a member of this room",
+    });
+  });
+
+  it("a removed teammate rejoins through a new invite, and a repeat accept only lets her back in", async () => {
+    const { t, owner, dana, roomId } = await setup();
+    mockClerk();
+    const first = await owner.action(api.invites.create, {
+      email: "dana@example.com",
+      roomId,
+    });
+    await dana.mutation(api.invites.accept, { token: tokenOf(first.url) });
+    const { members } = await owner.query(api.members.list, { roomId });
+    const member = members.find((m) => m.role === "member");
+    assert(member, "Dana is a member");
+    await owner.mutation(api.members.remove, { memberId: member._id });
+    await owner.mutation(api.members.remove, { memberId: member._id });
+    await t.run(async (ctx) => {
+      const ledger = await ctx.db.query("ledger").collect();
+      expect(ledger.filter((e) => e.type === "member.removed")).toHaveLength(1);
+    });
+
+    const second = await owner.action(api.invites.create, {
+      email: "dana@example.com",
+      roomId,
+    });
+    expect({
+      accepted: await dana.mutation(api.invites.accept, {
+        token: tokenOf(second.url),
+      }),
+      access: await dana.query(api.rooms.access, { roomId }),
+    }).toStrictEqual({ accepted: { ok: true, roomId }, access: "member" });
+    await t.run(async (ctx) => {
+      const roomMembers = await ctx.db
         .query("roomMembers")
         .withIndex("by_room", (q) => q.eq("roomId", roomId))
         .collect();
-      expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({ role: "owner", userId });
-      expect((await ctx.db.get(rows[0]!.participantId))!.kind).toBe("human");
-      expect((await ctx.db.get(rows[0]!.participantId))!.userId).toBe(userId);
-    }
-    await expect(ctx.db.query("users").collect()).resolves.toHaveLength(1);
-  });
-  await expect(owner.query(api.me.get, {})).resolves.toMatchObject({
-    isOwner: true,
-    userId,
-  });
-});
+      const rows = roomMembers.filter((m) => m.role === "member");
+      const ledger = await ctx.db.query("ledger").collect();
+      const joined = ledger.filter(
+        (e) =>
+          e.type === "member.joined" &&
+          isRecord(e.payload) &&
+          e.payload.inviteId === second.inviteId
+      );
+      expect({
+        joined: joined.map((e) => e.subjectId),
+        removedAt: rows.map((m) => m.removedAt),
+      }).toStrictEqual({ joined: [member._id], removedAt: [undefined] });
+    });
 
-test("rooms.list keeps the fields the phone reads for the owner", async () => {
-  const { owner, roomId, otherRoomId } = await setup();
-  const rooms = await owner.query(api.rooms.list, {});
-  expect(rooms.map((r) => r._id)).toEqual([otherRoomId, roomId]);
-  for (const room of rooms) {
-    expect(Object.keys(room).sort()).toEqual([
-      "_creationTime",
-      "_id",
-      "cwd",
-      "handbook",
-      "name",
-      "readyReviews",
-      "role",
-      "runnerId",
-    ]);
-    expect(room.role).toBe("owner");
-    expect(room.readyReviews).toBe(0);
-  }
+    const repeatAccept = await dana.mutation(api.invites.accept, {
+      token: tokenOf(second.url),
+    });
+    const otherDana = t.withIdentity({
+      email: "dana@example.com",
+      name: "Other Dana",
+      subject: "dana-2",
+    });
+    expect({
+      otherAccept: await otherDana.mutation(api.invites.accept, {
+        token: tokenOf(second.url),
+      }),
+      otherAccess: await otherDana.query(api.rooms.access, { roomId }),
+      repeatAccept,
+    }).toStrictEqual({
+      otherAccept: { ok: false, reason: "accepted" },
+      otherAccess: "none",
+      repeatAccept: { ok: true, roomId },
+    });
+  });
+
+  it("a revoke whose Clerk call failed can be retried until Clerk revokes the invitation", async () => {
+    const { t, owner, roomId } = await setup();
+    const calls = mockClerk();
+    const clerkFetch = globalThis.fetch;
+    const invite = await owner.action(api.invites.create, {
+      email: "dana@example.com",
+      roomId,
+    });
+    const { clerkInvitationId } = await getInvite(t, invite.inviteId);
+    assert(
+      clerkInvitationId !== undefined && clerkInvitationId !== "",
+      "the invite has a Clerk invitation id"
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () => await Promise.resolve(new Response("down", { status: 503 }))
+      )
+    );
+    await expect(
+      owner.action(api.invites.revoke, { inviteId: invite.inviteId })
+    ).rejects.toThrow(/503/u);
+    await expect(getInvite(t, invite.inviteId)).resolves.toMatchObject({
+      clerkInvitationId,
+      status: "revoked",
+    });
+
+    vi.stubGlobal("fetch", clerkFetch);
+    await owner.action(api.invites.revoke, { inviteId: invite.inviteId });
+    const revokedRow = await getInvite(t, invite.inviteId);
+    const revokedEntries = await t.run(async (ctx) => {
+      const ledger = await ctx.db.query("ledger").collect();
+      return ledger.filter((e) => e.type === "invite.revoked").length;
+    });
+    expect({
+      clerkInvitationId: revokedRow.clerkInvitationId,
+      clerkRevokes: calls.filter(
+        (c) =>
+          c.url ===
+          `https://api.clerk.com/v1/invitations/${clerkInvitationId}/revoke`
+      ).length,
+      revokedEntries,
+    }).toStrictEqual({
+      clerkInvitationId: undefined,
+      clerkRevokes: 1,
+      revokedEntries: 1,
+    });
+  });
+
+  it("the owner backfill links existing rooms once, however often it runs", async () => {
+    const t = convexTest(schema, modules);
+    registerWorkflow(t);
+    const owner = t.withIdentity({
+      email: "owner@example.com",
+      name: "Robert",
+      subject: "owner",
+    });
+    const roomIds = await t.run(async (ctx) => {
+      const runnerId = await ctx.db.insert("runners", {
+        harnesses: [],
+        lastHeartbeatAt: 0,
+        machine: "test",
+        name: "test",
+      });
+      const seedRoom = async (name: string) => {
+        const roomId = await ctx.db.insert("rooms", {
+          cwd: "/tmp",
+          handbook: "",
+          name,
+          runnerId,
+        });
+        await ctx.db.insert("participants", {
+          displayName: "Robert",
+          kind: "human",
+          roomId,
+        });
+        await ctx.db.insert("participants", {
+          displayName: "Claude",
+          harness: "claude",
+          kind: "harness",
+          roomId,
+        });
+        return roomId;
+      };
+      const legacyA = await seedRoom("Legacy A");
+      const legacyB = await seedRoom("Legacy B");
+      return [legacyA, legacyB];
+    });
+    await expect(owner.query(api.rooms.list, {})).resolves.toStrictEqual([]);
+    const userId = await owner.mutation(api.users.ensure, {});
+    await expect(owner.mutation(api.users.ensure, {})).resolves.toBe(userId);
+    await t.run(async (ctx) => {
+      const linked = await Promise.all(
+        roomIds.map(async (roomId) => {
+          const rows = await ctx.db
+            .query("roomMembers")
+            .withIndex("by_room", (q) => q.eq("roomId", roomId))
+            .collect();
+          const [row] = rows;
+          assert(row, "the room has a member row");
+          const participant = await ctx.db.get(row.participantId);
+          return { participant, rows };
+        })
+      );
+      expect(linked).toMatchObject(
+        roomIds.map(() => ({
+          participant: { kind: "human", userId },
+          rows: [{ role: "owner", userId }],
+        }))
+      );
+      await expect(ctx.db.query("users").collect()).resolves.toHaveLength(1);
+    });
+    await expect(owner.query(api.me.get, {})).resolves.toMatchObject({
+      isOwner: true,
+      userId,
+    });
+  });
+
+  it("rooms.list keeps the fields the phone reads for the owner", async () => {
+    const { owner, roomId, otherRoomId } = await setup();
+    const rooms = await owner.query(api.rooms.list, {});
+    expect(rooms.map((r) => r._id)).toStrictEqual([otherRoomId, roomId]);
+    for (const room of rooms) {
+      expect(Object.keys(room).toSorted()).toStrictEqual([
+        "_creationTime",
+        "_id",
+        "cwd",
+        "handbook",
+        "name",
+        "readyReviews",
+        "role",
+        "runnerId",
+      ]);
+      expect(room.role).toBe("owner");
+      expect(room.readyReviews).toBe(0);
+    }
+  });
 });

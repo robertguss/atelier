@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "convex dev",
-    "typecheck": "tsc --noEmit -p convex",
+    "typecheck": "tsc --noEmit -p convex && tsc --noEmit -p .",
     "test": "vitest run",
     "coverage": "vitest run --coverage"
   },
