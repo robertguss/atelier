@@ -12,13 +12,14 @@ import { cn } from "~/lib/utils";
 
 const ControlledOpenContext = createContext<boolean | undefined>(undefined);
 
-function RetainedWhileClosed({
+// oxlint-disable-next-line typescript/promise-function-async -- Returns its children, whose ReactNode type includes promises; a component cannot be async.
+const RetainedWhileClosed = ({
   open,
   children,
 }: {
   open: boolean;
   children: ReactNode;
-}) {
+}) => {
   const controlledOpen = use(ControlledOpenContext);
   const isOpen = open && controlledOpen !== false;
   const [retained, setRetained] = useState(children);
@@ -26,45 +27,42 @@ function RetainedWhileClosed({
     setRetained(children);
   }
   return isOpen ? children : retained;
-}
+};
 
-function renderRetainedPopup(
+const renderRetainedPopup = (
   props: ComponentProps<"div">,
   state: { open: boolean }
-) {
-  return (
-    <div {...props}>
-      <RetainedWhileClosed open={state.open}>
-        {props.children}
-      </RetainedWhileClosed>
-    </div>
-  );
-}
+) => (
+  <div {...props}>
+    <RetainedWhileClosed open={state.open}>
+      {props.children}
+    </RetainedWhileClosed>
+  </div>
+);
 
-function Sheet<Payload>(props: SheetPrimitive.Root.Props<Payload>) {
-  return (
-    <ControlledOpenContext value={props.open}>
-      <SheetPrimitive.Root {...props} />
-    </ControlledOpenContext>
-  );
-}
+const Sheet = <Payload,>(props: SheetPrimitive.Root.Props<Payload>) => (
+  <ControlledOpenContext value={props.open}>
+    <SheetPrimitive.Root {...props} />
+  </ControlledOpenContext>
+);
 
 const SheetPortal = SheetPrimitive.Portal;
 
-function SheetBackdrop({ className, ...props }: SheetPrimitive.Backdrop.Props) {
-  return (
-    <SheetPrimitive.Backdrop
-      className={cn(
-        "bg-background/60 fixed inset-0 z-(--z-sheet) backdrop-blur-xs transition-all duration-200 data-ending-style:opacity-0 data-starting-style:opacity-0",
-        className
-      )}
-      data-slot="sheet-backdrop"
-      {...props}
-    />
-  );
-}
+const SheetBackdrop = ({
+  className,
+  ...props
+}: SheetPrimitive.Backdrop.Props) => (
+  <SheetPrimitive.Backdrop
+    className={cn(
+      "bg-background/60 fixed inset-0 z-(--z-sheet) backdrop-blur-xs transition-all duration-200 data-ending-style:opacity-0 data-starting-style:opacity-0",
+      className
+    )}
+    data-slot="sheet-backdrop"
+    {...props}
+  />
+);
 
-function SheetViewport({
+const SheetViewport = ({
   className,
   side,
   variant = "default",
@@ -72,25 +70,23 @@ function SheetViewport({
 }: SheetPrimitive.Viewport.Props & {
   side?: "right" | "left" | "top" | "bottom";
   variant?: "default" | "inset";
-}) {
-  return (
-    <SheetPrimitive.Viewport
-      className={cn(
-        "fixed inset-0 z-(--z-sheet) grid",
-        side === "bottom" && "grid grid-rows-[1fr_auto] pt-12",
-        side === "top" && "grid grid-rows-[auto_1fr] pb-12",
-        side === "left" && "flex justify-start",
-        side === "right" && "flex justify-end",
-        variant === "inset" && "sm:p-4",
-        className
-      )}
-      data-slot="sheet-viewport"
-      {...props}
-    />
-  );
-}
+}) => (
+  <SheetPrimitive.Viewport
+    className={cn(
+      "fixed inset-0 z-(--z-sheet) grid",
+      side === "bottom" && "grid grid-rows-[1fr_auto] pt-12",
+      side === "top" && "grid grid-rows-[auto_1fr] pb-12",
+      side === "left" && "flex justify-start",
+      side === "right" && "flex justify-end",
+      variant === "inset" && "sm:p-4",
+      className
+    )}
+    data-slot="sheet-viewport"
+    {...props}
+  />
+);
 
-function SheetPopup({
+const SheetPopup = ({
   className,
   children,
   showCloseButton = true,
@@ -106,7 +102,7 @@ function SheetPopup({
   transitionDurationMs?: number;
   side?: "right" | "left" | "top" | "bottom";
   variant?: "default" | "inset";
-}) {
+}) => {
   const transitionStyle =
     transitionDurationMs === undefined
       ? undefined
@@ -145,7 +141,11 @@ function SheetPopup({
           )}
           data-slot="sheet-popup"
           render={keepMounted ? undefined : renderRetainedPopup}
-          style={{ ...transitionStyle, ...style }}
+          // A style function has nothing to spread, so only a style object is merged.
+          style={{
+            ...transitionStyle,
+            ...(typeof style === "function" ? {} : style),
+          }}
           {...props}
         >
           {children}
@@ -162,43 +162,37 @@ function SheetPopup({
       </SheetViewport>
     </SheetPortal>
   );
-}
+};
 
-function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      className={cn(
-        "flex flex-col gap-2 p-6 in-[[data-slot=sheet-popup]:has([data-slot=sheet-panel])]:pb-3 max-sm:pb-4",
-        className
-      )}
-      data-slot="sheet-header"
-      {...props}
-    />
-  );
-}
+const SheetHeader = ({ className, ...props }: React.ComponentProps<"div">) => (
+  <div
+    className={cn(
+      "flex flex-col gap-2 p-6 in-[[data-slot=sheet-popup]:has([data-slot=sheet-panel])]:pb-3 max-sm:pb-4",
+      className
+    )}
+    data-slot="sheet-header"
+    {...props}
+  />
+);
 
-function SheetTitle({ className, ...props }: SheetPrimitive.Title.Props) {
-  return (
-    <SheetPrimitive.Title
-      className={cn("text-xl leading-snug font-semibold", className)}
-      data-slot="sheet-title"
-      {...props}
-    />
-  );
-}
+const SheetTitle = ({ className, ...props }: SheetPrimitive.Title.Props) => (
+  <SheetPrimitive.Title
+    className={cn("text-xl leading-snug font-semibold", className)}
+    data-slot="sheet-title"
+    {...props}
+  />
+);
 
-function SheetDescription({
+const SheetDescription = ({
   className,
   ...props
-}: SheetPrimitive.Description.Props) {
-  return (
-    <SheetPrimitive.Description
-      className={cn("text-muted-foreground text-sm", className)}
-      data-slot="sheet-description"
-      {...props}
-    />
-  );
-}
+}: SheetPrimitive.Description.Props) => (
+  <SheetPrimitive.Description
+    className={cn("text-muted-foreground text-sm", className)}
+    data-slot="sheet-description"
+    {...props}
+  />
+);
 
 export {
   Sheet,

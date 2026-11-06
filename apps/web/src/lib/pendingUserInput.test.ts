@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 
 import { buildCardAnswers, describeCardAnswer } from "./cardAnswers";
 import type { CardQuestion } from "./cardAnswers";
@@ -31,7 +31,7 @@ describe(buildCardAnswers, () => {
       undefined,
       "Large"
     );
-    expect(buildCardAnswers([single], { scope: draft })).toEqual([
+    expect(buildCardAnswers([single], { scope: draft })).toStrictEqual([
       { labels: ["Large"], questionId: "scope" },
     ]);
   });
@@ -44,10 +44,12 @@ describe(buildCardAnswers, () => {
     );
     draft = togglePendingUserInputOptionSelection(multi, draft, "Billing");
     const answers = buildCardAnswers([multi], { areas: draft });
-    expect(answers).toEqual([
+    expect(answers).toStrictEqual([
       { labels: ["Search", "Billing"], questionId: "areas" },
     ]);
-    expect(describeCardAnswer(answers![0]!)).toBe("Search, Billing");
+    const [answer] = answers ?? [];
+    assert(answer);
+    expect(describeCardAnswer(answer)).toBe("Search, Billing");
   });
 
   it("answers with free text, which replaces any chosen option", () => {
@@ -61,14 +63,14 @@ describe(buildCardAnswers, () => {
       draft,
       "  Medium, but phased "
     );
-    expect(buildCardAnswers([single], { scope: draft })).toEqual([
+    expect(buildCardAnswers([single], { scope: draft })).toStrictEqual([
       { freeText: "Medium, but phased", labels: [], questionId: "scope" },
     ]);
   });
 
   it("treats free text that matches an option label as free text", () => {
     const draft = setPendingUserInputCustomAnswer(single, undefined, "Small");
-    expect(buildCardAnswers([single], { scope: draft })).toEqual([
+    expect(buildCardAnswers([single], { scope: draft })).toStrictEqual([
       { freeText: "Small", labels: [], questionId: "scope" },
     ]);
   });

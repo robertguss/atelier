@@ -21,10 +21,11 @@ const convex = new ConvexReactClient(convexUrl, {
   unsavedChangesWarning: false,
 });
 
-export default function RootLayout() {
+const RootLayout = () => {
   const colorScheme = useColorScheme();
   return (
     <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}>
+      {/* oxlint-disable-next-line react/hooks -- ConvexProviderWithClerk takes Clerk's useAuth hook as a prop and calls it itself. */}
       <ConvexProviderWithClerk client={convex} useAuth={useAuth}>
         <PushRouting />
         <ThemeProvider
@@ -41,4 +42,5 @@ export default function RootLayout() {
       </ConvexProviderWithClerk>
     </ClerkProvider>
   );
-}
+};
+export default RootLayout;

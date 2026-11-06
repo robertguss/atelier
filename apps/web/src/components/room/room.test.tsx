@@ -5,19 +5,25 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { backend, pushBackend, resetBackend } from "~/test/backend";
+import {
+  action,
+  backend,
+  mutation,
+  pushBackend,
+  resetBackend,
+} from "~/test/backend";
 import { renderAt } from "~/test/render";
 
-vi.mock(
-  "convex/react",
-  async () => (await import("~/test/backend")).convexMock
-);
-vi.mock(
-  "~/auth/ClerkShell",
-  async () => (await import("~/test/backend")).authMock
-);
+vi.mock(import("convex/react"), async () => {
+  const { convexMock } = await import("~/test/backend");
+  return convexMock;
+});
+vi.mock(import("~/auth/ClerkShell"), async () => {
+  const { authMock } = await import("~/test/backend");
+  return authMock;
+});
 
 const ROOM = "room1";
 const ROBERT = "p-robert";
@@ -37,56 +43,50 @@ interface Pane {
 
 let pane: Pane;
 
-function agent(
+const agent = (
   participantId: string,
   harness: string,
   displayName: string,
   overrides: Record<string, unknown> = {}
-) {
-  return {
-    activeTurnId: null,
-    canRaiseCards: true,
-    displayName,
-    harness,
-    participantId,
-    queued: 0,
-    status: "idle",
-    ...overrides,
-  };
-}
+) => ({
+  activeTurnId: null,
+  canRaiseCards: true,
+  displayName,
+  harness,
+  participantId,
+  queued: 0,
+  status: "idle",
+  ...overrides,
+});
 
-function message(overrides: Record<string, unknown>) {
-  return {
-    at: 1_000,
-    authorParticipantId: DANA,
-    body: "Hello",
-    cancelReason: null,
-    deliveredTurnId: null,
-    delivery: "delivered",
-    id: "m1",
-    toParticipantId: CLAUDE,
-    turnId: null,
-    ...overrides,
-  };
-}
+const message = (overrides: Record<string, unknown>) => ({
+  at: 1000,
+  authorParticipantId: DANA,
+  body: "Hello",
+  cancelReason: null,
+  deliveredTurnId: null,
+  delivery: "delivered",
+  id: "m1",
+  toParticipantId: CLAUDE,
+  turnId: null,
+  ...overrides,
+});
 
-function turn(overrides: Record<string, unknown>) {
-  return {
-    at: 2_000,
-    endedAt: null,
-    error: null,
-    id: "t1",
-    items: [],
-    partialText: "",
-    participantId: CLAUDE,
-    requestedByParticipantIds: [ROBERT],
-    startedAt: 2_000,
-    status: "running",
-    stoppedByParticipantId: null,
-    waitingOnHandId: null,
-    ...overrides,
-  };
-}
+const turn = (overrides: Record<string, unknown>) => ({
+  at: 2000,
+  endedAt: null,
+  error: null,
+  id: "t1",
+  items: [],
+  partialText: "",
+  participantId: CLAUDE,
+  requestedByParticipantIds: [ROBERT],
+  startedAt: 2000,
+  status: "running",
+  stoppedByParticipantId: null,
+  waitingOnHandId: null,
+  ...overrides,
+});
 
 const scopeQuestion = {
   allowFreeText: true,
@@ -95,30 +95,28 @@ const scopeQuestion = {
   multiSelect: false,
   options: [
     { label: "Small" },
-    { label: "Large", description: "Everything at once" },
+    { description: "Everything at once", label: "Large" },
   ],
   text: "How big should the plan be?",
 };
 
-function card(overrides: Record<string, unknown>) {
-  return {
-    answeredAt: null,
-    answeredByParticipantId: null,
-    answers: null,
-    closeReason: null,
-    closedAt: null,
-    id: "h1",
-    participantId: CLAUDE,
-    questions: [scopeQuestion],
-    raisedAt: 3_000,
-    status: "raised",
-    turnId: "t1",
-    via: null,
-    ...overrides,
-  };
-}
+const card = (overrides: Record<string, unknown>) => ({
+  answeredAt: null,
+  answeredByParticipantId: null,
+  answers: null,
+  closeReason: null,
+  closedAt: null,
+  id: "h1",
+  participantId: CLAUDE,
+  questions: [scopeQuestion],
+  raisedAt: 3000,
+  status: "raised",
+  turnId: "t1",
+  via: null,
+  ...overrides,
+});
 
-function room(access: "owner" | "member" = "owner") {
+const room = (access: "owner" | "member" = "owner") => {
   backend.queries["rooms:access"] = () => access;
   backend.queries["members:notice"] = () => ({
     acceptedVersion: 1,
@@ -133,597 +131,628 @@ function room(access: "owner" | "member" = "owner") {
   });
   backend.queries["rooms:get"] = () => ({
     participants: [
-      { _id: ROBERT, kind: "human", displayName: "Robert", userId: "u-robert" },
-      { _id: DANA, kind: "human", displayName: "Dana", userId: "u-dana" },
+      { _id: ROBERT, displayName: "Robert", kind: "human", userId: "u-robert" },
+      { _id: DANA, displayName: "Dana", kind: "human", userId: "u-dana" },
       {
         _id: CLAUDE,
-        kind: "harness",
-        harness: "claude",
         displayName: "Claude",
+        harness: "claude",
+        kind: "harness",
       },
-      { _id: CODEX, kind: "harness", harness: "codex", displayName: "Codex" },
+      { _id: CODEX, displayName: "Codex", harness: "codex", kind: "harness" },
     ],
     room: { _id: ROOM, editsEnabled: pane.editsEnabled, name: "Pricing plan" },
   });
   backend.queries["agent:pane"] = () => pane;
   backend.queries["team:list"] = () => [];
   backend.queries["members:list"] = () => ({ invites: [], members: [] });
-}
+};
 
-async function openRoom(access: "owner" | "member" = "owner") {
+// What a room query does once the caller is no longer a member.
+const notAMember = () => {
+  throw new Error("Not a member of this room");
+};
+
+const openRoom = async (access: "owner" | "member" = "owner") => {
   room(access);
   const rendered = renderAt(`/rooms/${ROOM}`);
   await screen.findByRole("heading", { name: "Pricing plan" });
   return rendered;
-}
+};
 
-beforeEach(() => {
-  resetBackend();
-  pane = {
-    agents: [
-      agent(CLAUDE, "claude", "Claude"),
-      agent(CODEX, "codex", "Codex", { canRaiseCards: false }),
-    ],
-    cards: [],
-    editsEnabled: false,
-    hasOlder: false,
-    messages: [],
-    runner: { lastHeartbeatAt: Date.now(), offlineAfterMs: 45_000 },
-    turns: [],
-  };
-});
-
-describe("composers", () => {
-  it("labels each composer by its audience", async () => {
-    await openRoom();
-    expect(
-      screen.getByRole("textbox", { name: "To Claude" })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("textbox", { name: "To team only" })
-    ).toBeInTheDocument();
-  });
-
-  it("sends Enter in the team composer to the team only and keeps focus there", async () => {
-    await openRoom();
-    const team = screen.getByRole("textbox", { name: "To team only" });
-    team.focus();
-    fireEvent.change(team, {
-      target: { value: "between us, this plan is too big" },
-    });
-    fireEvent.keyDown(team, { key: "Enter" });
-
-    await waitFor(() => {
-      expect(backend.mutations["team:post"]).toHaveBeenCalledWith({
-        body: "between us, this plan is too big",
-        roomId: ROOM,
-      });
-    });
-    expect(backend.mutations["messages:send"]).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(team);
-  });
-
-  it("sends Enter in the agent composer to the target agent, and Shift+Enter adds a line", async () => {
-    await openRoom();
-    const toClaude = screen.getByRole("textbox", { name: "To Claude" });
-    toClaude.focus();
-    fireEvent.change(toClaude, { target: { value: "Draft the plan" } });
-    fireEvent.keyDown(toClaude, { key: "Enter", shiftKey: true });
-    expect(backend.mutations["messages:send"]).not.toHaveBeenCalled();
-
-    fireEvent.keyDown(toClaude, { key: "Enter" });
-    await waitFor(() => {
-      expect(backend.mutations["messages:send"]).toHaveBeenCalledWith({
-        body: "Draft the plan",
-        roomId: ROOM,
-        toParticipantId: CLAUDE,
-      });
-    });
-    expect(backend.mutations["team:post"]).not.toHaveBeenCalled();
-  });
-
-  it("defaults the agent composer to the agent waiting on an open card", async () => {
-    pane.turns = [turn({ participantId: CODEX })];
-    pane.cards = [card({ participantId: CODEX })];
-    await openRoom();
-    expect(
-      screen.getByRole("textbox", { name: "To Codex" })
-    ).toBeInTheDocument();
-  });
-
-  it("switches the target when the person picks another agent", async () => {
-    await openRoom();
-    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
-    expect(
-      screen.getByRole("textbox", { name: "To Codex" })
-    ).toBeInTheDocument();
-  });
-
-  it('offers "Send and steer now" while the target agent works, and sends the message as a steer', async () => {
-    pane.agents = [
-      agent(CLAUDE, "claude", "Claude", {
-        activeTurnId: "t1",
-        status: "running",
-      }),
-    ];
-    pane.turns = [turn({})];
-    await openRoom();
-
-    const toClaude = screen.getByRole("textbox", { name: "To Claude" });
-    fireEvent.change(toClaude, { target: { value: "Stop, keep it short" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send and steer now" }));
-
-    await waitFor(() => {
-      expect(backend.mutations["messages:send"]).toHaveBeenCalledWith({
-        body: "Stop, keep it short",
-        roomId: ROOM,
-        steer: true,
-        toParticipantId: CLAUDE,
-      });
-    });
-    expect(backend.mutations["messages:send"]).toHaveBeenCalledOnce();
-    expect(backend.mutations["agent:steer"]).not.toHaveBeenCalled();
-  });
-
-  it("keeps the target while the person is typing, even when another agent raises a card", async () => {
-    await openRoom();
-    const toClaude = screen.getByRole("textbox", { name: "To Claude" });
-    toClaude.focus();
-    fireEvent.change(toClaude, { target: { value: "Keep the plan small" } });
-
-    pane.agents = [
-      agent(CLAUDE, "claude", "Claude"),
-      agent(CODEX, "codex", "Codex", { activeTurnId: "t1", status: "waiting" }),
-    ];
-    pane.turns = [turn({ participantId: CODEX, waitingOnHandId: "h1" })];
-    pane.cards = [card({ participantId: CODEX })];
-    act(() => {
-      pushBackend();
-    });
-    await screen.findByRole("group", { name: /Codex asks/ });
-
-    const composer = screen.getByRole("textbox", { name: "To Claude" });
-    expect(composer).toHaveValue("Keep the plan small");
-    fireEvent.keyDown(composer, { key: "Enter" });
-    await waitFor(() => {
-      expect(backend.mutations["messages:send"]).toHaveBeenCalledWith({
-        body: "Keep the plan small",
-        roomId: ROOM,
-        toParticipantId: CLAUDE,
-      });
-    });
-  });
-
-  it("keeps text typed while a message is still sending", async () => {
-    let finish = () => {};
-    backend.mutations["messages:send"] = vi.fn(
-      async () =>
-        new Promise<null>(
-          (resolve) =>
-            (finish = () => {
-              resolve(null);
-            })
-        )
-    );
-    await openRoom();
-    const toClaude = screen.getByRole("textbox", { name: "To Claude" });
-    fireEvent.change(toClaude, { target: { value: "Draft the plan" } });
-    fireEvent.keyDown(toClaude, { key: "Enter" });
-    await waitFor(() => {
-      expect(backend.mutations["messages:send"]).toHaveBeenCalledOnce();
-    });
-
-    fireEvent.change(toClaude, {
-      target: { value: "Draft the plan. Also list the risks" },
-    });
-    await act(async () => {
-      finish();
-    });
-    expect(screen.getByRole("textbox", { name: "To Claude" })).toHaveValue(
-      "Draft the plan. Also list the risks"
-    );
-  });
-
-  it('offers only "Send" while the target agent is idle', async () => {
-    await openRoom();
-    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Send and steer now" })
-    ).not.toBeInTheDocument();
-  });
-});
-
-describe("question cards", () => {
-  it("answers an open card with the chosen option without moving focus to the agent composer", async () => {
-    pane.agents = [
-      agent(CLAUDE, "claude", "Claude", {
-        activeTurnId: "t1",
-        status: "waiting",
-      }),
-    ];
-    pane.turns = [turn({ waitingOnHandId: "h1" })];
-    pane.cards = [card({})];
-    await openRoom();
-
-    const open = screen.getByRole("group", { name: /Claude asks/ });
-    expect(
-      within(open).getByText("How big should the plan be?")
-    ).toBeInTheDocument();
-    const large = within(open).getByRole("button", { name: /Large/ });
-    large.focus();
-    fireEvent.click(large);
-    fireEvent.click(within(open).getByRole("button", { name: "Answer" }));
-
-    await waitFor(() => {
-      expect(backend.mutations["hands:answer"]).toHaveBeenCalledWith({
-        answers: [{ questionId: "scope", labels: ["Large"] }],
-        handId: "h1",
-      });
-    });
-    expect(document.activeElement).not.toBe(
-      screen.getByRole("textbox", { name: "To Claude" })
-    );
-  });
-
-  it("shows who answered a card and what they chose", async () => {
-    pane.turns = [turn({ status: "done" })];
-    pane.cards = [
-      card({
-        answeredByParticipantId: DANA,
-        answers: [{ questionId: "scope", labels: ["Large"] }],
-        status: "answered",
-        via: "card",
-      }),
-    ];
-    await openRoom();
-    expect(screen.getByText("Answered by Dana")).toBeInTheDocument();
-    expect(screen.getByText("Large")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Answer" })
-    ).not.toBeInTheDocument();
-  });
-
-  it("shows a card answered in chat", async () => {
-    pane.turns = [turn({ status: "done" })];
-    pane.cards = [
-      card({
-        answeredByParticipantId: DANA,
-        answers: [
-          {
-            questionId: "scope",
-            labels: [],
-            freeText: "go with option B but keep it short",
-          },
-        ],
-        status: "answered",
-        via: "chat",
-      }),
-    ];
-    await openRoom();
-    expect(screen.getByText("Answered in chat by Dana")).toBeInTheDocument();
-    expect(
-      screen.getAllByText("go with option B but keep it short").length
-    ).toBeGreaterThan(0);
-  });
-
-  it("shows a card cancelled because the turn was stopped", async () => {
-    pane.turns = [turn({ error: "Cancelled by Dana", status: "interrupted" })];
-    pane.cards = [
-      card({ closeReason: "Cancelled by Dana", status: "cancelled" }),
-    ];
-    await openRoom();
-    expect(
-      screen.getByText(/Cancelled: the turn was stopped/)
-    ).toBeInTheDocument();
-  });
-
-  it("offers to send a late answer to an expired card as a message", async () => {
-    pane.turns = [turn({ status: "done" })];
-    pane.cards = [
-      card({ closeReason: "No answer within 2 hours", status: "expired" }),
-    ];
-    await openRoom();
-    expect(screen.getByText(/Expired with no decision/)).toBeInTheDocument();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Send a late answer as a message" })
-    );
-    const late = screen.getByRole("textbox", { name: "Late answer to Claude" });
-    fireEvent.change(late, { target: { value: "Small, please" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send late answer" }));
-    await waitFor(() => {
-      expect(backend.mutations["messages:send"]).toHaveBeenCalledWith({
-        body: "Small, please",
-        roomId: ROOM,
-        toParticipantId: CLAUDE,
-      });
-    });
-  });
-
-  it("marks an agent that can't raise question cards", async () => {
-    await openRoom();
-    expect(
-      screen.getByText("Codex can't raise question cards")
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText("Claude can't raise question cards")
-    ).not.toBeInTheDocument();
-  });
-});
-
-describe("queue, delivery and stopping", () => {
-  it("steers a queued message on request", async () => {
-    pane.agents = [
-      agent(CLAUDE, "claude", "Claude", {
-        activeTurnId: "t1",
-        queued: 1,
-        status: "running",
-      }),
-    ];
-    pane.turns = [turn({})];
-    pane.messages = [
-      message({
-        at: 3_000,
-        body: "Use the old pricing",
-        delivery: "queued",
-        id: "m-q",
-      }),
-    ];
-    await openRoom();
-
-    const queue = screen.getByRole("list", { name: "Queued messages" });
-    expect(within(queue).getByText("Use the old pricing")).toBeInTheDocument();
-    fireEvent.click(within(queue).getByRole("button", { name: "Steer now" }));
-    expect(backend.mutations["agent:steer"]).toHaveBeenCalledWith({
-      messageId: "m-q",
-    });
-  });
-
-  it("shows a rejected steer back in the queue", async () => {
-    pane.agents = [
-      agent(CLAUDE, "claude", "Claude", {
-        activeTurnId: "t1",
-        queued: 1,
-        status: "running",
-      }),
-    ];
-    pane.turns = [turn({})];
-    pane.messages = [
-      message({
-        at: 3_000,
-        body: "Use the old pricing",
-        delivery: "steering",
-        id: "m-q",
-      }),
-    ];
-    await openRoom();
-    expect(screen.getByText(/Steering…/)).toBeInTheDocument();
-
-    pane.messages = [
-      message({
-        at: 3_000,
-        body: "Use the old pricing",
-        delivery: "queued",
-        id: "m-q",
-      }),
-    ];
-    act(() => {
-      pushBackend();
-    });
-    await expect(
-      screen.findByText(/Couldn't steer into the running turn/)
-    ).resolves.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Steer now" })
-    ).toBeInTheDocument();
-  });
-
-  it("says why a message was never delivered", async () => {
-    pane.messages = [
-      message({
-        body: "From a removed member",
-        cancelReason: "removed",
-        delivery: "cancelled",
-        id: "m-a",
-      }),
-      message({
-        at: 1_500,
-        body: "Sent while offline",
-        cancelReason: "runner offline",
-        delivery: "cancelled",
-        id: "m-b",
-      }),
-    ];
-    await openRoom();
-    expect(
-      screen.getByText(/Not delivered: its author was removed from the room/)
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Not delivered: the agents' machine was offline/)
-    ).toBeInTheDocument();
-  });
-
-  it("shows who wrote each message and to which agent", async () => {
-    pane.messages = [message({ body: "Draft the plan" })];
-    await openRoom();
-    expect(screen.getByText("Dana → Claude")).toBeInTheDocument();
-  });
-
-  it("stops a running turn", async () => {
-    pane.agents = [
-      agent(CLAUDE, "claude", "Claude", {
-        activeTurnId: "t1",
-        status: "running",
-      }),
-    ];
-    pane.turns = [turn({ partialText: "Working on **it**" })];
-    await openRoom();
-    expect(screen.getByText("it")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Stop Claude" }));
-    expect(backend.mutations["messages:cancel"]).toHaveBeenCalledWith({
-      turnId: "t1",
-    });
-  });
-
-  it("streams a running turn's text and tool activity from the live query", async () => {
-    pane.agents = [
-      agent(CLAUDE, "claude", "Claude", {
-        activeTurnId: "t1",
-        status: "running",
-      }),
-    ];
-    pane.turns = [turn({})];
-    backend.queries["agent:live"] = () => [
-      {
-        id: "t1",
-        items: [{ name: "Grep", summary: "price", ok: null }],
-        partialText: "Checking **pricing**",
-      },
-    ];
-    await openRoom();
-    expect(screen.getByText("pricing")).toBeInTheDocument();
-    // A running turn shows its tool activity open.
-    expect(screen.getByText("price")).toBeInTheDocument();
-  });
-
-  it("asks for a longer history from Show earlier", async () => {
-    const limits: unknown[] = [];
-    pane.hasOlder = true;
-    pane.turns = [turn({ partialText: "Recent work.", status: "done" })];
-    await openRoom();
-    const handler = backend.queries["agent:pane"]!;
-    backend.queries["agent:pane"] = (args) => (
-      limits.push(args.limit),
-      handler(args)
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Show earlier" }));
-    await waitFor(() => {
-      expect(limits).toContain(80);
-    });
-    expect(screen.getByText("Recent work.")).toBeInTheDocument();
-  });
-
-  it("keeps a finished turn's streamed text and tool activity next to its answer", async () => {
-    pane.turns = [
-      turn({
-        items: [{ name: "Read", summary: "docs/plan.md", ok: true }],
-        partialText: "Looking at the files first.",
-        status: "done",
-      }),
-    ];
-    pane.messages = [
-      message({
-        at: 9_000,
-        authorParticipantId: CLAUDE,
-        body: "Here is the plan.",
-        delivery: null,
-        id: "m-r",
-        toParticipantId: null,
-        turnId: "t1",
-      }),
-    ];
-    await openRoom();
-    expect(screen.getByText("Looking at the files first.")).toBeInTheDocument();
-    expect(screen.getByText("Here is the plan.")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /1 tool call/ }));
-    expect(screen.getByText("docs/plan.md")).toBeInTheDocument();
-  });
-});
-
-describe("room header and access", () => {
-  it("shows the offline banner and refuses to send to agents when the runner is silent", async () => {
-    pane.runner.lastHeartbeatAt = Date.now() - 60_000;
-    await openRoom();
-    expect(screen.getByRole("alert")).toHaveTextContent(/machine is offline/);
-    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
-  });
-
-  it("lets the owner flip the edit switch", async () => {
-    await openRoom("owner");
-    fireEvent.click(
-      screen.getByRole("switch", { name: /agents may edit files/i })
-    );
-    expect(backend.mutations["rooms:setEditsEnabled"]).toHaveBeenCalledWith({
-      on: true,
-      roomId: ROOM,
-    });
-  });
-
-  it("shows members the edit switch read-only and no members sheet", async () => {
-    pane.editsEnabled = true;
-    await openRoom("member");
-    const editSwitch = screen.getByRole("switch", {
-      name: /agents may edit files/i,
-    });
-    expect(editSwitch).toBeChecked();
-    expect(editSwitch).toHaveAttribute("aria-disabled", "true");
-    expect(
-      screen.queryByRole("button", { name: "Members" })
-    ).not.toBeInTheDocument();
-  });
-
-  it("lets the owner invite by email and shows the link to share", async () => {
-    backend.actions["invites:create"] = vi.fn(async () => ({
-      emailed: true,
-      inviteId: "i1",
-      url: "https://atelier.example/invite/tok",
-    }));
-    await openRoom("owner");
-    fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    const email = await screen.findByRole("textbox", { name: "Email" });
-    fireEvent.change(email, { target: { value: "dana@example.com" } });
-    fireEvent.click(screen.getByRole("button", { name: "Invite" }));
-    await expect(
-      screen.findByText("https://atelier.example/invite/tok")
-    ).resolves.toBeInTheDocument();
-    expect(backend.actions["invites:create"]).toHaveBeenCalledWith({
-      email: "dana@example.com",
-      roomId: ROOM,
-    });
-  });
-
-  it("keeps the one-time invite link after the members sheet is closed and reopened", async () => {
-    backend.actions["invites:create"] = vi.fn(async () => ({
-      emailed: false,
-      inviteId: "i1",
-      url: "https://atelier.example/invite/tok",
-    }));
-    await openRoom("owner");
-    fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    fireEvent.change(await screen.findByRole("textbox", { name: "Email" }), {
-      target: { value: "dana@example.com" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Invite" }));
-    await expect(
-      screen.findByText("https://atelier.example/invite/tok")
-    ).resolves.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("textbox", { name: "Email" })
-      ).not.toBeInTheDocument()
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    await expect(
-      screen.findByText("https://atelier.example/invite/tok")
-    ).resolves.toBeInTheDocument();
-  });
-
-  it("swaps a removed member's open room for the no-access page", async () => {
-    await openRoom("member");
-    backend.queries["rooms:access"] = () => "removed";
-    const gone = () => {
-      throw new Error("Not a member of this room");
+describe("room screen", () => {
+  beforeEach(() => {
+    resetBackend();
+    pane = {
+      agents: [
+        agent(CLAUDE, "claude", "Claude"),
+        agent(CODEX, "codex", "Codex", { canRaiseCards: false }),
+      ],
+      cards: [],
+      editsEnabled: false,
+      hasOlder: false,
+      messages: [],
+      runner: { lastHeartbeatAt: Date.now(), offlineAfterMs: 45_000 },
+      turns: [],
     };
-    backend.queries["agent:pane"] = gone;
-    backend.queries["team:list"] = gone;
-    backend.queries["rooms:get"] = gone;
-    act(() => {
-      pushBackend();
+  });
+
+  describe("composers", () => {
+    it("labels each composer by its audience", async () => {
+      await openRoom();
+      expect(
+        screen.getByRole("textbox", { name: "To Claude" })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("textbox", { name: "To team only" })
+      ).toBeInTheDocument();
     });
-    await expect(
-      screen.findByRole("heading", { name: "You no longer have access" })
-    ).resolves.toBeInTheDocument();
+
+    it("sends Enter in the team composer to the team only and keeps focus there", async () => {
+      await openRoom();
+      const team = screen.getByRole("textbox", { name: "To team only" });
+      team.focus();
+      fireEvent.change(team, {
+        target: { value: "between us, this plan is too big" },
+      });
+      fireEvent.keyDown(team, { key: "Enter" });
+
+      await waitFor(() => {
+        expect(backend.mutations["team:post"]).toHaveBeenCalledWith({
+          body: "between us, this plan is too big",
+          roomId: ROOM,
+        });
+      });
+      expect(backend.mutations["messages:send"]).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(team);
+    });
+
+    it("sends Enter in the agent composer to the target agent, and Shift+Enter adds a line", async () => {
+      await openRoom();
+      const toClaude = screen.getByRole("textbox", { name: "To Claude" });
+      toClaude.focus();
+      fireEvent.change(toClaude, { target: { value: "Draft the plan" } });
+      fireEvent.keyDown(toClaude, { key: "Enter", shiftKey: true });
+      expect(backend.mutations["messages:send"]).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(toClaude, { key: "Enter" });
+      await waitFor(() => {
+        expect(backend.mutations["messages:send"]).toHaveBeenCalledWith({
+          body: "Draft the plan",
+          roomId: ROOM,
+          toParticipantId: CLAUDE,
+        });
+      });
+      expect(backend.mutations["team:post"]).not.toHaveBeenCalled();
+    });
+
+    it("defaults the agent composer to the agent waiting on an open card", async () => {
+      pane.turns = [turn({ participantId: CODEX })];
+      pane.cards = [card({ participantId: CODEX })];
+      await openRoom();
+      expect(
+        screen.getByRole("textbox", { name: "To Codex" })
+      ).toBeInTheDocument();
+    });
+
+    it("switches the target when the person picks another agent", async () => {
+      await openRoom();
+      fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+      expect(
+        screen.getByRole("textbox", { name: "To Codex" })
+      ).toBeInTheDocument();
+    });
+
+    it('offers "Send and steer now" while the target agent works, and sends the message as a steer', async () => {
+      pane.agents = [
+        agent(CLAUDE, "claude", "Claude", {
+          activeTurnId: "t1",
+          status: "running",
+        }),
+      ];
+      pane.turns = [turn({})];
+      await openRoom();
+
+      const toClaude = screen.getByRole("textbox", { name: "To Claude" });
+      fireEvent.change(toClaude, { target: { value: "Stop, keep it short" } });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Send and steer now" })
+      );
+
+      await waitFor(() => {
+        expect(backend.mutations["messages:send"]).toHaveBeenCalledWith({
+          body: "Stop, keep it short",
+          roomId: ROOM,
+          steer: true,
+          toParticipantId: CLAUDE,
+        });
+      });
+      expect(backend.mutations["messages:send"]).toHaveBeenCalledOnce();
+      expect(backend.mutations["agent:steer"]).not.toHaveBeenCalled();
+    });
+
+    it("keeps the target while the person is typing, even when another agent raises a card", async () => {
+      await openRoom();
+      const toClaude = screen.getByRole("textbox", { name: "To Claude" });
+      toClaude.focus();
+      fireEvent.change(toClaude, { target: { value: "Keep the plan small" } });
+
+      pane.agents = [
+        agent(CLAUDE, "claude", "Claude"),
+        agent(CODEX, "codex", "Codex", {
+          activeTurnId: "t1",
+          status: "waiting",
+        }),
+      ];
+      pane.turns = [turn({ participantId: CODEX, waitingOnHandId: "h1" })];
+      pane.cards = [card({ participantId: CODEX })];
+      act(() => {
+        pushBackend();
+      });
+      await screen.findByRole("group", { name: /Codex asks/u });
+
+      const composer = screen.getByRole("textbox", { name: "To Claude" });
+      expect(composer).toHaveValue("Keep the plan small");
+      fireEvent.keyDown(composer, { key: "Enter" });
+      await waitFor(() => {
+        expect(backend.mutations["messages:send"]).toHaveBeenCalledWith({
+          body: "Keep the plan small",
+          roomId: ROOM,
+          toParticipantId: CLAUDE,
+        });
+      });
+    });
+
+    it("keeps text typed while a message is still sending", async () => {
+      const sending: { finish?: () => void } = {};
+      // oxlint-disable-next-line promise/avoid-new -- The test holds the send open and settles it by hand.
+      const sent = new Promise<null>((resolve) => {
+        sending.finish = () => {
+          resolve(null);
+        };
+      });
+      mutation("messages:send").mockReturnValue(sent);
+      await openRoom();
+      const toClaude = screen.getByRole("textbox", { name: "To Claude" });
+      fireEvent.change(toClaude, { target: { value: "Draft the plan" } });
+      fireEvent.keyDown(toClaude, { key: "Enter" });
+      await waitFor(() => {
+        expect(backend.mutations["messages:send"]).toHaveBeenCalledOnce();
+      });
+
+      fireEvent.change(toClaude, {
+        target: { value: "Draft the plan. Also list the risks" },
+      });
+      await act(async () => {
+        sending.finish?.();
+        await sent;
+      });
+      expect(screen.getByRole("textbox", { name: "To Claude" })).toHaveValue(
+        "Draft the plan. Also list the risks"
+      );
+    });
+
+    it('offers only "Send" while the target agent is idle', async () => {
+      await openRoom();
+      expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Send and steer now" })
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  describe("question cards", () => {
+    it("answers an open card with the chosen option without moving focus to the agent composer", async () => {
+      pane.agents = [
+        agent(CLAUDE, "claude", "Claude", {
+          activeTurnId: "t1",
+          status: "waiting",
+        }),
+      ];
+      pane.turns = [turn({ waitingOnHandId: "h1" })];
+      pane.cards = [card({})];
+      await openRoom();
+
+      const open = screen.getByRole("group", { name: /Claude asks/u });
+      expect(
+        within(open).getByText("How big should the plan be?")
+      ).toBeInTheDocument();
+      const large = within(open).getByRole("button", { name: /Large/u });
+      large.focus();
+      fireEvent.click(large);
+      fireEvent.click(within(open).getByRole("button", { name: "Answer" }));
+
+      await waitFor(() => {
+        expect(backend.mutations["hands:answer"]).toHaveBeenCalledWith({
+          answers: [{ labels: ["Large"], questionId: "scope" }],
+          handId: "h1",
+        });
+      });
+      expect(document.activeElement).not.toBe(
+        screen.getByRole("textbox", { name: "To Claude" })
+      );
+    });
+
+    it("shows who answered a card and what they chose", async () => {
+      pane.turns = [turn({ status: "done" })];
+      pane.cards = [
+        card({
+          answeredByParticipantId: DANA,
+          answers: [{ labels: ["Large"], questionId: "scope" }],
+          status: "answered",
+          via: "card",
+        }),
+      ];
+      await openRoom();
+      expect(screen.getByText("Answered by Dana")).toBeInTheDocument();
+      expect(screen.getByText("Large")).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Answer" })
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows a card answered in chat", async () => {
+      pane.turns = [turn({ status: "done" })];
+      pane.cards = [
+        card({
+          answeredByParticipantId: DANA,
+          answers: [
+            {
+              freeText: "go with option B but keep it short",
+              labels: [],
+              questionId: "scope",
+            },
+          ],
+          status: "answered",
+          via: "chat",
+        }),
+      ];
+      await openRoom();
+      expect(screen.getByText("Answered in chat by Dana")).toBeInTheDocument();
+      expect(
+        screen.getAllByText("go with option B but keep it short").length
+      ).toBeGreaterThan(0);
+    });
+
+    it("shows a card cancelled because the turn was stopped", async () => {
+      pane.turns = [
+        turn({ error: "Cancelled by Dana", status: "interrupted" }),
+      ];
+      pane.cards = [
+        card({ closeReason: "Cancelled by Dana", status: "cancelled" }),
+      ];
+      await openRoom();
+      expect(
+        screen.getByText(/Cancelled: the turn was stopped/u)
+      ).toBeInTheDocument();
+    });
+
+    it("offers to send a late answer to an expired card as a message", async () => {
+      pane.turns = [turn({ status: "done" })];
+      pane.cards = [
+        card({ closeReason: "No answer within 2 hours", status: "expired" }),
+      ];
+      await openRoom();
+      expect(screen.getByText(/Expired with no decision/u)).toBeInTheDocument();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Send a late answer as a message" })
+      );
+      const late = screen.getByRole("textbox", {
+        name: "Late answer to Claude",
+      });
+      fireEvent.change(late, { target: { value: "Small, please" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send late answer" }));
+      await waitFor(() => {
+        expect(backend.mutations["messages:send"]).toHaveBeenCalledWith({
+          body: "Small, please",
+          roomId: ROOM,
+          toParticipantId: CLAUDE,
+        });
+      });
+    });
+
+    it("marks an agent that can't raise question cards", async () => {
+      await openRoom();
+      expect(
+        screen.getByText("Codex can't raise question cards")
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText("Claude can't raise question cards")
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  describe("queue, delivery and stopping", () => {
+    it("steers a queued message on request", async () => {
+      pane.agents = [
+        agent(CLAUDE, "claude", "Claude", {
+          activeTurnId: "t1",
+          queued: 1,
+          status: "running",
+        }),
+      ];
+      pane.turns = [turn({})];
+      pane.messages = [
+        message({
+          at: 3000,
+          body: "Use the old pricing",
+          delivery: "queued",
+          id: "m-q",
+        }),
+      ];
+      await openRoom();
+
+      const queue = screen.getByRole("list", { name: "Queued messages" });
+      expect(
+        within(queue).getByText("Use the old pricing")
+      ).toBeInTheDocument();
+      fireEvent.click(within(queue).getByRole("button", { name: "Steer now" }));
+      expect(backend.mutations["agent:steer"]).toHaveBeenCalledWith({
+        messageId: "m-q",
+      });
+    });
+
+    it("shows a rejected steer back in the queue", async () => {
+      pane.agents = [
+        agent(CLAUDE, "claude", "Claude", {
+          activeTurnId: "t1",
+          queued: 1,
+          status: "running",
+        }),
+      ];
+      pane.turns = [turn({})];
+      pane.messages = [
+        message({
+          at: 3000,
+          body: "Use the old pricing",
+          delivery: "steering",
+          id: "m-q",
+        }),
+      ];
+      await openRoom();
+      expect(screen.getByText(/Steering…/u)).toBeInTheDocument();
+
+      pane.messages = [
+        message({
+          at: 3000,
+          body: "Use the old pricing",
+          delivery: "queued",
+          id: "m-q",
+        }),
+      ];
+      act(() => {
+        pushBackend();
+      });
+      await waitFor(() => {
+        expect(
+          screen.getByText(/Couldn't steer into the running turn/u)
+        ).toBeInTheDocument();
+      });
+      expect(
+        screen.getByRole("button", { name: "Steer now" })
+      ).toBeInTheDocument();
+    });
+
+    it("says why a message was never delivered", async () => {
+      pane.messages = [
+        message({
+          body: "From a removed member",
+          cancelReason: "removed",
+          delivery: "cancelled",
+          id: "m-a",
+        }),
+        message({
+          at: 1500,
+          body: "Sent while offline",
+          cancelReason: "runner offline",
+          delivery: "cancelled",
+          id: "m-b",
+        }),
+      ];
+      await openRoom();
+      expect(
+        screen.getByText(/Not delivered: its author was removed from the room/u)
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/Not delivered: the agents' machine was offline/u)
+      ).toBeInTheDocument();
+    });
+
+    it("shows who wrote each message and to which agent", async () => {
+      pane.messages = [message({ body: "Draft the plan" })];
+      await openRoom();
+      expect(screen.getByText("Dana → Claude")).toBeInTheDocument();
+    });
+
+    it("stops a running turn", async () => {
+      pane.agents = [
+        agent(CLAUDE, "claude", "Claude", {
+          activeTurnId: "t1",
+          status: "running",
+        }),
+      ];
+      pane.turns = [turn({ partialText: "Working on **it**" })];
+      await openRoom();
+      expect(screen.getByText("it")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Stop Claude" }));
+      expect(backend.mutations["messages:cancel"]).toHaveBeenCalledWith({
+        turnId: "t1",
+      });
+    });
+
+    it("streams a running turn's text and tool activity from the live query", async () => {
+      pane.agents = [
+        agent(CLAUDE, "claude", "Claude", {
+          activeTurnId: "t1",
+          status: "running",
+        }),
+      ];
+      pane.turns = [turn({})];
+      backend.queries["agent:live"] = () => [
+        {
+          id: "t1",
+          items: [{ name: "Grep", ok: null, summary: "price" }],
+          partialText: "Checking **pricing**",
+        },
+      ];
+      await openRoom();
+      expect(screen.getByText("pricing")).toBeInTheDocument();
+      // A running turn shows its tool activity open.
+      expect(screen.getByText("price")).toBeInTheDocument();
+    });
+
+    it("asks for a longer history from Show earlier", async () => {
+      const limits: unknown[] = [];
+      pane.hasOlder = true;
+      pane.turns = [turn({ partialText: "Recent work.", status: "done" })];
+      await openRoom();
+      const handler = backend.queries["agent:pane"];
+      assert(handler);
+      backend.queries["agent:pane"] = (args) => {
+        limits.push(args.limit);
+        return handler(args);
+      };
+      fireEvent.click(screen.getByRole("button", { name: "Show earlier" }));
+      await waitFor(() => {
+        expect(limits).toContain(80);
+      });
+      expect(screen.getByText("Recent work.")).toBeInTheDocument();
+    });
+
+    it("keeps a finished turn's streamed text and tool activity next to its answer", async () => {
+      pane.turns = [
+        turn({
+          items: [{ name: "Read", ok: true, summary: "docs/plan.md" }],
+          partialText: "Looking at the files first.",
+          status: "done",
+        }),
+      ];
+      pane.messages = [
+        message({
+          at: 9000,
+          authorParticipantId: CLAUDE,
+          body: "Here is the plan.",
+          delivery: null,
+          id: "m-r",
+          toParticipantId: null,
+          turnId: "t1",
+        }),
+      ];
+      await openRoom();
+      expect(
+        screen.getByText("Looking at the files first.")
+      ).toBeInTheDocument();
+      expect(screen.getByText("Here is the plan.")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: /1 tool call/u }));
+      expect(screen.getByText("docs/plan.md")).toBeInTheDocument();
+    });
+  });
+
+  describe("room header and access", () => {
+    it("shows the offline banner and refuses to send to agents when the runner is silent", async () => {
+      pane.runner.lastHeartbeatAt = Date.now() - 60_000;
+      await openRoom();
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        /machine is offline/u
+      );
+      expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    });
+
+    it("lets the owner flip the edit switch", async () => {
+      await openRoom("owner");
+      fireEvent.click(
+        screen.getByRole("switch", { name: /agents may edit files/iu })
+      );
+      expect(backend.mutations["rooms:setEditsEnabled"]).toHaveBeenCalledWith({
+        on: true,
+        roomId: ROOM,
+      });
+    });
+
+    it("shows members the edit switch read-only and no members sheet", async () => {
+      pane.editsEnabled = true;
+      await openRoom("member");
+      const editSwitch = screen.getByRole("switch", {
+        name: /agents may edit files/iu,
+      });
+      expect(editSwitch).toBeChecked();
+      expect(editSwitch).toHaveAttribute("aria-disabled", "true");
+      expect(
+        screen.queryByRole("button", { name: "Members" })
+      ).not.toBeInTheDocument();
+    });
+
+    it("lets the owner invite by email and shows the link to share", async () => {
+      action("invites:create").mockResolvedValue({
+        emailed: true,
+        inviteId: "i1",
+        url: "https://atelier.example/invite/tok",
+      });
+      await openRoom("owner");
+      fireEvent.click(screen.getByRole("button", { name: "Members" }));
+      const email = await screen.findByRole("textbox", { name: "Email" });
+      fireEvent.change(email, { target: { value: "dana@example.com" } });
+      fireEvent.click(screen.getByRole("button", { name: "Invite" }));
+      await waitFor(() => {
+        expect(
+          screen.getByText("https://atelier.example/invite/tok")
+        ).toBeInTheDocument();
+      });
+      expect(backend.actions["invites:create"]).toHaveBeenCalledWith({
+        email: "dana@example.com",
+        roomId: ROOM,
+      });
+    });
+
+    it("keeps the one-time invite link after the members sheet is closed and reopened", async () => {
+      action("invites:create").mockResolvedValue({
+        emailed: false,
+        inviteId: "i1",
+        url: "https://atelier.example/invite/tok",
+      });
+      await openRoom("owner");
+      fireEvent.click(screen.getByRole("button", { name: "Members" }));
+      fireEvent.change(await screen.findByRole("textbox", { name: "Email" }), {
+        target: { value: "dana@example.com" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Invite" }));
+      await waitFor(() => {
+        expect(
+          screen.getByText("https://atelier.example/invite/tok")
+        ).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("textbox", { name: "Email" })
+        ).not.toBeInTheDocument()
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Members" }));
+      await waitFor(() => {
+        expect(
+          screen.getByText("https://atelier.example/invite/tok")
+        ).toBeInTheDocument();
+      });
+    });
+
+    it("swaps a removed member's open room for the no-access page", async () => {
+      await openRoom("member");
+      backend.queries["rooms:access"] = () => "removed";
+      backend.queries["agent:pane"] = notAMember;
+      backend.queries["team:list"] = notAMember;
+      backend.queries["rooms:get"] = notAMember;
+      act(() => {
+        pushBackend();
+      });
+      await waitFor(() => {
+        expect(
+          screen.getByRole("heading", {
+            name: "You no longer have access",
+          })
+        ).toBeInTheDocument();
+      });
+    });
   });
 });

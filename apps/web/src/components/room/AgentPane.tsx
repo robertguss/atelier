@@ -30,13 +30,91 @@ interface AgentPaneProps {
   onShowEarlier: () => void;
 }
 
-export function AgentPane({
+const STATUS_TEXT: Record<PaneAgent["status"], string> = {
+  idle: "Idle",
+  running: "Working",
+  starting: "Starting",
+  waiting: "Waiting on you",
+};
+
+const AgentStatus = ({ agent }: { agent: PaneAgent }) => (
+  <span className="flex items-center gap-1">
+    <Badge variant={agent.status === "idle" ? "outline" : "info"}>
+      {agent.displayName}: {STATUS_TEXT[agent.status]}
+    </Badge>
+    {agent.queued > 0 ? (
+      <Badge variant="secondary">{agent.queued} queued</Badge>
+    ) : null}
+    {agent.canRaiseCards === false ? (
+      <Badge
+        variant="outline"
+        title="It asks its questions in plain text instead"
+      >
+        {agent.displayName} can&apos;t raise question cards
+      </Badge>
+    ) : null}
+  </span>
+);
+
+const DeliveryNote = ({ message }: { message: PaneMessage }) => {
+  if (message.delivery === "steered") {
+    return <span>Steered into the running turn</span>;
+  }
+  if (message.delivery === "answeredCard") {
+    return <span>Answered the question card</span>;
+  }
+  if (message.delivery === "cancelled") {
+    return (
+      <span className="text-warning-foreground">
+        Not delivered: {cancelReasonText(message.cancelReason)}
+      </span>
+    );
+  }
+  return null;
+};
+
+/** A person's message to an agent, or an agent reply whose turn isn't shown. */
+const MessageRow = ({
+  message,
+  names,
+}: {
+  message: PaneMessage;
+  names: Names;
+}) => {
+  const author = names(message.authorParticipantId);
+  if (message.turnId) {
+    return (
+      <div className="space-y-1">
+        <div className="text-xs font-medium">{author}</div>
+        <StreamingMarkdown text={message.body} />
+      </div>
+    );
+  }
+  return (
+    <div className="bg-secondary rounded-xl px-3 py-2 text-sm">
+      <div className="text-muted-foreground mb-0.5 flex flex-wrap gap-x-2 text-xs">
+        <span className="text-foreground font-medium">
+          {message.toParticipantId
+            ? `${author} → ${names(message.toParticipantId)}`
+            : author}
+        </span>
+        <span>{formatTime(message.at)}</span>
+        <DeliveryNote message={message} />
+      </div>
+      <p className="[overflow-wrap:anywhere] whitespace-pre-wrap">
+        {message.body}
+      </p>
+    </div>
+  );
+};
+
+export const AgentPane = ({
   roomId,
   pane,
   names,
   offline,
   onShowEarlier,
-}: AgentPaneProps) {
+}: AgentPaneProps) => {
   const { scrollRef, contentRef } = useStickToBottom<
     HTMLDivElement,
     HTMLOListElement
@@ -68,6 +146,7 @@ export function AgentPane({
     }
     scroller.scrollTop = scroller.scrollHeight - fromBottom.current;
     fromBottom.current = null;
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- firstKey is the trigger: the effect restores the reader's place once earlier history renders above.
   }, [firstKey, scrollRef]);
   const showEarlier = () => {
     const scroller = scrollRef.current;
@@ -154,88 +233,4 @@ export function AgentPane({
       </div>
     </section>
   );
-}
-
-const STATUS_TEXT: Record<PaneAgent["status"], string> = {
-  idle: "Idle",
-  running: "Working",
-  starting: "Starting",
-  waiting: "Waiting on you",
 };
-
-function AgentStatus({ agent }: { agent: PaneAgent }) {
-  return (
-    <span className="flex items-center gap-1">
-      <Badge variant={agent.status === "idle" ? "outline" : "info"}>
-        {agent.displayName}: {STATUS_TEXT[agent.status]}
-      </Badge>
-      {agent.queued > 0 ? (
-        <Badge variant="secondary">{agent.queued} queued</Badge>
-      ) : null}
-      {agent.canRaiseCards === false ? (
-        <Badge
-          variant="outline"
-          title="It asks its questions in plain text instead"
-        >
-          {agent.displayName} can't raise question cards
-        </Badge>
-      ) : null}
-    </span>
-  );
-}
-
-/** A person's message to an agent, or an agent reply whose turn isn't shown. */
-function MessageRow({
-  message,
-  names,
-}: {
-  message: PaneMessage;
-  names: Names;
-}) {
-  const author = names(message.authorParticipantId);
-  if (message.turnId) {
-    return (
-      <div className="space-y-1">
-        <div className="text-xs font-medium">{author}</div>
-        <StreamingMarkdown text={message.body} />
-      </div>
-    );
-  }
-  return (
-    <div className="bg-secondary rounded-xl px-3 py-2 text-sm">
-      <div className="text-muted-foreground mb-0.5 flex flex-wrap gap-x-2 text-xs">
-        <span className="text-foreground font-medium">
-          {message.toParticipantId
-            ? `${author} → ${names(message.toParticipantId)}`
-            : author}
-        </span>
-        <span>{formatTime(message.at)}</span>
-        <DeliveryNote message={message} />
-      </div>
-      <p className="[overflow-wrap:anywhere] whitespace-pre-wrap">
-        {message.body}
-      </p>
-    </div>
-  );
-}
-
-function DeliveryNote({ message }: { message: PaneMessage }) {
-  switch (message.delivery) {
-    case "steered": {
-      return <span>Steered into the running turn</span>;
-    }
-    case "answeredCard": {
-      return <span>Answered the question card</span>;
-    }
-    case "cancelled": {
-      return (
-        <span className="text-warning-foreground">
-          Not delivered: {cancelReasonText(message.cancelReason)}
-        </span>
-      );
-    }
-    default: {
-      return null;
-    }
-  }
-}

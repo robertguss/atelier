@@ -9,23 +9,29 @@ import { splitMarkdownBlocks } from "~/lib/markdownStreamBlocks";
 import { cn } from "~/lib/utils";
 
 const PLUGINS: PluggableList = [remarkGfm];
-const OPENS_FENCE = /(?:^|\n) {0,3}(?:`{3}|~{3})/;
+const OPENS_FENCE = /(?:^|\n) {0,3}(?:`{3}|~{3})/u;
 
 const components: Components = {
-  a: ({ node: _node, ...props }) => (
-    <a {...props} target="_blank" rel="noreferrer noopener" />
+  a: ({ node: _node, children, ...props }) => (
+    <a {...props} target="_blank" rel="noreferrer noopener">
+      {children}
+    </a>
   ),
 };
 
-const MarkdownBlock = memo(
-  ({ text, plugins }: { text: string; plugins: PluggableList }) => {
-    return (
-      <ReactMarkdown remarkPlugins={plugins} components={components}>
-        {text}
-      </ReactMarkdown>
-    );
-  }
+const MarkdownBlockContent = ({
+  text,
+  plugins,
+}: {
+  text: string;
+  plugins: PluggableList;
+}) => (
+  <ReactMarkdown remarkPlugins={plugins} components={components}>
+    {text}
+  </ReactMarkdown>
 );
+
+const MarkdownBlock = memo(MarkdownBlockContent);
 
 /**
  * Markdown that may still be streaming. While it streams, finished blocks
@@ -33,7 +39,7 @@ const MarkdownBlock = memo(
  * Text whose syntax ties blocks together is parsed whole, reusing the parse
  * of any closed code fences.
  */
-export function StreamingMarkdown({
+export const StreamingMarkdown = ({
   text,
   streaming = false,
   className,
@@ -41,8 +47,9 @@ export function StreamingMarkdown({
   text: string;
   streaming?: boolean;
   className?: string;
-}) {
+}) => {
   // One incremental parser per streaming renderer; it caches this text's prefix.
+  // oxlint-disable-next-line react/hook-use-state -- The plugin list is created once and never replaced, so there is no setter to keep.
   const [incremental] = useState<PluggableList>(() => [
     remarkGfm,
     createIncrementalMarkdownPlugin(),
@@ -67,4 +74,4 @@ export function StreamingMarkdown({
       ))}
     </div>
   );
-}
+};

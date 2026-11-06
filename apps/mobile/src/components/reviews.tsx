@@ -11,13 +11,13 @@ import {
 } from "../lib/review-participants";
 import { Body, Button, Field, Muted } from "./ui";
 
-export function Reviews({
+export const Reviews = ({
   roomId,
   participants,
 }: {
   roomId: Id<"rooms">;
   participants: { _id: Id<"participants">; displayName: string }[];
-}) {
+}) => {
   const reviews = useQuery(api.rituals.list, { roomId });
   const begin = useMutation(api.rituals.begin);
   const [open, setOpen] = useState(false);
@@ -25,6 +25,29 @@ export function Reviews({
   const [excluded, setExcluded] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const startReview = async () => {
+    setBusy(true);
+    try {
+      const id = await begin({
+        participantIds: includedParticipantIds(participants, excluded),
+        request,
+        roomId,
+      });
+      setRequest("");
+      setError("");
+      setOpen(false);
+      router.push({ params: { id }, pathname: "/ritual/[id]" });
+    } catch (error_) {
+      setError(String(error_));
+    }
+    setBusy(false);
+  };
+
+  const showError = (error_: unknown) => {
+    setError(String(error_));
+  };
+
   return (
     <View style={{ gap: 8, paddingBottom: 12 }}>
       <Button
@@ -64,26 +87,8 @@ export function Reviews({
               !request.trim() ||
               includedParticipantIds(participants, excluded).length === 0
             }
-            onPress={async () => {
-              setBusy(true);
-              try {
-                const id = await begin({
-                  participantIds: includedParticipantIds(
-                    participants,
-                    excluded
-                  ),
-                  request,
-                  roomId,
-                });
-                setRequest("");
-                setError("");
-                setOpen(false);
-                router.push({ params: { id }, pathname: "/ritual/[id]" });
-              } catch (error_) {
-                setError(String(error_));
-              } finally {
-                setBusy(false);
-              }
+            onPress={() => {
+              startReview().catch(showError);
             }}
           />
         </>
@@ -101,4 +106,4 @@ export function Reviews({
       ))}
     </View>
   );
-}
+};

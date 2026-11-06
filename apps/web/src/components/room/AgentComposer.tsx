@@ -22,14 +22,14 @@ interface AgentComposerProps {
  * Writes to one agent. A busy agent queues the message; "Send and steer now"
  * puts it into the running turn instead. Enter sends only from this box.
  */
-export function AgentComposer({
+export const AgentComposer = ({
   roomId,
   agents,
   target,
   onPickTarget,
   onSent,
   offline,
-}: AgentComposerProps) {
+}: AgentComposerProps) => {
   const send = useMutation(api.messages.send);
   const { draft, setDraft, busy, error, submit, onKeyDown } = useComposer(
     async (body, steerNow) => {
@@ -61,6 +61,7 @@ export function AgentComposer({
       {agents.length > 1 ? (
         <div
           className="text-muted-foreground flex flex-wrap items-center gap-1 text-xs"
+          // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- A flex row of target buttons, not a form section; fieldset would bring form semantics and its own sizing.
           role="group"
           aria-label="Send to"
         >
@@ -105,7 +106,7 @@ export function AgentComposer({
         onKeyDown={onKeyDown}
       />
       <div className="flex flex-wrap items-center justify-end gap-2">
-        {error ? (
+        {error !== null && error !== "" ? (
           <p className={cn("text-destructive-foreground mr-auto text-xs")}>
             {error}
           </p>
@@ -115,7 +116,9 @@ export function AgentComposer({
             size="sm"
             variant="outline"
             disabled={!canSend}
-            onClick={() => void submit(true)}
+            onClick={() => {
+              submit(true);
+            }}
           >
             Send and steer now
           </Button>
@@ -123,11 +126,13 @@ export function AgentComposer({
         <Button
           size="sm"
           disabled={!canSend}
-          onClick={() => void submit(false)}
+          onClick={() => {
+            submit(false);
+          }}
         >
           Send
         </Button>
       </div>
     </div>
   );
-}
+};

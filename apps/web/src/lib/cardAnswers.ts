@@ -15,26 +15,24 @@ export type CardAnswer = FunctionArgs<
 
 export type CardDrafts = Record<string, PendingUserInputDraftAnswer>;
 
-export function toPendingQuestion(
+export const toPendingQuestion = (
   question: CardQuestion
-): PendingUserInputQuestion {
-  return {
-    allowCustomAnswer: question.allowFreeText,
-    id: question.id,
-    multiSelect: question.multiSelect,
-    options: question.options.map((o) => ({ label: o.label })),
-  };
-}
+): PendingUserInputQuestion => ({
+  allowCustomAnswer: question.allowFreeText,
+  id: question.id,
+  multiSelect: question.multiSelect,
+  options: question.options.map((o) => ({ label: o.label })),
+});
 
 /**
  * The whole card's answers, or null while any question is unanswered. Free
  * text wins over chosen options, as in the draft helpers, and is sent as
  * free text even when it happens to match an option's label.
  */
-export function buildCardAnswers(
+export const buildCardAnswers = (
   questions: readonly CardQuestion[],
   drafts: CardDrafts
-): CardAnswer[] | null {
+): CardAnswer[] | null => {
   const resolved = buildPendingUserInputAnswers(
     questions.map(toPendingQuestion),
     drafts
@@ -43,9 +41,12 @@ export function buildCardAnswers(
     return null;
   }
   return questions.map((question) => {
-    const answer = resolved[question.id]!;
+    const answer = resolved[question.id];
+    if (answer === undefined) {
+      throw new Error(`No answer was resolved for question ${question.id}`);
+    }
     if (typeof answer !== "string") {
-      return { questionId: question.id, labels: [...answer] };
+      return { labels: [...answer], questionId: question.id };
     }
     const typed =
       question.allowFreeText &&
@@ -54,10 +55,12 @@ export function buildCardAnswers(
       ? { freeText: answer, labels: [], questionId: question.id }
       : { labels: [answer], questionId: question.id };
   });
-}
+};
 
-export function describeCardAnswer(answer: CardAnswer): string {
-  return [...answer.labels, ...(answer.freeText ? [answer.freeText] : [])].join(
-    ", "
-  );
-}
+export const describeCardAnswer = (answer: CardAnswer): string =>
+  [
+    ...answer.labels,
+    ...(answer.freeText !== undefined && answer.freeText !== ""
+      ? [answer.freeText]
+      : []),
+  ].join(", ");

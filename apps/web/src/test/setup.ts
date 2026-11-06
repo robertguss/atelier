@@ -6,24 +6,32 @@ afterEach(() => {
   cleanup();
 });
 
-// jsdom has no scrolling; the router's scroll restoration calls this.
-window.scrollTo = () => {};
+const doNothing = (): void => {
+  // Stands in for a browser feature jsdom lacks.
+};
 
-// jsdom has no media queries or resize observers. Screens see a wide window.
-window.matchMedia ??= (query: string) =>
-  ({
-    addEventListener: () => {},
-    addListener: () => {},
+// jsdom has no scrolling; the router's scroll restoration calls this.
+window.scrollTo = doNothing;
+
+const fakeMediaQueryList = (query: string): MediaQueryList => {
+  const list = {
+    addEventListener: doNothing,
+    addListener: doNothing,
     dispatchEvent: () => false,
     matches: false,
     media: query,
     onchange: null,
-    removeEventListener: () => {},
-    removeListener: () => {},
-  }) as MediaQueryList;
+    removeEventListener: doNothing,
+    removeListener: doNothing,
+  };
+  return list;
+};
+
+// jsdom has no media queries or resize observers. Screens see a wide window.
+window.matchMedia ??= fakeMediaQueryList;
 
 globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
+  disconnect = doNothing;
+  observe = doNothing;
+  unobserve = doNothing;
 };

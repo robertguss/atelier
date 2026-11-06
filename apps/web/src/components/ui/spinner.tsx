@@ -25,22 +25,21 @@ const spinnerVariants = cva("motion-safe:visible-animate-spin", {
   },
 });
 
-function Spinner({
+const Spinner = ({
   className,
   size,
   tone,
   ...props
 }: React.ComponentPropsWithoutRef<typeof LoaderCircleIcon> &
-  VariantProps<typeof spinnerVariants>) {
-  return (
-    <LoaderCircleIcon
-      aria-label="Loading"
-      ref={observeVisibleAnimation}
-      className={cn(spinnerVariants({ size, tone }), className)}
-      role="status"
-      {...props}
-    />
-  );
-}
+  VariantProps<typeof spinnerVariants>) => (
+  <LoaderCircleIcon
+    aria-label="Loading"
+    ref={observeVisibleAnimation}
+    className={cn(spinnerVariants({ size, tone }), className)}
+    // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- The spinner is an SVG icon; an output element would add a wrapper around it.
+    role="status"
+    {...props}
+  />
+);
 
 export { Spinner };

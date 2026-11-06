@@ -8,10 +8,10 @@ import { Textarea } from "~/components/ui/textarea";
 import { useComposer } from "./useComposer";
 
 /** Writes to the people in the room only. Enter sends only from this box, and focus stays here. */
-export function TeamComposer({ roomId }: { roomId: Id<"rooms"> }) {
+export const TeamComposer = ({ roomId }: { roomId: Id<"rooms"> }) => {
   const post = useMutation(api.team.post);
   const { draft, setDraft, busy, error, submit, onKeyDown } = useComposer(
-    async (body) => post({ body, roomId })
+    async (body) => await post({ body, roomId })
   );
 
   return (
@@ -27,18 +27,20 @@ export function TeamComposer({ roomId }: { roomId: Id<"rooms"> }) {
         onKeyDown={onKeyDown}
       />
       <div className="flex items-center justify-end gap-2">
-        {error ? (
+        {error !== null && error !== "" ? (
           <p className="text-destructive-foreground mr-auto text-xs">{error}</p>
         ) : null}
         <Button
           size="sm"
           variant="secondary"
           disabled={!draft.trim() || busy}
-          onClick={() => void submit()}
+          onClick={() => {
+            submit();
+          }}
         >
           Send to team
         </Button>
       </div>
     </div>
   );
-}
+};

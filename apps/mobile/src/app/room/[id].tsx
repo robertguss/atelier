@@ -1,6 +1,7 @@
 import { api } from "@atelier/backend/api";
 import type { Id } from "@atelier/backend/dataModel";
 import { useMutation, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { Stack, useLocalSearchParams, useTheme } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -20,7 +21,354 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Reviews } from "@/components/reviews";
 import { Body, Centered, Muted } from "@/components/ui";
 
-export default function Room() {
+type TimelineItem = FunctionReturnType<typeof api.messages.timeline>[number];
+
+const deliveryNote = (
+  m: { delivery: string | null; cancelReason: string | null } | undefined
+) => {
+  if (m?.delivery === "queued" || m?.delivery === "steering") {
+    return "Queued";
+  }
+  if (m?.delivery === "cancelled") {
+    const reason =
+      m.cancelReason !== null && m.cancelReason !== ""
+        ? `: ${m.cancelReason}`
+        : "";
+    return `Not sent${reason}`;
+  }
+  return null;
+};
+
+// Convex wraps a mutation's thrown message in request details and a stack
+// trace. Keep only the message, such as why the runner refused a send.
+const errorReason = (e: unknown) => {
+  const text = e instanceof Error ? e.message : String(e);
+  return (
+    /Uncaught Error: (?<sentence>.*)/u.exec(text)?.groups?.sentence ?? text
+  );
+};
+
+const useKeyboardOpen = () => {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const show = Keyboard.addListener(
+      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
+      () => {
+        setOpen(true);
+      }
+    );
+    const hide = Keyboard.addListener(
+      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
+      () => {
+        setOpen(false);
+      }
+    );
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+  return open;
+};
+
+const PLACEHOLDER = "#8e8e93";
+
+const styles = StyleSheet.create({
+  author: { fontSize: 12, marginLeft: 4 },
+  bubble: {
+    borderRadius: 18,
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  bubbleText: { fontSize: 16, lineHeight: 22 },
+  bubbleWrap: { gap: 4, maxWidth: "88%" },
+  composer: {
+    alignItems: "flex-end",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+  },
+  empty: { padding: 24, textAlign: "center" },
+  input: {
+    borderRadius: 20,
+    flex: 1,
+    fontSize: 16,
+    maxHeight: 140,
+    paddingBottom: 10,
+    paddingHorizontal: 14,
+    paddingTop: 10,
+  },
+  left: { alignSelf: "flex-start" },
+  list: { gap: 12, padding: 14 },
+  noteMine: { alignSelf: "flex-end", fontSize: 12, marginRight: 4 },
+  right: { alignSelf: "flex-end" },
+  send: {
+    alignItems: "center",
+    borderRadius: 19,
+    height: 38,
+    justifyContent: "center",
+    width: 38,
+  },
+  sendLabel: { color: "white", fontSize: 20, fontWeight: "700" },
+});
+
+const Bubble = ({
+  mine,
+  author,
+  text,
+  note,
+}: {
+  mine: boolean;
+  author: string;
+  text: string;
+  note: string | null;
+}) => {
+  const { colors } = useTheme();
+  return (
+    <View style={[styles.bubbleWrap, mine ? styles.right : styles.left]}>
+      {!mine && <Muted style={styles.author}>{author}</Muted>}
+      <View
+        style={[
+          styles.bubble,
+          { backgroundColor: mine ? colors.primary : colors.card },
+        ]}
+      >
+        <Text
+          selectable
+          style={[styles.bubbleText, { color: mine ? "white" : colors.text }]}
+        >
+          {text}
+        </Text>
+      </View>
+      {note !== null && note !== "" ? (
+        <Muted style={mine ? styles.noteMine : styles.author}>{note}</Muted>
+      ) : null}
+    </View>
+  );
+};
+
+const turnStatusLabel = (status: string, waiting: boolean) => {
+  if (status === "queued") {
+    return "waiting for the runner";
+  }
+  if (status === "running") {
+    return waiting ? "Waiting for an answer" : "working";
+  }
+  return status;
+};
+
+const LiveTurn = ({
+  turnId,
+  author,
+  status,
+  waiting,
+  text,
+  error,
+}: {
+  turnId: Id<"turns">;
+  author: string;
+  status: string;
+  waiting: boolean;
+  text: string;
+  error: string | null;
+}) => {
+  const { colors } = useTheme();
+  const active = status === "queued" || status === "running";
+  const cancel = useMutation(api.messages.cancel);
+  const [cancelError, setCancelError] = useState("");
+  return (
+    <View style={[styles.bubbleWrap, styles.left]}>
+      <Muted style={styles.author}>
+        {author} · {turnStatusLabel(status, waiting)}
+      </Muted>
+      <View style={[styles.bubble, { backgroundColor: colors.card }]}>
+        {text ? (
+          <Text selectable style={[styles.bubbleText, { color: colors.text }]}>
+            {text}
+          </Text>
+        ) : null}
+        {active && !text && !waiting && (
+          <ActivityIndicator style={{ alignSelf: "flex-start" }} />
+        )}
+        {active && (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              cancel({ turnId }).catch((error_: unknown) => {
+                setCancelError(String(error_));
+              });
+            }}
+          >
+            <Text style={{ color: colors.primary }}>Cancel</Text>
+          </Pressable>
+        )}
+        {cancelError ? <Text>{cancelError}</Text> : null}
+        {error !== null && error !== "" ? (
+          <Text style={[styles.bubbleText, { color: "#d33" }]}>{error}</Text>
+        ) : null}
+      </View>
+    </View>
+  );
+};
+
+const Composer = ({
+  roomId,
+  onSent,
+  participants,
+  waitingAgents,
+  decisionId,
+  onReview,
+  initialParticipantId,
+  reviewTurnId,
+}: {
+  initialParticipantId?: Id<"participants">;
+  reviewTurnId?: Id<"turns">;
+  onReview: () => void;
+  decisionId?: Id<"decisions">;
+  roomId: Id<"rooms">;
+  onSent: () => void;
+  participants: {
+    _id: Id<"participants">;
+    displayName: string;
+    harness?: string;
+  }[];
+  waitingAgents: Set<Id<"participants">>;
+}) => {
+  const send = useMutation(api.messages.send);
+  const add = useMutation(api.rooms.addParticipant);
+  const [selected, setSelected] = useState<Id<"participants"> | undefined>(
+    initialParticipantId
+  );
+  const [error, setError] = useState("");
+  // Undefined when the room has no agents yet.
+  const target =
+    participants.find((p) => p._id === selected) ?? participants.at(0);
+  const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const keyboardOpen = useKeyboardOpen();
+
+  const submit = async () => {
+    const body = text.trim();
+    if (!body || sending) {
+      return;
+    }
+    setSending(true);
+    try {
+      onSent();
+      await send({
+        body,
+        decisionId,
+        reviewTurnId:
+          target?._id === initialParticipantId ? reviewTurnId : undefined,
+        roomId,
+        toParticipantId: target?._id,
+      });
+      setText("");
+      setError("");
+    } catch (error_) {
+      setError(errorReason(error_));
+    }
+    setSending(false);
+  };
+
+  return (
+    <View>
+      <View style={{ flexDirection: "row", gap: 16, padding: 12 }}>
+        <Pressable accessibilityRole="button" onPress={onReview}>
+          <Body>Review</Body>
+        </Pressable>
+        {participants.map((p) => (
+          <Pressable
+            key={p._id}
+            onPress={() => {
+              setSelected(p._id);
+            }}
+          >
+            <Body style={{ fontWeight: target?._id === p._id ? "700" : "400" }}>
+              {p.displayName}
+            </Body>
+          </Pressable>
+        ))}
+        {(["claude", "codex", "pi"] as const)
+          .filter((h) => !participants.some((p) => p.harness === h))
+          .map((h) => (
+            <Pressable
+              key={h}
+              onPress={async () => {
+                try {
+                  setSelected(await add({ harness: h, roomId }));
+                  setError("");
+                } catch (error_) {
+                  setError(String(error_));
+                }
+              }}
+            >
+              <Muted>+ {h}</Muted>
+            </Pressable>
+          ))}
+      </View>
+      {reviewTurnId && target?._id === initialParticipantId ? (
+        <Muted style={{ paddingHorizontal: 12 }}>
+          Following up on this review
+        </Muted>
+      ) : null}
+      {decisionId ? (
+        <Muted style={{ paddingHorizontal: 12 }}>
+          Following up on your decision
+        </Muted>
+      ) : null}
+      {target && waitingAgents.has(target._id) ? (
+        <Muted style={{ paddingHorizontal: 12 }}>
+          This will answer {target.displayName}&apos;s question
+        </Muted>
+      ) : null}
+      {error ? (
+        <Body style={{ color: "#d33", paddingHorizontal: 12 }}>{error}</Body>
+      ) : null}
+      <View
+        style={[
+          styles.composer,
+          {
+            borderTopColor: colors.border,
+            paddingBottom: keyboardOpen ? 10 : Math.max(insets.bottom, 10),
+          },
+        ]}
+      >
+        <TextInput
+          value={text}
+          onChangeText={setText}
+          placeholder={`Message ${target?.displayName ?? "participant"}`}
+          placeholderTextColor={PLACEHOLDER}
+          multiline
+          style={[
+            styles.input,
+            { backgroundColor: colors.card, color: colors.text },
+          ]}
+        />
+        <Pressable
+          onPress={submit}
+          disabled={!text.trim() || sending}
+          style={({ pressed }) => [
+            styles.send,
+            {
+              backgroundColor: colors.primary,
+              opacity: !text.trim() || sending || pressed ? 0.4 : 1,
+            },
+          ]}
+        >
+          <Text style={styles.sendLabel}>↑</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+};
+
+const Room = () => {
   const { id, decisionId, participantId, reviewTurnId } = useLocalSearchParams<{
     id: Id<"rooms">;
     decisionId?: Id<"decisions">;
@@ -42,7 +390,7 @@ export default function Room() {
   // A normal (not inverted) list that sticks to the bottom while you're near
   // it. Inverted lists flip the scroll view, which breaks the iOS 26 scroll
   // edge blur under the header.
-  const listRef = useRef<FlatList>(null);
+  const listRef = useRef<FlatList<TimelineItem>>(null);
   const stickToBottom = useRef(true);
 
   if (data === undefined || timeline === undefined || me === undefined) {
@@ -180,340 +528,6 @@ export default function Room() {
       </View>
     </>
   );
-}
+};
 
-function deliveryNote(
-  m: { delivery: string | null; cancelReason: string | null } | undefined
-) {
-  if (m?.delivery === "queued" || m?.delivery === "steering") {
-    return "Queued";
-  }
-  if (m?.delivery === "cancelled") {
-    return `Not sent${m.cancelReason ? `: ${m.cancelReason}` : ""}`;
-  }
-  return null;
-}
-
-function Bubble({
-  mine,
-  author,
-  text,
-  note,
-}: {
-  mine: boolean;
-  author: string;
-  text: string;
-  note: string | null;
-}) {
-  const { colors } = useTheme();
-  return (
-    <View style={[styles.bubbleWrap, mine ? styles.right : styles.left]}>
-      {!mine && <Muted style={styles.author}>{author}</Muted>}
-      <View
-        style={[
-          styles.bubble,
-          { backgroundColor: mine ? colors.primary : colors.card },
-        ]}
-      >
-        <Text
-          selectable
-          style={[styles.bubbleText, { color: mine ? "white" : colors.text }]}
-        >
-          {text}
-        </Text>
-      </View>
-      {note ? (
-        <Muted style={mine ? styles.noteMine : styles.author}>{note}</Muted>
-      ) : null}
-    </View>
-  );
-}
-
-function LiveTurn({
-  turnId,
-  author,
-  status,
-  waiting,
-  text,
-  error,
-}: {
-  turnId: Id<"turns">;
-  author: string;
-  status: string;
-  waiting: boolean;
-  text: string;
-  error: string | null;
-}) {
-  const { colors } = useTheme();
-  const active = status === "queued" || status === "running";
-  const cancel = useMutation(api.messages.cancel);
-  const [cancelError, setCancelError] = useState("");
-  return (
-    <View style={[styles.bubbleWrap, styles.left]}>
-      <Muted style={styles.author}>
-        {author} ·{" "}
-        {status === "queued"
-          ? "waiting for the runner"
-          : status === "running"
-            ? waiting
-              ? "Waiting for an answer"
-              : "working"
-            : status}
-      </Muted>
-      <View style={[styles.bubble, { backgroundColor: colors.card }]}>
-        {text ? (
-          <Text selectable style={[styles.bubbleText, { color: colors.text }]}>
-            {text}
-          </Text>
-        ) : null}
-        {active && !text && !waiting && (
-          <ActivityIndicator style={{ alignSelf: "flex-start" }} />
-        )}
-        {active && (
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => {
-              void cancel({ turnId }).catch((error_) => {
-                setCancelError(String(error_));
-              });
-            }}
-          >
-            <Text style={{ color: colors.primary }}>Cancel</Text>
-          </Pressable>
-        )}
-        {cancelError ? <Text>{cancelError}</Text> : null}
-        {error && (
-          <Text style={[styles.bubbleText, { color: "#d33" }]}>{error}</Text>
-        )}
-      </View>
-    </View>
-  );
-}
-
-function Composer({
-  roomId,
-  onSent,
-  participants,
-  waitingAgents,
-  decisionId,
-  onReview,
-  initialParticipantId,
-  reviewTurnId,
-}: {
-  initialParticipantId?: Id<"participants">;
-  reviewTurnId?: Id<"turns">;
-  onReview: () => void;
-  decisionId?: Id<"decisions">;
-  roomId: Id<"rooms">;
-  onSent: () => void;
-  participants: {
-    _id: Id<"participants">;
-    displayName: string;
-    harness?: string;
-  }[];
-  waitingAgents: Set<Id<"participants">>;
-}) {
-  const send = useMutation(api.messages.send);
-  const add = useMutation(api.rooms.addParticipant);
-  const [selected, setSelected] = useState<Id<"participants"> | undefined>(
-    initialParticipantId
-  );
-  const [error, setError] = useState("");
-  const target =
-    participants.find((p) => p._id === selected) ?? participants[0];
-  const { colors } = useTheme();
-  const insets = useSafeAreaInsets();
-  const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-  const keyboardOpen = useKeyboardOpen();
-
-  const submit = async () => {
-    const body = text.trim();
-    if (!body || sending) {
-      return;
-    }
-    setSending(true);
-    try {
-      onSent();
-      await send({
-        body,
-        decisionId,
-        reviewTurnId:
-          target?._id === initialParticipantId ? reviewTurnId : undefined,
-        roomId,
-        toParticipantId: target?._id,
-      });
-      setText("");
-      setError("");
-    } catch (error_) {
-      setError(errorReason(error_));
-    } finally {
-      setSending(false);
-    }
-  };
-
-  return (
-    <View>
-      <View style={{ flexDirection: "row", gap: 16, padding: 12 }}>
-        <Pressable accessibilityRole="button" onPress={onReview}>
-          <Body>Review</Body>
-        </Pressable>
-        {participants.map((p) => (
-          <Pressable
-            key={p._id}
-            onPress={() => {
-              setSelected(p._id);
-            }}
-          >
-            <Body style={{ fontWeight: target?._id === p._id ? "700" : "400" }}>
-              {p.displayName}
-            </Body>
-          </Pressable>
-        ))}
-        {(["claude", "codex", "pi"] as const)
-          .filter((h) => !participants.some((p) => p.harness === h))
-          .map((h) => (
-            <Pressable
-              key={h}
-              onPress={async () => {
-                try {
-                  setSelected(await add({ harness: h, roomId }));
-                  setError("");
-                } catch (error_) {
-                  setError(String(error_));
-                }
-              }}
-            >
-              <Muted>+ {h}</Muted>
-            </Pressable>
-          ))}
-      </View>
-      {reviewTurnId && target?._id === initialParticipantId ? (
-        <Muted style={{ paddingHorizontal: 12 }}>
-          Following up on this review
-        </Muted>
-      ) : null}
-      {decisionId ? (
-        <Muted style={{ paddingHorizontal: 12 }}>
-          Following up on your decision
-        </Muted>
-      ) : null}
-      {target && waitingAgents.has(target._id) ? (
-        <Muted style={{ paddingHorizontal: 12 }}>
-          This will answer {target.displayName}&apos;s question
-        </Muted>
-      ) : null}
-      {error ? (
-        <Body style={{ color: "#d33", paddingHorizontal: 12 }}>{error}</Body>
-      ) : null}
-      <View
-        style={[
-          styles.composer,
-          {
-            borderTopColor: colors.border,
-            paddingBottom: keyboardOpen ? 10 : Math.max(insets.bottom, 10),
-          },
-        ]}
-      >
-        <TextInput
-          value={text}
-          onChangeText={setText}
-          placeholder={`Message ${target?.displayName ?? "participant"}`}
-          placeholderTextColor={PLACEHOLDER}
-          multiline
-          style={[
-            styles.input,
-            { backgroundColor: colors.card, color: colors.text },
-          ]}
-        />
-        <Pressable
-          onPress={submit}
-          disabled={!text.trim() || sending}
-          style={({ pressed }) => [
-            styles.send,
-            {
-              backgroundColor: colors.primary,
-              opacity: !text.trim() || sending || pressed ? 0.4 : 1,
-            },
-          ]}
-        >
-          <Text style={styles.sendLabel}>↑</Text>
-        </Pressable>
-      </View>
-    </View>
-  );
-}
-
-// Convex wraps a mutation's thrown message in request details and a stack
-// trace. Keep only the message, such as why the runner refused a send.
-function errorReason(e: unknown) {
-  const text = e instanceof Error ? e.message : String(e);
-  return /Uncaught Error: (.*)/.exec(text)?.[1] ?? text;
-}
-
-function useKeyboardOpen() {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    const show = Keyboard.addListener(
-      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
-      () => {
-        setOpen(true);
-      }
-    );
-    const hide = Keyboard.addListener(
-      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
-      () => {
-        setOpen(false);
-      }
-    );
-    return () => {
-      show.remove();
-      hide.remove();
-    };
-  }, []);
-  return open;
-}
-
-const PLACEHOLDER = "#8e8e93";
-
-const styles = StyleSheet.create({
-  author: { fontSize: 12, marginLeft: 4 },
-  bubble: {
-    borderRadius: 18,
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  bubbleText: { fontSize: 16, lineHeight: 22 },
-  bubbleWrap: { gap: 4, maxWidth: "88%" },
-  composer: {
-    alignItems: "flex-end",
-    borderTopWidth: StyleSheet.hairlineWidth,
-    flexDirection: "row",
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingTop: 10,
-  },
-  empty: { padding: 24, textAlign: "center" },
-  input: {
-    borderRadius: 20,
-    flex: 1,
-    fontSize: 16,
-    maxHeight: 140,
-    paddingBottom: 10,
-    paddingHorizontal: 14,
-    paddingTop: 10,
-  },
-  left: { alignSelf: "flex-start" },
-  list: { gap: 12, padding: 14 },
-  noteMine: { alignSelf: "flex-end", fontSize: 12, marginRight: 4 },
-  right: { alignSelf: "flex-end" },
-  send: {
-    alignItems: "center",
-    borderRadius: 19,
-    height: 38,
-    justifyContent: "center",
-    width: 38,
-  },
-  sendLabel: { color: "white", fontSize: 20, fontWeight: "700" },
-});
+export default Room;

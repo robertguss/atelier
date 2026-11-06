@@ -14,7 +14,7 @@ import {
 
 import { Body, Button, Centered, Field, Muted, Section } from "@/components/ui";
 
-export default function Ritual() {
+const Ritual = () => {
   const { id } = useLocalSearchParams<{ id: Id<"rituals"> }>();
   const review = useQuery(api.rituals.get, { ritualId: id });
   const saveTakeaway = useMutation(api.rituals.saveTakeaway);
@@ -27,17 +27,19 @@ export default function Ritual() {
   const container = useRef<React.ComponentRef<typeof View>>(null);
   const { width } = useWindowDimensions();
   const { colors } = useTheme();
-  async function save(action: () => Promise<unknown>) {
+  const save = async (action: () => Promise<unknown>) => {
     setBusy(true);
     try {
       await action();
       setError("");
     } catch (error_) {
       setError(String(error_));
-    } finally {
-      setBusy(false);
     }
-  }
+    setBusy(false);
+  };
+  const showError = (error_: unknown) => {
+    setError(String(error_));
+  };
   if (review === undefined) {
     return (
       <Centered>
@@ -97,13 +99,13 @@ export default function Ritual() {
                 <Button
                   label="Save takeaway"
                   disabled={busy || !takeaway.trim()}
-                  onPress={() =>
-                    void save(async () => {
+                  onPress={() => {
+                    save(async () => {
                       await saveTakeaway({ body: takeaway, ritualId: id });
                       setTakeaway("");
                       setAddingTakeaway(false);
-                    })
-                  }
+                    }).catch(showError);
+                  }}
                 />
                 <Button
                   label="Cancel"
@@ -155,9 +157,11 @@ export default function Ritual() {
                       label={`Cancel ${t.name}`}
                       kind="secondary"
                       disabled={busy}
-                      onPress={() =>
-                        void save(async () => cancel({ turnId: t._id }))
-                      }
+                      onPress={() => {
+                        save(async () => await cancel({ turnId: t._id })).catch(
+                          showError
+                        );
+                      }}
                     />
                   )}
                 </View>
@@ -238,4 +242,5 @@ export default function Ritual() {
       </KeyboardAvoidingView>
     </View>
   );
-}
+};
+export default Ritual;

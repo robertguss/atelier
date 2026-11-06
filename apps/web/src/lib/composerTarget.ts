@@ -8,7 +8,7 @@ export interface TargetableAgent {
  * the agent waiting on an open question card (the earliest, if several),
  * then the person's last target, then Claude, then the first agent.
  */
-export function composerTarget({
+export const composerTarget = ({
   agents,
   openCardAgentIds,
   lastTarget,
@@ -17,11 +17,11 @@ export function composerTarget({
   /** Agents with an open card, earliest card first. */
   openCardAgentIds: readonly string[];
   lastTarget: string | null;
-}): string | null {
+}): string | null => {
   const inRoom = (id: string | null) =>
     id !== null && agents.some((a) => a.participantId === id);
   const waiting = openCardAgentIds.find(inRoom);
-  if (waiting) {
+  if (waiting !== undefined) {
     return waiting;
   }
   if (inRoom(lastTarget)) {
@@ -31,4 +31,4 @@ export function composerTarget({
     (agents.find((a) => a.harness === "claude") ?? agents[0])?.participantId ??
     null
   );
-}
+};

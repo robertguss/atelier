@@ -25,13 +25,17 @@ const TEAM_DEFAULT = 360;
 // Turns per page of agent history; matches PANE_PAGE in the backend.
 const PANE_PAGE = 40;
 
-export function RoomView({
+const captureSeparatorPointer = (e: PointerEvent<HTMLDivElement>) => {
+  e.currentTarget.setPointerCapture(e.pointerId);
+};
+
+export const RoomView = ({
   roomId,
   isOwner,
 }: {
   roomId: Id<"rooms">;
   isOwner: boolean;
-}) {
+}) => {
   const data = useQuery(api.rooms.get, { roomId });
   const [paneLimit, setPaneLimit] = useState(PANE_PAGE);
   // Keeps the shorter history on screen while a longer one loads.
@@ -71,9 +75,6 @@ export function RoomView({
         Math.min(Math.max(box.right - clientX, TEAM_MIN), box.width * 0.6)
       )
     );
-  };
-  const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
   };
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
@@ -139,13 +140,14 @@ export function RoomView({
         ) : (
           <>
             <div
+              // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- A focusable, draggable splitter; hr is a void, non-interactive element.
               role="separator"
               aria-orientation="vertical"
               aria-label="Resize team pane"
               aria-valuenow={teamWidth}
               tabIndex={0}
               className="hover:bg-accent focus-visible:bg-accent w-1 shrink-0 cursor-col-resize border-l bg-transparent"
-              onPointerDown={onPointerDown}
+              onPointerDown={captureSeparatorPointer}
               onPointerMove={onPointerMove}
               onKeyDown={onSeparatorKey}
             />
@@ -165,4 +167,4 @@ export function RoomView({
       ) : null}
     </div>
   );
-}
+};

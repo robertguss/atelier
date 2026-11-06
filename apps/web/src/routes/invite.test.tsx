@@ -1,21 +1,21 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { backend, resetBackend, signOut } from "~/test/backend";
+import { backend, mutation, resetBackend, signOut } from "~/test/backend";
 import { renderAt } from "~/test/render";
 
-vi.mock(
-  "convex/react",
-  async () => (await import("~/test/backend")).convexMock
-);
-vi.mock(
-  "~/auth/ClerkShell",
-  async () => (await import("~/test/backend")).authMock
-);
+vi.mock(import("convex/react"), async () => {
+  const { convexMock } = await import("~/test/backend");
+  return convexMock;
+});
+vi.mock(import("~/auth/ClerkShell"), async () => {
+  const { authMock } = await import("~/test/backend");
+  return authMock;
+});
 
 const TOKEN = "tok_abc";
 
-function invite(overrides: Record<string, unknown>) {
+const invite = (overrides: Record<string, unknown>) => {
   backend.queries["invites:lookup"] = ({ token }) =>
     token === TOKEN
       ? {
@@ -28,59 +28,63 @@ function invite(overrides: Record<string, unknown>) {
           ...overrides,
         }
       : null;
-}
-
-beforeEach(resetBackend);
+};
 
 describe("invite page", () => {
+  beforeEach(resetBackend);
+
   it("shows the masked invited address and a sign-out offer when signed in with another email", async () => {
     invite({ matches: false });
     renderAt(`/invite/${TOKEN}`);
 
-    await expect(
-      screen.findByText(/d\*\*\*@example\.com/)
-    ).resolves.toBeInTheDocument();
-    expect(screen.getByText(/sam@other\.example/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText(/d\*\*\*@example\.com/u)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/sam@other\.example/u)).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: /join/i })
+      screen.queryByRole("button", { name: /join/iu })
     ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /sign out/i }));
+    fireEvent.click(screen.getByRole("button", { name: /sign out/iu }));
     expect(signOut).toHaveBeenCalledWith();
   });
 
   it("says an expired invite has expired", async () => {
     invite({ status: "expired" });
     renderAt(`/invite/${TOKEN}`);
-    await expect(
-      screen.findByRole("heading", { name: /this invite has expired/i })
-    ).resolves.toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: /this invite has expired/iu })
+      ).toBeInTheDocument();
+    });
     expect(
-      screen.queryByRole("button", { name: /join/i })
+      screen.queryByRole("button", { name: /join/iu })
     ).not.toBeInTheDocument();
   });
 
   it("says a revoked invite was revoked", async () => {
     invite({ status: "revoked" });
     renderAt(`/invite/${TOKEN}`);
-    await expect(
-      screen.findByRole("heading", { name: /this invite was revoked/i })
-    ).resolves.toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: /this invite was revoked/iu })
+      ).toBeInTheDocument();
+    });
     expect(
-      screen.queryByRole("button", { name: /join/i })
+      screen.queryByRole("button", { name: /join/iu })
     ).not.toBeInTheDocument();
   });
 
   it("accepts a matching invite and opens the room", async () => {
     invite({});
-    backend.mutations["invites:accept"] = vi.fn(async () => ({
+    mutation("invites:accept").mockResolvedValue({
       ok: true,
       roomId: "room1",
-    }));
+    });
     const { router } = renderAt(`/invite/${TOKEN}`);
 
     fireEvent.click(
-      await screen.findByRole("button", { name: /join pricing plan/i })
+      await screen.findByRole("button", { name: /join pricing plan/iu })
     );
 
     expect(backend.mutations["invites:accept"]).toHaveBeenCalledWith({
@@ -95,18 +99,20 @@ describe("invite page", () => {
     backend.signedIn = false;
     invite({ matches: false });
     renderAt(`/invite/${TOKEN}`);
-    await expect(
-      screen.findByText("Clerk sign-in form")
-    ).resolves.toBeInTheDocument();
-    expect(screen.getByText(/Pricing plan/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Clerk sign-in form")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Pricing plan/u)).toBeInTheDocument();
   });
 
   it("reveals nothing for an unknown token", async () => {
     invite({});
     renderAt("/invite/someone-elses-guess");
-    await expect(
-      screen.findByRole("heading", { name: /invite link isn.t valid/i })
-    ).resolves.toBeInTheDocument();
-    expect(screen.queryByText(/Pricing plan/)).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: /invite link isn.t valid/iu })
+      ).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Pricing plan/u)).not.toBeInTheDocument();
   });
 });

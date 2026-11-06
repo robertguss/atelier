@@ -29,16 +29,7 @@ interface QuestionCardProps {
   offline: boolean;
 }
 
-/** An agent's question card: answerable while open, then a record of how it closed. */
-export function QuestionCard(props: QuestionCardProps) {
-  return props.card.status === "raised" ? (
-    <OpenCard {...props} />
-  ) : (
-    <ClosedCard {...props} />
-  );
-}
-
-function OpenCard({ card, agentName, offline }: QuestionCardProps) {
+const OpenCard = ({ card, agentName, offline }: QuestionCardProps) => {
   const answer = useMutation(api.hands.answer);
   const [drafts, setDrafts] = useState<CardDrafts>({});
   const [busy, setBusy] = useState(false);
@@ -59,8 +50,13 @@ function OpenCard({ card, agentName, offline }: QuestionCardProps) {
     setBusy(false);
   };
 
+  const showError = (error_: unknown) => {
+    setError(errorText(error_));
+  };
+
   return (
     <div
+      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- A card holding several fieldsets, not a form section of its own; a fieldset here would nest fieldsets.
       role="group"
       aria-label={`${agentName} asks`}
       className="border-info/40 bg-info/4 rounded-xl border p-3 text-sm shadow-xs/5"
@@ -118,11 +114,11 @@ function OpenCard({ card, agentName, offline }: QuestionCardProps) {
                       </span>
                       <span>
                         <span className="font-medium">{option.label}</span>
-                        {option.description ? (
+                        {(option.description ?? "") === "" ? null : (
                           <span className="text-muted-foreground block text-xs">
                             {option.description}
                           </span>
-                        ) : null}
+                        )}
                       </span>
                     </button>
                   );
@@ -156,7 +152,9 @@ function OpenCard({ card, agentName, offline }: QuestionCardProps) {
         <Button
           size="sm"
           disabled={!answers || busy || offline}
-          onClick={() => void submit()}
+          onClick={() => {
+            submit().catch(showError);
+          }}
         >
           Answer
         </Button>
@@ -165,72 +163,14 @@ function OpenCard({ card, agentName, offline }: QuestionCardProps) {
           card.
         </span>
       </div>
-      {error ? (
+      {error !== null && error !== "" ? (
         <p className="text-destructive-foreground mt-2 text-xs">{error}</p>
       ) : null}
     </div>
   );
-}
+};
 
-function ClosedCard({
-  roomId,
-  card,
-  agentName,
-  names,
-  offline,
-}: QuestionCardProps) {
-  const answers = card.answers ?? [];
-  const answerFor = (questionId: string) =>
-    answers.find((a) => a.questionId === questionId);
-
-  return (
-    <div className="bg-card/60 rounded-xl border p-3 text-sm">
-      <div className="text-muted-foreground mb-1.5 text-xs font-medium">
-        {card.status === "answered" ? (
-          card.via === "chat" ? (
-            <span>
-              Answered in chat by {names(card.answeredByParticipantId)}
-            </span>
-          ) : (
-            <span>Answered by {names(card.answeredByParticipantId)}</span>
-          )
-        ) : card.status === "cancelled" ? (
-          <span>Cancelled: the turn was stopped before anyone answered</span>
-        ) : (
-          <span>Expired with no decision</span>
-        )}
-        {card.status !== "answered" && card.closeReason ? (
-          <span className="font-normal"> ({card.closeReason})</span>
-        ) : null}
-      </div>
-      <ul className="space-y-1.5">
-        {card.questions.map((question) => {
-          const answer = answerFor(question.id);
-          return (
-            <li key={question.id}>
-              <span className="text-muted-foreground">{question.text}</span>
-              {answer ? (
-                <span className="block font-medium">
-                  {describeCardAnswer(answer)}
-                </span>
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
-      {card.status === "expired" ? (
-        <LateAnswer
-          roomId={roomId}
-          agentId={card.participantId}
-          agentName={agentName}
-          offline={offline}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-function LateAnswer({
+const LateAnswer = ({
   roomId,
   agentId,
   agentName,
@@ -240,7 +180,7 @@ function LateAnswer({
   agentId: Id<"participants">;
   agentName: string;
   offline: boolean;
-}) {
+}) => {
   const send = useMutation(api.messages.send);
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
@@ -279,6 +219,10 @@ function LateAnswer({
     setBusy(false);
   };
 
+  const showError = (error_: unknown) => {
+    setError(errorText(error_));
+  };
+
   return (
     <div className="mt-2 space-y-2">
       <Textarea
@@ -296,7 +240,9 @@ function LateAnswer({
         <Button
           size="xs"
           disabled={!text.trim() || busy || offline}
-          onClick={() => void submit()}
+          onClick={() => {
+            submit().catch(showError);
+          }}
         >
           Send late answer
         </Button>
@@ -310,9 +256,78 @@ function LateAnswer({
           Cancel
         </Button>
       </div>
-      {error ? (
+      {error !== null && error !== "" ? (
         <p className="text-destructive-foreground text-xs">{error}</p>
       ) : null}
     </div>
   );
-}
+};
+
+// How a closed card ended, as its header says.
+const closedCardOutcome = (card: PaneCard, names: Names) => {
+  if (card.status === "answered") {
+    return card.via === "chat" ? (
+      <span>Answered in chat by {names(card.answeredByParticipantId)}</span>
+    ) : (
+      <span>Answered by {names(card.answeredByParticipantId)}</span>
+    );
+  }
+  if (card.status === "cancelled") {
+    return <span>Cancelled: the turn was stopped before anyone answered</span>;
+  }
+  return <span>Expired with no decision</span>;
+};
+
+const ClosedCard = ({
+  roomId,
+  card,
+  agentName,
+  names,
+  offline,
+}: QuestionCardProps) => {
+  const answers = card.answers ?? [];
+  const answerFor = (questionId: string) =>
+    answers.find((a) => a.questionId === questionId);
+
+  return (
+    <div className="bg-card/60 rounded-xl border p-3 text-sm">
+      <div className="text-muted-foreground mb-1.5 text-xs font-medium">
+        {closedCardOutcome(card, names)}
+        {card.status !== "answered" && (card.closeReason ?? "") !== "" ? (
+          <span className="font-normal"> ({card.closeReason})</span>
+        ) : null}
+      </div>
+      <ul className="space-y-1.5">
+        {card.questions.map((question) => {
+          const answer = answerFor(question.id);
+          return (
+            <li key={question.id}>
+              <span className="text-muted-foreground">{question.text}</span>
+              {answer ? (
+                <span className="block font-medium">
+                  {describeCardAnswer(answer)}
+                </span>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      {card.status === "expired" ? (
+        <LateAnswer
+          roomId={roomId}
+          agentId={card.participantId}
+          agentName={agentName}
+          offline={offline}
+        />
+      ) : null}
+    </div>
+  );
+};
+
+/** An agent's question card: answerable while open, then a record of how it closed. */
+export const QuestionCard = (props: QuestionCardProps) =>
+  props.card.status === "raised" ? (
+    <OpenCard {...props} />
+  ) : (
+    <ClosedCard {...props} />
+  );

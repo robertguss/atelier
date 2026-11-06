@@ -10,11 +10,11 @@ const animations = new Map<Element, ObservedAnimation>();
 let observer: IntersectionObserver | null = null;
 let reducedMotion: MediaQueryList | null = null;
 
-function updateAnimation(animation: ObservedAnimation) {
+const updateAnimation = (animation: ObservedAnimation) => {
   const running =
     animation.intersecting &&
     document.visibilityState === "visible" &&
-    !reducedMotion?.matches;
+    reducedMotion?.matches !== true;
   animation.element.style.setProperty(
     "--visible-animation-state",
     running ? "running" : "paused"
@@ -23,24 +23,24 @@ function updateAnimation(animation: ObservedAnimation) {
     "--visible-animation-will-change",
     running ? "transform" : "auto"
   );
-}
+};
 
-function updateAnimations() {
+const updateAnimations = () => {
   for (const animation of animations.values()) {
     updateAnimation(animation);
   }
-}
+};
 
-export function observeVisibleAnimation(
+export const observeVisibleAnimation = (
   element: HTMLElement | SVGElement | null
-) {
+): (() => void) | undefined => {
   if (element === null) {
-    return;
+    return undefined;
   }
   element.style.setProperty("--visible-animation-state", "paused");
   element.style.setProperty("--visible-animation-will-change", "auto");
   if (typeof IntersectionObserver === "undefined") {
-    return;
+    return undefined;
   }
 
   if (observer === null) {
@@ -82,4 +82,4 @@ export function observeVisibleAnimation(
       document.removeEventListener("visibilitychange", updateAnimations);
     }
   };
-}
+};

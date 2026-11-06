@@ -21,8 +21,8 @@ export type Participant = RoomData["participants"][number];
  * The pane leaves out the text and tool calls of active turns, which stream
  * through the live query; this puts them back.
  */
-export function withLive(pane: Pane, live: LiveTurns | undefined): Pane {
-  if (!live?.length) {
+export const withLive = (pane: Pane, live: LiveTurns | undefined): Pane => {
+  if (live === undefined || live.length === 0) {
     return pane;
   }
   const byId = new Map<string, LiveTurns[number]>(live.map((l) => [l.id, l]));
@@ -33,30 +33,32 @@ export function withLive(pane: Pane, live: LiveTurns | undefined): Pane {
       return l ? { ...turn, items: l.items, partialText: l.partialText } : turn;
     }),
   };
-}
+};
 
 /** The last value that wasn't undefined, so a query keeps showing old data while new arguments load. */
-export function useLastDefined<T>(value: T | undefined): T | undefined {
+export const useLastDefined = <T>(value: T | undefined): T | undefined => {
   const last = useRef(value);
   if (value !== undefined) {
+    // oxlint-disable-next-line react/refs -- Remembering the last defined value during render is this hook's job; state would cost an extra render on every change.
     last.current = value;
   }
+  // oxlint-disable-next-line react/refs -- Reads the value remembered above, in the same render.
   return value ?? last.current;
-}
+};
 
 export type Names = (participantId: string | null | undefined) => string;
 
-export function namesFrom(participants: readonly Participant[]): Names {
+export const namesFrom = (participants: readonly Participant[]): Names => {
   const byId = new Map(
     participants.map((p) => [p._id as string, p.displayName])
   );
-  return (id) => (id ? (byId.get(id) ?? "Someone") : "Someone");
-}
+  return (id) =>
+    (id === null || id === undefined ? undefined : byId.get(id)) ?? "Someone";
+};
 
 /** A message to an agent still waiting for its turn, or being steered into the running one. */
-export function isWaiting(message: PaneMessage) {
-  return message.delivery === "queued" || message.delivery === "steering";
-}
+export const isWaiting = (message: PaneMessage) =>
+  message.delivery === "queued" || message.delivery === "steering";
 
 export type TimelineItem =
   | { kind: "message"; key: string; at: number; message: PaneMessage }
@@ -75,7 +77,7 @@ export type TimelineItem =
  * cards are pinned above the composer and queued messages sit in the queue
  * strip, so neither appears here.
  */
-export function buildTimeline(pane: Pane): TimelineItem[] {
+export const buildTimeline = (pane: Pane): TimelineItem[] => {
   const turnIds = new Set<string>(pane.turns.map((t) => t.id));
   const replies = new Map<string, PaneMessage[]>();
   const items: TimelineItem[] = [];
@@ -102,8 +104,8 @@ export function buildTimeline(pane: Pane): TimelineItem[] {
       turn,
     });
   }
-  return items.sort((a, b) => a.at - b.at);
-}
+  return items.toSorted((a, b) => a.at - b.at);
+};
 
 export interface ToolItem {
   key: string;
@@ -113,19 +115,17 @@ export interface ToolItem {
 }
 
 /** A turn's tool activity, oldest first, as the pane already orders it. */
-export function toolItemsFor(turn: PaneTurn): ToolItem[] {
-  return turn.items.map((item, index) => ({
+export const toolItemsFor = (turn: PaneTurn): ToolItem[] =>
+  turn.items.map((item, index) => ({
     key: `${turn.id}:${index}`,
     ...item,
   }));
-}
 
-export function isOffline(pane: Pane, now: number) {
-  return now - pane.runner.lastHeartbeatAt > pane.runner.offlineAfterMs;
-}
+export const isOffline = (pane: Pane, now: number) =>
+  now - pane.runner.lastHeartbeatAt > pane.runner.offlineAfterMs;
 
 /** Why a message to an agent was never delivered, as a sentence ending. */
-export function cancelReasonText(reason: string | null) {
+export const cancelReasonText = (reason: string | null) => {
   if (reason === "removed") {
     return "its author was removed from the room";
   }
@@ -133,16 +133,15 @@ export function cancelReasonText(reason: string | null) {
     return "the agents' machine was offline";
   }
   return reason ?? "it was cancelled";
-}
+};
 
-export function formatTime(at: number) {
-  return new Date(at).toLocaleTimeString([], {
+export const formatTime = (at: number) =>
+  new Date(at).toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
 
-export function useNow(intervalMs: number) {
+export const useNow = (intervalMs: number) => {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -153,10 +152,10 @@ export function useNow(intervalMs: number) {
     };
   }, [intervalMs]);
   return now;
-}
+};
 
-export function useMediaQuery(query: string) {
-  return useSyncExternalStore(
+export const useMediaQuery = (query: string) =>
+  useSyncExternalStore(
     (onChange) => {
       const list = window.matchMedia(query);
       list.addEventListener("change", onChange);
@@ -166,26 +165,25 @@ export function useMediaQuery(query: string) {
     },
     () => window.matchMedia(query).matches
   );
-}
 
 /**
  * Keeps a scroll container pinned to its end while its content grows, as
  * long as the reader is at the end. Scrolling up stops following; scrolling
  * back to the end resumes it.
  */
-export function useStickToBottom<
+export const useStickToBottom = <
   Scroll extends HTMLElement,
   Content extends HTMLElement,
->() {
+>() => {
   const scrollRef = useRef<Scroll>(null);
   const contentRef = useRef<Content>(null);
   const atEnd = useRef(true);
 
-  useLayoutEffect(() => {
+  useLayoutEffect((): (() => void) | undefined => {
     const scroller = scrollRef.current;
     const content = contentRef.current;
     if (!scroller || !content) {
-      return;
+      return undefined;
     }
     const pin = () => {
       if (atEnd.current) {
@@ -215,22 +213,22 @@ export function useStickToBottom<
   });
 
   return { contentRef, scrollRef };
-}
+};
 
 const lastTargetKey = (roomId: string) => `atelier:last-target:${roomId}`;
 
-export function readLastTarget(roomId: string): string | null {
+export const readLastTarget = (roomId: string): string | null => {
   try {
     return window.localStorage.getItem(lastTargetKey(roomId));
   } catch {
     return null;
   }
-}
+};
 
-export function writeLastTarget(roomId: string, participantId: string) {
+export const writeLastTarget = (roomId: string, participantId: string) => {
   try {
     window.localStorage.setItem(lastTargetKey(roomId), participantId);
   } catch {
     // Storage can be unavailable (private windows); the default still applies.
   }
-}
+};

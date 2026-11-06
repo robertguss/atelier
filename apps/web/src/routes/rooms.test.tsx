@@ -1,24 +1,24 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { backend, resetBackend } from "~/test/backend";
 import { renderAt } from "~/test/render";
 
-vi.mock(
-  "convex/react",
-  async () => (await import("~/test/backend")).convexMock
-);
-vi.mock(
-  "~/auth/ClerkShell",
-  async () => (await import("~/test/backend")).authMock
-);
+vi.mock(import("convex/react"), async () => {
+  const { convexMock } = await import("~/test/backend");
+  return convexMock;
+});
+vi.mock(import("~/auth/ClerkShell"), async () => {
+  const { authMock } = await import("~/test/backend");
+  return authMock;
+});
 
 const ROOM = "room1";
 const notMember = () => {
   throw new Error("Not a member of this room");
 };
 
-function member(acceptedVersion: number | null) {
+const member = (acceptedVersion: number | null) => {
   backend.queries["rooms:access"] = () => "member";
   backend.queries["members:notice"] = () => ({
     acceptedVersion,
@@ -28,27 +28,27 @@ function member(acceptedVersion: number | null) {
     participants: [],
     room: { _id: ROOM, name: "Pricing plan" },
   });
-}
-
-beforeEach(resetBackend);
+};
 
 describe("room page", () => {
+  beforeEach(resetBackend);
+
   it("shows the join notice before the room and stores the accepted version", async () => {
     member(null);
     renderAt(`/rooms/${ROOM}`);
 
-    await expect(
-      screen.findByText(/recorded permanently/i)
-    ).resolves.toBeInTheDocument();
-    expect(screen.getByText(/run on Robert.s machine/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText(/recorded permanently/iu)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/run on Robert.s machine/iu)).toBeInTheDocument();
     expect(
-      screen.getByText(/files outside the room.s folder/i)
+      screen.getByText(/files outside the room.s folder/iu)
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Pricing plan" })
     ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /enter the room/i }));
+    fireEvent.click(screen.getByRole("button", { name: /enter the room/iu }));
     expect(backend.mutations["members:acceptNotice"]).toHaveBeenCalledWith({
       roomId: ROOM,
       version: 2,
@@ -58,18 +58,22 @@ describe("room page", () => {
   it("opens the room once the current notice is accepted", async () => {
     member(2);
     renderAt(`/rooms/${ROOM}`);
-    await expect(
-      screen.findByRole("heading", { name: "Pricing plan" })
-    ).resolves.toBeInTheDocument();
-    expect(screen.queryByText(/recorded permanently/i)).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Pricing plan" })
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText(/recorded permanently/iu)
+    ).not.toBeInTheDocument();
   });
 
   it("asks again when the stored notice version is older", async () => {
     member(1);
     renderAt(`/rooms/${ROOM}`);
-    await expect(
-      screen.findByText(/the notice has changed/i)
-    ).resolves.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText(/the notice has changed/iu)).toBeInTheDocument();
+    });
     expect(
       screen.queryByRole("heading", { name: "Pricing plan" })
     ).not.toBeInTheDocument();
@@ -80,9 +84,11 @@ describe("room page", () => {
     backend.queries["members:notice"] = notMember;
     backend.queries["rooms:get"] = notMember;
     renderAt(`/rooms/${ROOM}`);
-    await expect(
-      screen.findByRole("heading", { name: "You don't have access" })
-    ).resolves.toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "You don't have access" })
+      ).toBeInTheDocument();
+    });
   });
 
   it("tells a removed member they no longer have access", async () => {
@@ -90,8 +96,10 @@ describe("room page", () => {
     backend.queries["members:notice"] = notMember;
     backend.queries["rooms:get"] = notMember;
     renderAt(`/rooms/${ROOM}`);
-    await expect(
-      screen.findByRole("heading", { name: "You no longer have access" })
-    ).resolves.toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "You no longer have access" })
+      ).toBeInTheDocument();
+    });
   });
 });

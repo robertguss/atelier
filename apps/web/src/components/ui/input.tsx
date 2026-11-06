@@ -16,14 +16,14 @@ type InputProps = Omit<
   nativeInput?: boolean;
 };
 
-function Input({
+const Input = ({
   className,
   size = "default",
   font = "default",
   unstyled = false,
   nativeInput = false,
   ...props
-}: InputProps) {
+}: InputProps) => {
   const inputClassName = cn(
     "placeholder:text-placeholder h-8.5 w-full min-w-0 rounded-[inherit] px-[calc(--spacing(3)-1px)] leading-8.5 outline-none [transition:background-color_5000000s_ease-in-out_0s] sm:h-7.5 sm:leading-7.5",
     size === "compact" &&
@@ -83,6 +83,6 @@ function Input({
       {inputElement}
     </span>
   );
-}
+};
 
 export { Input, type InputProps };

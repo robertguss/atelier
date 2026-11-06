@@ -51,7 +51,7 @@ interface BadgeProps extends useRender.ComponentProps<"span"> {
   size?: VariantProps<typeof badgeVariants>["size"];
 }
 
-function Badge({ className, variant, size, render, ...props }: BadgeProps) {
+const Badge = ({ className, variant, size, render, ...props }: BadgeProps) => {
   const defaultProps = {
     className: cn(badgeVariants({ className, size, variant })),
     "data-slot": "badge",
@@ -62,6 +62,6 @@ function Badge({ className, variant, size, render, ...props }: BadgeProps) {
     props: mergeProps<"span">(defaultProps, props),
     render,
   });
-}
+};
 
 export { Badge, badgeVariants };

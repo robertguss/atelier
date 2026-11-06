@@ -22,19 +22,19 @@ export interface PendingUserInputDraftAnswer {
 
 export type PendingUserInputAnswer = string | readonly string[];
 
-function normalizeDraftAnswer(value: string | undefined): string | null {
+const normalizeDraftAnswer = (value: string | undefined): string | null => {
   if (typeof value !== "string") {
     return null;
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
+};
 
 // Provider option values stay exact, including whitespace. Only options without a value match by label.
-function resolvePendingUserInputOptionValue(
+const resolvePendingUserInputOptionValue = (
   question: PendingUserInputQuestion,
   value: string
-): string | null {
+): string | null => {
   if (question.options.some((option) => option.value === value)) {
     return value;
   }
@@ -46,13 +46,13 @@ function resolvePendingUserInputOptionValue(
     )
     ? label
     : null;
-}
+};
 
 /** The draft's selections that name an offered option, deduplicated, in selection order. */
-export function normalizeSelectedOptionValues(
+export const normalizeSelectedOptionValues = (
   question: PendingUserInputQuestion,
   value: readonly string[] | undefined
-): readonly string[] {
+): readonly string[] => {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -60,26 +60,45 @@ export function normalizeSelectedOptionValues(
   return [
     ...new Set(
       value
-        .map((entry) => resolvePendingUserInputOptionValue(question, entry))
+        .map((entry: string) =>
+          resolvePendingUserInputOptionValue(question, entry)
+        )
         .filter((entry): entry is string => entry !== null)
     ),
   ];
-}
+};
 
-/** The answer to submit for one question, or null while it is unanswered. */
-export function resolvePendingUserInputAnswer(
+const draftCustomAnswer = (
   question: PendingUserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined
-): PendingUserInputAnswer | null {
-  if (draft?.attachmentsBlocked) {
+): string | null => {
+  if (question.allowCustomAnswer === false) {
     return null;
   }
-  const customAnswer =
-    question.allowCustomAnswer === false
-      ? null
-      : question.initialAnswer === undefined
-        ? normalizeDraftAnswer(draft?.customAnswer)
-        : (draft?.customAnswer ?? null);
+  if (question.initialAnswer === undefined) {
+    return normalizeDraftAnswer(draft?.customAnswer);
+  }
+  return draft?.customAnswer ?? null;
+};
+
+// Attachments alone answer a question that accepts custom answers, as empty text.
+const attachmentsOnlyAnswer = (
+  question: PendingUserInputQuestion,
+  draft: PendingUserInputDraftAnswer | undefined
+): "" | null =>
+  question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0
+    ? ""
+    : null;
+
+/** The answer to submit for one question, or null while it is unanswered. */
+export const resolvePendingUserInputAnswer = (
+  question: PendingUserInputQuestion,
+  draft: PendingUserInputDraftAnswer | undefined
+): PendingUserInputAnswer | null => {
+  if (draft?.attachmentsBlocked === true) {
+    return null;
+  }
+  const customAnswer = draftCustomAnswer(question, draft);
   if (customAnswer !== null && customAnswer.length > 0) {
     return customAnswer;
   }
@@ -88,29 +107,23 @@ export function resolvePendingUserInputAnswer(
     question,
     draft?.selectedOptionValues
   );
-  if (question.multiSelect) {
+  if (question.multiSelect === true) {
     return selectedOptionValues.length > 0
       ? selectedOptionValues
-      : (customAnswer ??
-          (question.allowCustomAnswer !== false &&
-          (draft?.attachmentCount ?? 0) > 0
-            ? ""
-            : null));
+      : (customAnswer ?? attachmentsOnlyAnswer(question, draft));
   }
   return (
     selectedOptionValues[0] ??
     customAnswer ??
-    (question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0
-      ? ""
-      : null)
+    attachmentsOnlyAnswer(question, draft)
   );
-}
+};
 
-export function setPendingUserInputCustomAnswer(
+export const setPendingUserInputCustomAnswer = (
   question: PendingUserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
   customAnswer: string
-): PendingUserInputDraftAnswer {
+): PendingUserInputDraftAnswer => {
   if (question.allowCustomAnswer === false) {
     return draft ?? {};
   }
@@ -125,16 +138,16 @@ export function setPendingUserInputCustomAnswer(
       ? { selectedOptionValues }
       : {}),
   };
-}
+};
 
-export function isPendingUserInputOptionSelected(
+export const isPendingUserInputOptionSelected = (
   question: PendingUserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
   optionValue: string
-): boolean {
+): boolean => {
   if (
     question.allowCustomAnswer !== false &&
-    normalizeDraftAnswer(draft?.customAnswer)
+    normalizeDraftAnswer(draft?.customAnswer) !== null
   ) {
     return false;
   }
@@ -150,14 +163,14 @@ export function isPendingUserInputOptionSelected(
       draft?.selectedOptionValues
     ).includes(resolvedOptionValue)
   );
-}
+};
 
 /** Toggles an offered option. An unknown option returns the same draft. */
-export function togglePendingUserInputOptionSelection(
+export const togglePendingUserInputOptionSelection = (
   question: PendingUserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
   optionValue: string
-): PendingUserInputDraftAnswer {
+): PendingUserInputDraftAnswer => {
   const resolvedOptionValue = resolvePendingUserInputOptionValue(
     question,
     optionValue
@@ -166,7 +179,7 @@ export function togglePendingUserInputOptionSelection(
     return draft ?? {};
   }
 
-  if (question.multiSelect) {
+  if (question.multiSelect === true) {
     const selectedOptionValues = normalizeSelectedOptionValues(
       question,
       draft?.selectedOptionValues
@@ -189,13 +202,13 @@ export function togglePendingUserInputOptionSelection(
     customAnswer: "",
     selectedOptionValues: [resolvedOptionValue],
   };
-}
+};
 
 /** Every question's answer keyed by question id, or null while any is unanswered. */
-export function buildPendingUserInputAnswers(
+export const buildPendingUserInputAnswers = (
   questions: readonly PendingUserInputQuestion[],
   draftAnswers: Record<string, PendingUserInputDraftAnswer>
-): Record<string, PendingUserInputAnswer> | null {
+): Record<string, PendingUserInputAnswer> | null => {
   const answers: Record<string, PendingUserInputAnswer> = {};
 
   for (const question of questions) {
@@ -210,4 +223,4 @@ export function buildPendingUserInputAnswers(
   }
 
   return answers;
-}
+};

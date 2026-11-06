@@ -13,7 +13,7 @@ import { errorText } from "./errors";
  * "Steer now" to put it into the running turn instead. A steer the harness
  * rejects comes back here as queued, marked so people know it didn't land.
  */
-export function QueueStrip({
+export const QueueStrip = ({
   pane,
   names,
   offline,
@@ -21,30 +21,44 @@ export function QueueStrip({
   pane: Pane;
   names: Names;
   offline: boolean;
-}) {
+}) => {
   const steer = useMutation(api.agent.steer);
   const [errors, setErrors] = useState<Record<string, string>>({});
   // Messages this tab has seen being steered. One that is queued again was rejected.
   const seenSteering = useRef(new Set<string>());
-  const waiting = pane.messages.filter(isWaiting).sort((a, b) => a.at - b.at);
+  const waiting = pane.messages
+    .filter(isWaiting)
+    .toSorted((a, b) => a.at - b.at);
   for (const m of waiting) {
-    if (m.delivery === "steering") seenSteering.current.add(m.id);
+    if (m.delivery === "steering") {
+      // oxlint-disable-next-line react/refs -- Collects, during render, the messages this tab has seen steering; state would cost an extra render per change.
+      seenSteering.current.add(m.id);
+    }
   }
   if (waiting.length === 0) {
     return null;
   }
 
-  const steerNow = async (messageId: (typeof waiting)[number]["id"]) => {
-    setErrors(({ [messageId]: _, ...rest }) => rest);
+  type MessageId = (typeof waiting)[number]["id"];
+
+  const showError = (messageId: MessageId, error: unknown) => {
+    setErrors((all) => ({ ...all, [messageId]: errorText(error) }));
+  };
+
+  const steerNow = async (messageId: MessageId) => {
+    setErrors((all) =>
+      Object.fromEntries(Object.entries(all).filter(([id]) => id !== messageId))
+    );
     try {
       await steer({ messageId });
     } catch (error) {
-      setErrors((all) => ({ ...all, [messageId]: errorText(error) }));
+      showError(messageId, error);
     }
   };
 
   return (
     <ul aria-label="Queued messages" className="space-y-1.5">
+      {/* oxlint-disable-next-line react/refs -- Reads the messages collected above, in the same render. */}
       {waiting.map((m) => {
         const rejected =
           m.delivery === "queued" && seenSteering.current.has(m.id);
@@ -69,21 +83,26 @@ export function QueueStrip({
               <p className="line-clamp-2 whitespace-pre-wrap">{m.body}</p>
               {rejected ? (
                 <p className="text-warning-foreground text-xs">
-                  Couldn't steer into the running turn, so it's still queued.
+                  Couldn&apos;t steer into the running turn, so it&apos;s still
+                  queued.
                 </p>
               ) : null}
-              {errors[m.id] ? (
+              {(errors[m.id] ?? "") === "" ? null : (
                 <p className="text-destructive-foreground text-xs">
                   {errors[m.id]}
                 </p>
-              ) : null}
+              )}
             </div>
             {m.delivery === "queued" ? (
               <Button
                 size="xs"
                 variant="outline"
                 disabled={offline}
-                onClick={() => void steerNow(m.id)}
+                onClick={() => {
+                  steerNow(m.id).catch((error_: unknown) => {
+                    showError(m.id, error_);
+                  });
+                }}
               >
                 Steer now
               </Button>
@@ -93,4 +112,4 @@ export function QueueStrip({
       })}
     </ul>
   );
-}
+};

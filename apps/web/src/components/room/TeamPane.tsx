@@ -1,6 +1,7 @@
 import { api } from "@atelier/backend/api";
 import type { Id } from "@atelier/backend/dataModel";
 import { useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { UsersIcon } from "lucide-react";
 
 import { Spinner } from "~/components/ui/spinner";
@@ -9,14 +10,44 @@ import type { Names } from "~/lib/room";
 
 import { TeamComposer } from "./TeamComposer";
 
+type TeamMessages = FunctionReturnType<typeof api.team.list>;
+
+const teamMessageItems = (messages: TeamMessages | undefined, names: Names) => {
+  if (messages === undefined) {
+    return (
+      <li className="flex justify-center py-6">
+        <Spinner size="md" tone="muted" />
+      </li>
+    );
+  }
+  if (messages.length === 0) {
+    return (
+      <li className="text-muted-foreground py-6 text-center text-sm">
+        Talk things over here before you answer the agent.
+      </li>
+    );
+  }
+  return messages.map((m) => (
+    <li key={m._id} className="text-sm">
+      <div className="text-muted-foreground text-xs">
+        <span className="text-foreground font-medium">
+          {names(m.authorParticipantId)}
+        </span>{" "}
+        · {formatTime(m.at)}
+      </div>
+      <p className="[overflow-wrap:anywhere] whitespace-pre-wrap">{m.body}</p>
+    </li>
+  ));
+};
+
 /** The humans-only chat. Nothing here ever reaches an agent. */
-export function TeamPane({
+export const TeamPane = ({
   roomId,
   names,
 }: {
   roomId: Id<"rooms">;
   names: Names;
-}) {
+}) => {
   const messages = useQuery(api.team.list, { roomId });
   const { scrollRef, contentRef } = useStickToBottom<
     HTMLDivElement,
@@ -29,7 +60,7 @@ export function TeamPane({
         <UsersIcon className="text-muted-foreground size-4" />
         <h2 className="text-sm font-medium">Team</h2>
         <span className="text-muted-foreground text-xs">
-          Agents can't see this.
+          Agents can&apos;t see this.
         </span>
       </header>
       <div
@@ -37,29 +68,7 @@ export function TeamPane({
         className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]"
       >
         <ol ref={contentRef} className="space-y-3 px-4 py-3">
-          {messages === undefined ? (
-            <li className="flex justify-center py-6">
-              <Spinner size="md" tone="muted" />
-            </li>
-          ) : messages.length === 0 ? (
-            <li className="text-muted-foreground py-6 text-center text-sm">
-              Talk things over here before you answer the agent.
-            </li>
-          ) : (
-            messages.map((m) => (
-              <li key={m._id} className="text-sm">
-                <div className="text-muted-foreground text-xs">
-                  <span className="text-foreground font-medium">
-                    {names(m.authorParticipantId)}
-                  </span>{" "}
-                  · {formatTime(m.at)}
-                </div>
-                <p className="[overflow-wrap:anywhere] whitespace-pre-wrap">
-                  {m.body}
-                </p>
-              </li>
-            ))
-          )}
+          {teamMessageItems(messages, names)}
         </ol>
       </div>
       <div className="border-t p-3">
@@ -67,4 +76,4 @@ export function TeamPane({
       </div>
     </section>
   );
-}
+};

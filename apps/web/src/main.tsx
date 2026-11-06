@@ -16,12 +16,18 @@ declare module "@tanstack/react-router" {
 }
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
-const applyAppearance = () =>
+const applyAppearance = () => {
   document.documentElement.classList.toggle("dark", darkQuery.matches);
+};
 applyAppearance();
 darkQuery.addEventListener("change", applyAppearance);
 
-createRoot(document.querySelector("#root") as HTMLElement).render(
+const rootElement = document.querySelector("#root");
+if (!(rootElement instanceof HTMLElement)) {
+  throw new TypeError("index.html has no #root element to render into");
+}
+
+createRoot(rootElement).render(
   <StrictMode>
     <ClerkShell>
       <RouterProvider router={router} />

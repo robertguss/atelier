@@ -23,32 +23,14 @@ import {
   Title,
 } from "@/components/ui";
 
-export default function Home() {
-  const { isLoaded, isSignedIn } = useAuth();
-  const { isAuthenticated } = useConvexAuth();
+const describeError = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
 
-  if (!isLoaded) {
-    return (
-      <Centered>
-        <ActivityIndicator />
-      </Centered>
-    );
-  }
-  if (!isSignedIn) {
-    return <SignIn />;
-  }
-  if (!isAuthenticated) {
-    return (
-      <Centered>
-        <ActivityIndicator />
-        <Body>Connecting to Convex…</Body>
-      </Centered>
-    );
-  }
-  return <SignedIn />;
-}
+const logFailure = (what: string) => (error: unknown) => {
+  console.error(`${what} failed`, error);
+};
 
-function SignIn() {
+const SignIn = () => {
   const { startHostedAuth } = useHostedAuth();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -59,10 +41,13 @@ function SignIn() {
     try {
       await startHostedAuth({ mode: "sign-in" });
     } catch (error_) {
-      setError(error_ instanceof Error ? error_.message : String(error_));
-    } finally {
-      setBusy(false);
+      setError(describeError(error_));
     }
+    setBusy(false);
+  };
+
+  const showError = (error_: unknown) => {
+    setError(describeError(error_));
   };
 
   return (
@@ -71,92 +56,60 @@ function SignIn() {
       <Body>A room where you and your models work together.</Body>
       <Button
         label={busy ? "Opening…" : "Sign in"}
-        onPress={signIn}
+        onPress={() => {
+          signIn().catch(showError);
+        }}
         disabled={busy}
       />
-      {error && <Body style={{ color: "#d33" }}>{error}</Body>}
+      {error !== null && error !== "" ? (
+        <Body style={{ color: "#d33" }}>{error}</Body>
+      ) : null}
     </Centered>
   );
-}
+};
 
-function SignedIn() {
-  const { signOut } = useClerk();
-  const me = useQuery(api.me.get);
-  const ensureUser = useMutation(api.users.ensure);
-  // The user row links the owner to rooms made before memberships existed.
-  // Until it exists the room list is empty, so rooms wait for it.
-  const [ensured, setEnsured] = useState(false);
-  const [ensureError, setEnsureError] = useState<string | null>(null);
+const useNow = (intervalMs: number) => {
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    let live = true;
-    ensureUser().then(
-      () => {
-        if (live) {
-          setEnsured(true);
-        }
-      },
-      (error: unknown) => {
-        if (live)
-          setEnsureError(
-            error instanceof Error ? error.message : String(error)
-          );
-      }
-    );
+    const id = setInterval(() => {
+      setNow(Date.now());
+    }, intervalMs);
     return () => {
-      live = false;
+      clearInterval(id);
     };
-  }, [ensureUser]);
-  const isOwner = me?.signedIn === true && me.isOwner;
+  }, [intervalMs]);
+  return now;
+};
 
-  if (ensureError) {
-    return (
-      <Centered>
-        <Body style={{ color: "#d33" }}>{ensureError}</Body>
-        <Button label="Sign out" onPress={async () => signOut()} />
-      </Centered>
-    );
-  }
-  if (me === undefined || !ensured) {
-    return (
-      <Centered>
-        <ActivityIndicator />
-      </Centered>
-    );
-  }
-  if (!isOwner) {
-    return (
-      <Centered>
-        <Body>
-          {me.signedIn
-            ? `${me.email ?? "This account"} is not the Atelier owner.`
-            : "Not signed in."}
-        </Body>
-        <Button label="Sign out" onPress={async () => signOut()} />
-      </Centered>
-    );
-  }
-
+const Runners = () => {
+  const runners = useQuery(api.runners.list);
+  const now = useNow(15_000);
   return (
-    <ScrollView
-      contentInsetAdjustmentBehavior="automatic"
-      contentContainerStyle={styles.scroll}
-    >
-      <Rooms />
-      <Runners />
-      <PushReadiness />
-      <Section title="You">
-        <Body>{me.email ?? me.name}</Body>
-        <Button
-          label="Sign out"
-          kind="secondary"
-          onPress={async () => signOut()}
-        />
-      </Section>
-    </ScrollView>
+    <Section title="Runners">
+      {runners === undefined && <ActivityIndicator />}
+      {runners?.length === 0 && <Muted>No runners have checked in yet.</Muted>}
+      {runners?.map((r) => (
+        <View key={r._id} style={{ gap: 2 }}>
+          <Body style={{ fontWeight: "600" }}>
+            {r.name} · {now - r.lastHeartbeatAt < 60_000 ? "online" : "offline"}
+          </Body>
+          <Muted style={{ fontSize: 14 }}>
+            {r.harnesses.map((h) => `${h.id} ${h.version}`).join(" · ")}
+          </Muted>
+        </View>
+      ))}
+    </Section>
   );
-}
+};
 
-function Rooms() {
+const styles = StyleSheet.create({
+  card: { borderRadius: 12, gap: 2, padding: 14 },
+  form: { gap: 10 },
+  row: { flexDirection: "row", gap: 10 },
+  scroll: { gap: 28, padding: 20 },
+});
+
+const Rooms = () => {
   const rooms = useQuery(api.rooms.list);
   const runners = useQuery(api.runners.list);
   const createRoom = useMutation(api.rooms.create);
@@ -193,7 +146,7 @@ function Rooms() {
         >
           <Body style={{ fontWeight: "600" }}>
             {room.name}
-            {room.readyReviews
+            {(room.readyReviews ?? 0) > 0
               ? ` · ${room.readyReviews} completed reviews`
               : ""}
           </Body>
@@ -229,7 +182,9 @@ function Rooms() {
             <View style={{ flex: 1 }}>
               <Button
                 label="Create"
-                onPress={submit}
+                onPress={() => {
+                  submit().catch(logFailure("Creating the room"));
+                }}
                 disabled={!runner || !name.trim()}
               />
             </View>
@@ -246,45 +201,118 @@ function Rooms() {
       )}
     </Section>
   );
-}
+};
 
-function Runners() {
-  const runners = useQuery(api.runners.list);
-  const now = useNow(15_000);
-  return (
-    <Section title="Runners">
-      {runners === undefined && <ActivityIndicator />}
-      {runners?.length === 0 && <Muted>No runners have checked in yet.</Muted>}
-      {runners?.map((r) => (
-        <View key={r._id} style={{ gap: 2 }}>
-          <Body style={{ fontWeight: "600" }}>
-            {r.name} · {now - r.lastHeartbeatAt < 60_000 ? "online" : "offline"}
-          </Body>
-          <Muted style={{ fontSize: 14 }}>
-            {r.harnesses.map((h) => `${h.id} ${h.version}`).join(" · ")}
-          </Muted>
-        </View>
-      ))}
-    </Section>
-  );
-}
-
-function useNow(intervalMs: number) {
-  const [now, setNow] = useState(() => Date.now());
+const SignedIn = () => {
+  const { signOut } = useClerk();
+  const me = useQuery(api.me.get);
+  const ensureUser = useMutation(api.users.ensure);
+  // The user row links the owner to rooms made before memberships existed.
+  // Until it exists the room list is empty, so rooms wait for it.
+  const [ensured, setEnsured] = useState(false);
+  const [ensureError, setEnsureError] = useState<string | null>(null);
   useEffect(() => {
-    const id = setInterval(() => {
-      setNow(Date.now());
-    }, intervalMs);
-    return () => {
-      clearInterval(id);
+    let live = true;
+    const ensureThenShow = async () => {
+      await ensureUser();
+      if (live) {
+        setEnsured(true);
+      }
     };
-  }, [intervalMs]);
-  return now;
-}
+    ensureThenShow().catch((error_: unknown) => {
+      if (live) {
+        setEnsureError(describeError(error_));
+      }
+    });
+    return () => {
+      live = false;
+    };
+  }, [ensureUser]);
+  const isOwner = me?.signedIn === true && me.isOwner;
 
-const styles = StyleSheet.create({
-  card: { borderRadius: 12, gap: 2, padding: 14 },
-  form: { gap: 10 },
-  row: { flexDirection: "row", gap: 10 },
-  scroll: { gap: 28, padding: 20 },
-});
+  if (ensureError !== null && ensureError !== "") {
+    return (
+      <Centered>
+        <Body style={{ color: "#d33" }}>{ensureError}</Body>
+        <Button
+          label="Sign out"
+          onPress={() => {
+            signOut().catch(logFailure("Sign out"));
+          }}
+        />
+      </Centered>
+    );
+  }
+  if (me === undefined || !ensured) {
+    return (
+      <Centered>
+        <ActivityIndicator />
+      </Centered>
+    );
+  }
+  if (!isOwner) {
+    return (
+      <Centered>
+        <Body>
+          {me.signedIn
+            ? `${me.email ?? "This account"} is not the Atelier owner.`
+            : "Not signed in."}
+        </Body>
+        <Button
+          label="Sign out"
+          onPress={() => {
+            signOut().catch(logFailure("Sign out"));
+          }}
+        />
+      </Centered>
+    );
+  }
+
+  return (
+    <ScrollView
+      contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={styles.scroll}
+    >
+      <Rooms />
+      <Runners />
+      <PushReadiness />
+      <Section title="You">
+        <Body>{me.email ?? me.name}</Body>
+        <Button
+          label="Sign out"
+          kind="secondary"
+          onPress={() => {
+            signOut().catch(logFailure("Sign out"));
+          }}
+        />
+      </Section>
+    </ScrollView>
+  );
+};
+
+const Home = () => {
+  const { isLoaded, isSignedIn } = useAuth();
+  const { isAuthenticated } = useConvexAuth();
+
+  if (!isLoaded) {
+    return (
+      <Centered>
+        <ActivityIndicator />
+      </Centered>
+    );
+  }
+  if (!isSignedIn) {
+    return <SignIn />;
+  }
+  if (!isAuthenticated) {
+    return (
+      <Centered>
+        <ActivityIndicator />
+        <Body>Connecting to Convex…</Body>
+      </Centered>
+    );
+  }
+  return <SignedIn />;
+};
+
+export default Home;

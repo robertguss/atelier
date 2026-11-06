@@ -87,7 +87,13 @@ interface ButtonProps extends useRender.ComponentProps<"button"> {
   size?: ButtonSize;
 }
 
-function Button({ className, variant, size, render, ...props }: ButtonProps) {
+const Button = ({
+  className,
+  variant,
+  size,
+  render,
+  ...props
+}: ButtonProps) => {
   const typeValue: React.ButtonHTMLAttributes<HTMLButtonElement>["type"] =
     render ? undefined : "button";
 
@@ -102,7 +108,7 @@ function Button({ className, variant, size, render, ...props }: ButtonProps) {
     props: mergeProps<"button">(defaultProps, props),
     render,
   });
-}
+};
 
 export { Button, buttonVariants, type ButtonSize, type ButtonVariant };
 
@@ -125,14 +131,14 @@ const inlineButtonVariants = cva(
   }
 );
 
-export function InlineButton({
+export const InlineButton = ({
   className,
   tone,
   touchTarget,
   render,
   ...props
 }: useRender.ComponentProps<"button"> &
-  VariantProps<typeof inlineButtonVariants>) {
+  VariantProps<typeof inlineButtonVariants>) => {
   const defaultProps = {
     className: cn(inlineButtonVariants({ tone, touchTarget }), className),
     "data-slot": "inline-button",
@@ -143,4 +149,4 @@ export function InlineButton({
     props: mergeProps<"button">(defaultProps, props),
     render,
   });
-}
+};

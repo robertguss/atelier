@@ -8,10 +8,10 @@ import { render } from "@testing-library/react";
 import { routeTree } from "~/routeTree.gen";
 
 // Renders the real route tree at `path`, so route params and navigation are exercised.
-export function renderAt(path: string) {
+export const renderAt = (path: string) => {
   const router = createRouter({
     history: createMemoryHistory({ initialEntries: [path] }),
     routeTree,
   });
   return { router, ...render(<RouterProvider router={router} />) };
-}
+};
