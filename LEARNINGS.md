@@ -227,8 +227,10 @@ How to set up and run shared rooms is in [docs/shared-rooms.md](docs/shared-room
 - Codex runs project hooks (`.codex/hooks.json`) only after the repo's
   `.codex/` folder is trusted in Codex. Do this once per machine. Start agent
   sessions at the repo root so the post-edit hook covers every file.
-- Atelier room turns that run Claude Code or Codex in this repo can also
-  trigger the post-edit fix hook. This has not been checked in a live room
-  yet. Claude review turns have no edit tools. Codex review turns may still
-  attempt `apply_patch`, which the read-only sandbox rejects, so check that
-  a rejected patch never produces a hook fix or error in a sealed answer.
+- The runner sets `ATELIER_ROOM_TURN=1` for every harness it starts, and the
+  post-edit hooks in `.claude/settings.json` and `.codex/hooks.json` skip
+  themselves when it is set. Without that, a room agent with edits on could
+  write `node_modules/.bin/ultracite` or `oxlint.config.mts` and have the hook
+  run it outside the runner's permission checks. Keep the guard inside the
+  hook command (those folders are protected from room edits), not in a script
+  a room agent could rewrite.

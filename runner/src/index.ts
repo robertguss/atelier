@@ -31,6 +31,10 @@ const secret = mustEnv("ATELIER_RUNNER_SECRET");
 // Agents run as child processes and inherit this environment, so keep the
 // secret out of it. An agent with full reach can still read runner/.env.local.
 delete process.env.ATELIER_RUNNER_SECRET;
+// The repo's post-edit lint hooks skip themselves when this is set. Otherwise a
+// room agent could write a file those hooks execute (a node_modules binary or
+// a lint config) and run code outside the runner's permission checks.
+process.env.ATELIER_ROOM_TURN = "1";
 const name = process.env.ATELIER_RUNNER_NAME ?? hostname();
 
 const client = new ConvexClient(convexUrl);
