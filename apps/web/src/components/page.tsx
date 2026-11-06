@@ -57,7 +57,11 @@ export function SignInScreen({
 
 export function SignedInOnly({ children }: { children: ReactNode }) {
   const { isLoading, isAuthenticated } = useConvexAuth();
-  if (isLoading) return <PageSpinner />;
-  if (!isAuthenticated) return <SignInScreen title="Sign in to Atelier" />;
+  if (isLoading) {
+    return <PageSpinner />;
+  }
+  if (!isAuthenticated) {
+    return <SignInScreen title="Sign in to Atelier" />;
+  }
   return <>{children}</>;
 }

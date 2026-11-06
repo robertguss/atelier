@@ -36,20 +36,20 @@ export const commandType = v.union(
 // One question on a card. `id` is the harness's own question id, or any id
 // the runner chooses that is unique on the card.
 export const cardQuestion = v.object({
-  id: v.string(),
+  allowFreeText: v.boolean(),
   header: v.string(),
-  text: v.string(),
+  id: v.string(),
+  multiSelect: v.boolean(),
   options: v.array(
     v.object({ label: v.string(), description: v.optional(v.string()) })
   ),
-  multiSelect: v.boolean(),
-  allowFreeText: v.boolean(),
+  text: v.string(),
 });
 
 export const cardAnswer = v.object({
-  questionId: v.string(),
-  labels: v.array(v.string()),
   freeText: v.optional(v.string()),
+  labels: v.array(v.string()),
+  questionId: v.string(),
 });
 
 export default defineSchema({
@@ -60,28 +60,28 @@ export default defineSchema({
     harnesses: v.array(v.object({ id: harnessId, version: v.string() })),
     // Kept apart from `harnesses`, which every heartbeat replaces.
     harnessCapabilities: v.optional(
-      v.array(v.object({ id: harnessId, canRaiseCards: v.boolean() }))
+      v.array(v.object({ canRaiseCards: v.boolean(), id: harnessId }))
     ),
   }).index("by_name", ["name"]),
 
   // One row per signed-in person, keyed on Clerk's tokenIdentifier so a
   // changed email address does not split or merge accounts.
   users: defineTable({
-    tokenIdentifier: v.string(),
     email: v.optional(v.string()),
     name: v.optional(v.string()),
+    tokenIdentifier: v.string(),
   }).index("by_token", ["tokenIdentifier"]),
 
   // Room membership is separate from participants, so removing someone ends
   // their access without touching the authorship of what they wrote.
   roomMembers: defineTable({
+    noticeAcceptedAt: v.optional(v.number()),
+    noticeVersion: v.optional(v.number()),
+    participantId: v.id("participants"),
+    removedAt: v.optional(v.number()),
+    role: v.union(v.literal("owner"), v.literal("member")),
     roomId: v.id("rooms"),
     userId: v.id("users"),
-    role: v.union(v.literal("owner"), v.literal("member")),
-    participantId: v.id("participants"),
-    noticeVersion: v.optional(v.number()),
-    noticeAcceptedAt: v.optional(v.number()),
-    removedAt: v.optional(v.number()),
   })
     .index("by_room", ["roomId"])
     .index("by_user", ["userId"])
@@ -90,20 +90,20 @@ export default defineSchema({
   // An invite is for one room and one email address. Only a hash of the
   // token is stored; the token itself lives in the invite link.
   roomInvites: defineTable({
-    roomId: v.id("rooms"),
+    acceptedAt: v.optional(v.number()),
+    acceptedByUserId: v.optional(v.id("users")),
+    clerkInvitationId: v.optional(v.string()),
     email: v.string(),
-    tokenHash: v.string(),
     expiresAt: v.number(),
+    revokedAt: v.optional(v.number()),
+    roomId: v.id("rooms"),
     status: v.union(
       v.literal("pending"),
       v.literal("accepted"),
       v.literal("revoked"),
       v.literal("expired")
     ),
-    clerkInvitationId: v.optional(v.string()),
-    acceptedByUserId: v.optional(v.id("users")),
-    acceptedAt: v.optional(v.number()),
-    revokedAt: v.optional(v.number()),
+    tokenHash: v.string(),
   })
     .index("by_room", ["roomId"])
     .index("by_token_hash", ["tokenHash"]),
@@ -119,13 +119,13 @@ export default defineSchema({
   }),
 
   participants: defineTable({
-    roomId: v.id("rooms"),
-    kind: v.union(v.literal("human"), v.literal("harness")),
+    displayName: v.string(),
     harness: v.optional(harnessId),
+    harnessSessionId: v.optional(v.string()),
+    kind: v.union(v.literal("human"), v.literal("harness")),
     model: v.optional(v.string()),
     reasoning: v.optional(v.string()),
-    displayName: v.string(),
-    harnessSessionId: v.optional(v.string()),
+    roomId: v.id("rooms"),
     userId: v.optional(v.id("users")),
   }).index("by_room", ["roomId"]),
 
@@ -150,7 +150,7 @@ export default defineSchema({
     deliveredTurnId: v.optional(v.id("turns")),
     // Set while a steer is in flight to a running turn.
     steering: v.optional(
-      v.object({ turnId: v.id("turns"), commandId: v.id("commands") })
+      v.object({ commandId: v.id("commands"), turnId: v.id("turns") })
     ),
     cancelReason: v.optional(v.string()),
   })
@@ -161,10 +161,10 @@ export default defineSchema({
   // Humans-only chat. A separate table so nothing that reads agent messages
   // or builds prompts can reach it. Posts cannot be edited or deleted.
   teamMessages: defineTable({
-    roomId: v.id("rooms"),
-    authorUserId: v.id("users"),
     authorParticipantId: v.id("participants"),
+    authorUserId: v.id("users"),
     body: v.string(),
+    roomId: v.id("rooms"),
   }).index("by_room", ["roomId"]),
 
   turns: defineTable({
@@ -185,9 +185,9 @@ export default defineSchema({
     finalText: v.optional(v.string()),
     usage: v.optional(
       v.object({
+        costUsd: v.optional(v.number()),
         inputTokens: v.number(),
         outputTokens: v.number(),
-        costUsd: v.optional(v.number()),
       })
     ),
     transcriptRef: v.optional(v.string()),
@@ -201,8 +201,8 @@ export default defineSchema({
     // active teammate, so the turn ran on the review's own session.
     followUp: v.optional(
       v.object({
-        ritualId: v.id("rituals"),
         decisionId: v.optional(v.id("decisions")),
+        ritualId: v.id("rituals"),
         separateSession: v.optional(v.boolean()),
       })
     ),
@@ -223,19 +223,19 @@ export default defineSchema({
   // A turn's streamed text, one row per turn. Kept apart from the turn so the
   // runner's twice-a-second writes only reach the query for active turns.
   turnStreams: defineTable({
-    turnId: v.id("turns"),
     text: v.string(),
+    turnId: v.id("turns"),
   }).index("by_turn", ["turnId"]),
 
   // An agent's tool activity during a turn, one row per tool call: its name
   // and a one-line summary. Raw output stays on the runner's disk.
   turnItems: defineTable({
-    turnId: v.id("turns"),
     callId: v.string(),
-    seq: v.number(),
     name: v.string(),
-    summary: v.string(),
     ok: v.optional(v.boolean()),
+    seq: v.number(),
+    summary: v.string(),
+    turnId: v.id("turns"),
   }).index("by_turn_call", ["turnId", "callId"]),
 
   rituals: defineTable({
@@ -275,17 +275,17 @@ export default defineSchema({
   }).index("by_ritual", ["ritualId"]),
 
   takeaways: defineTable({
-    ritualId: v.id("rituals"),
-    body: v.string(),
     authorParticipantId: v.id("participants"),
+    body: v.string(),
+    ritualId: v.id("rituals"),
   }).index("by_ritual", ["ritualId"]),
 
   cruxes: defineTable({
+    authorParticipantId: v.id("participants"),
+    options: v.array(v.string()),
     ritualId: v.id("rituals"),
     roomId: v.id("rooms"),
     statement: v.string(),
-    options: v.array(v.string()),
-    authorParticipantId: v.id("participants"),
   }).index("by_ritual", ["ritualId"]),
 
   decisions: defineTable({
@@ -350,23 +350,23 @@ export default defineSchema({
     .index("by_status_lease", ["status", "leaseExpiresAt"]),
 
   ledger: defineTable({
-    roomId: v.optional(v.id("rooms")),
-    type: v.string(),
     actorParticipantId: v.optional(v.id("participants")),
-    subjectId: v.optional(v.string()),
-    parentLedgerId: v.optional(v.id("ledger")),
-    provider: v.optional(v.string()),
-    model: v.optional(v.string()),
-    harnessVersion: v.optional(v.string()),
-    payload: v.optional(v.any()),
     at: v.number(),
+    harnessVersion: v.optional(v.string()),
+    model: v.optional(v.string()),
+    parentLedgerId: v.optional(v.id("ledger")),
+    payload: v.optional(v.any()),
+    provider: v.optional(v.string()),
+    roomId: v.optional(v.id("rooms")),
+    subjectId: v.optional(v.string()),
+    type: v.string(),
   })
     .index("by_room", ["roomId"])
     .index("by_room_type", ["roomId", "type", "subjectId"]),
 
   pushTokens: defineTable({
-    userSubject: v.string(),
-    token: v.string(),
     platform: v.string(),
+    token: v.string(),
+    userSubject: v.string(),
   }).index("by_user", ["userSubject"]),
 });

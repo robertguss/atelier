@@ -11,8 +11,12 @@ export function visibleMessage(
   isOwner: boolean,
   { ownerSeesReviewAnswers }: { ownerSeesReviewAnswers: boolean }
 ) {
-  if (m.visibility !== "room") return false;
-  if (m.ritualId) return isOwner && ownerSeesReviewAnswers;
+  if (m.visibility !== "room") {
+    return false;
+  }
+  if (m.ritualId) {
+    return isOwner && ownerSeesReviewAnswers;
+  }
   return isOwner || !m.followUpRitualId;
 }
 

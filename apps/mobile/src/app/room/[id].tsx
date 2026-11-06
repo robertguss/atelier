@@ -45,18 +45,20 @@ export default function Room() {
   const listRef = useRef<FlatList>(null);
   const stickToBottom = useRef(true);
 
-  if (data === undefined || timeline === undefined || me === undefined)
+  if (data === undefined || timeline === undefined || me === undefined) {
     return (
       <Centered>
         <ActivityIndicator />
       </Centered>
     );
-  if (data === null)
+  }
+  if (data === null) {
     return (
       <Centered>
         <Body>Room not found.</Body>
       </Centered>
     );
+  }
 
   const names = new Map(data.participants.map((p) => [p._id, p]));
   const myUserId = me.signedIn ? me.userId : null;
@@ -72,15 +74,15 @@ export default function Room() {
   return (
     <>
       <Stack.Screen
-        options={{ title: data.room.name, headerLargeTitle: false }}
+        options={{ headerLargeTitle: false, title: data.room.name }}
       />
       <View
         ref={containerRef}
         style={{ flex: 1 }}
         onLayout={() =>
-          containerRef.current?.measureInWindow((_x: number, y: number) =>
-            setOffset(y)
-          )
+          containerRef.current?.measureInWindow((_x: number, y: number) => {
+            setOffset(y);
+          })
         }
       >
         <KeyboardAvoidingView
@@ -118,12 +120,14 @@ export default function Room() {
               stickToBottom.current = fromBottom < 120;
             }}
             onContentSizeChange={() => {
-              if (stickToBottom.current)
+              if (stickToBottom.current) {
                 listRef.current?.scrollToEnd({ animated: false });
+              }
             }}
             onLayout={() => {
-              if (stickToBottom.current)
+              if (stickToBottom.current) {
                 listRef.current?.scrollToEnd({ animated: false });
+              }
             }}
             ListEmptyComponent={
               <Muted style={styles.empty}>
@@ -164,7 +168,7 @@ export default function Room() {
             decisionId={decisionId}
             onReview={() => {
               stickToBottom.current = false;
-              listRef.current?.scrollToOffset({ offset: 0, animated: true });
+              listRef.current?.scrollToOffset({ animated: true, offset: 0 });
             }}
             participants={data.participants.filter((p) => p.kind === "harness")}
             waitingAgents={waitingAgents}
@@ -181,9 +185,12 @@ export default function Room() {
 function deliveryNote(
   m: { delivery: string | null; cancelReason: string | null } | undefined
 ) {
-  if (m?.delivery === "queued" || m?.delivery === "steering") return "Queued";
-  if (m?.delivery === "cancelled")
+  if (m?.delivery === "queued" || m?.delivery === "steering") {
+    return "Queued";
+  }
+  if (m?.delivery === "cancelled") {
     return `Not sent${m.cancelReason ? `: ${m.cancelReason}` : ""}`;
+  }
   return null;
 }
 
@@ -266,7 +273,9 @@ function LiveTurn({
           <Pressable
             accessibilityRole="button"
             onPress={() => {
-              void cancel({ turnId }).catch((e) => setCancelError(String(e)));
+              void cancel({ turnId }).catch((error_) => {
+                setCancelError(String(error_));
+              });
             }}
           >
             <Text style={{ color: colors.primary }}>Cancel</Text>
@@ -320,22 +329,24 @@ function Composer({
 
   const submit = async () => {
     const body = text.trim();
-    if (!body || sending) return;
+    if (!body || sending) {
+      return;
+    }
     setSending(true);
     try {
       onSent();
       await send({
-        roomId,
         body,
-        toParticipantId: target?._id,
         decisionId,
         reviewTurnId:
           target?._id === initialParticipantId ? reviewTurnId : undefined,
+        roomId,
+        toParticipantId: target?._id,
       });
       setText("");
       setError("");
-    } catch (e) {
-      setError(errorReason(e));
+    } catch (error_) {
+      setError(errorReason(error_));
     } finally {
       setSending(false);
     }
@@ -348,7 +359,12 @@ function Composer({
           <Body>Review</Body>
         </Pressable>
         {participants.map((p) => (
-          <Pressable key={p._id} onPress={() => setSelected(p._id)}>
+          <Pressable
+            key={p._id}
+            onPress={() => {
+              setSelected(p._id);
+            }}
+          >
             <Body style={{ fontWeight: target?._id === p._id ? "700" : "400" }}>
               {p.displayName}
             </Body>
@@ -361,10 +377,10 @@ function Composer({
               key={h}
               onPress={async () => {
                 try {
-                  setSelected(await add({ roomId, harness: h }));
+                  setSelected(await add({ harness: h, roomId }));
                   setError("");
-                } catch (e) {
-                  setError(String(e));
+                } catch (error_) {
+                  setError(String(error_));
                 }
               }}
             >
@@ -388,7 +404,7 @@ function Composer({
         </Muted>
       ) : null}
       {error ? (
-        <Body style={{ paddingHorizontal: 12, color: "#d33" }}>{error}</Body>
+        <Body style={{ color: "#d33", paddingHorizontal: 12 }}>{error}</Body>
       ) : null}
       <View
         style={[
@@ -407,7 +423,7 @@ function Composer({
           multiline
           style={[
             styles.input,
-            { color: colors.text, backgroundColor: colors.card },
+            { backgroundColor: colors.card, color: colors.text },
           ]}
         />
         <Pressable
@@ -440,11 +456,15 @@ function useKeyboardOpen() {
   useEffect(() => {
     const show = Keyboard.addListener(
       Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
-      () => setOpen(true)
+      () => {
+        setOpen(true);
+      }
     );
     const hide = Keyboard.addListener(
       Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
-      () => setOpen(false)
+      () => {
+        setOpen(false);
+      }
     );
     return () => {
       show.remove();
@@ -457,43 +477,43 @@ function useKeyboardOpen() {
 const PLACEHOLDER = "#8e8e93";
 
 const styles = StyleSheet.create({
-  list: { padding: 14, gap: 12 },
-  empty: { textAlign: "center", padding: 24 },
-  bubbleWrap: { maxWidth: "88%", gap: 4 },
-  left: { alignSelf: "flex-start" },
-  right: { alignSelf: "flex-end" },
   author: { fontSize: 12, marginLeft: 4 },
-  noteMine: { fontSize: 12, alignSelf: "flex-end", marginRight: 4 },
   bubble: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
     borderRadius: 18,
     gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
   },
   bubbleText: { fontSize: 16, lineHeight: 22 },
+  bubbleWrap: { gap: 4, maxWidth: "88%" },
   composer: {
-    flexDirection: "row",
     alignItems: "flex-end",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
     gap: 8,
     paddingHorizontal: 12,
     paddingTop: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
   },
+  empty: { padding: 24, textAlign: "center" },
   input: {
+    borderRadius: 20,
     flex: 1,
     fontSize: 16,
     maxHeight: 140,
+    paddingBottom: 10,
     paddingHorizontal: 14,
     paddingTop: 10,
-    paddingBottom: 10,
-    borderRadius: 20,
   },
+  left: { alignSelf: "flex-start" },
+  list: { gap: 12, padding: 14 },
+  noteMine: { alignSelf: "flex-end", fontSize: 12, marginRight: 4 },
+  right: { alignSelf: "flex-end" },
   send: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
     alignItems: "center",
+    borderRadius: 19,
+    height: 38,
     justifyContent: "center",
+    width: 38,
   },
   sendLabel: { color: "white", fontSize: 20, fontWeight: "700" },
 });

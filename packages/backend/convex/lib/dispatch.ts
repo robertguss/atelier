@@ -29,7 +29,9 @@ export async function requireRunnerOnline(
   room: Doc<"rooms"> | null
 ): Promise<Doc<"rooms">> {
   const runner = room ? await ctx.db.get(room.runnerId) : null;
-  if (!room || !runnerOnline(runner)) throw new Error(offlineReason(runner));
+  if (!room || !runnerOnline(runner)) {
+    throw new Error(offlineReason(runner));
+  }
   return room;
 }
 
@@ -41,7 +43,7 @@ export async function activeOrdinaryTurn(
   ctx: QueryCtx,
   participantId: Id<"participants">
 ) {
-  const oldest = (status: "queued" | "running") =>
+  const oldest = async (status: "queued" | "running") =>
     ctx.db
       .query("turns")
       .withIndex("by_participant_status", (q) =>
@@ -51,17 +53,22 @@ export async function activeOrdinaryTurn(
       .first();
   const queued = await oldest("queued");
   const running = await oldest("running");
-  if (queued && running)
+  if (queued && running) {
     return queued._creationTime < running._creationTime ? queued : running;
+  }
   return queued ?? running;
 }
 
 // A steer still in flight waits for the runner's verdict. Once its turn has
 // ended and the runner is no longer holding it, the message counts as queued.
 async function steerIsStale(ctx: QueryCtx, message: Doc<"messages">) {
-  if (!message.steering) return true;
+  if (!message.steering) {
+    return true;
+  }
   const turn = await ctx.db.get(message.steering.turnId);
-  if (turn && isActiveTurnStatus(turn.status)) return false;
+  if (turn && isActiveTurnStatus(turn.status)) {
+    return false;
+  }
   const command = await ctx.db.get(message.steering.commandId);
   return (
     !command || command.status === "pending" || command.status === "failed"
@@ -72,7 +79,7 @@ async function waitingMessages(
   ctx: QueryCtx,
   participantId: Id<"participants">
 ) {
-  const byState = (delivery: "queued" | "steering") =>
+  const byState = async (delivery: "queued" | "steering") =>
     ctx.db
       .query("messages")
       .withIndex("by_to_delivery", (q) =>
@@ -81,8 +88,9 @@ async function waitingMessages(
       .collect();
   const queued = await byState("queued");
   const stale = [];
-  for (const m of await byState("steering"))
+  for (const m of await byState("steering")) {
     if (await steerIsStale(ctx, m)) stale.push(m);
+  }
   return [...queued, ...stale].sort(
     (a, b) => a._creationTime - b._creationTime
   );
@@ -95,16 +103,16 @@ export async function cancelMessage(
   actorParticipantId?: Id<"participants">
 ) {
   await ctx.db.patch(message._id, {
-    delivery: "cancelled",
     cancelReason: reason,
+    delivery: "cancelled",
     steering: undefined,
   });
   await record(ctx, {
-    roomId: message.roomId,
-    type: "message.cancelled",
     actorParticipantId,
-    subjectId: message._id,
     payload: { reason },
+    roomId: message.roomId,
+    subjectId: message._id,
+    type: "message.cancelled",
   });
 }
 
@@ -116,15 +124,23 @@ export async function dispatchNext(
   participantId: Id<"participants">
 ): Promise<Id<"turns"> | null> {
   const participant = await ctx.db.get(participantId);
-  if (!participant || participant.kind !== "harness") return null;
-  if (await activeOrdinaryTurn(ctx, participantId)) return null;
+  if (!participant || participant.kind !== "harness") {
+    return null;
+  }
+  if (await activeOrdinaryTurn(ctx, participantId)) {
+    return null;
+  }
   const waiting = await waitingMessages(ctx, participantId);
-  if (waiting.length === 0) return null;
+  if (waiting.length === 0) {
+    return null;
+  }
 
   const room = await ctx.db.get(participant.roomId);
   const runner = room ? await ctx.db.get(room.runnerId) : null;
   if (!room || !runnerOnline(runner)) {
-    for (const m of waiting) await cancelMessage(ctx, m, "runner offline");
+    for (const m of waiting) {
+      await cancelMessage(ctx, m, "runner offline");
+    }
     return null;
   }
 
@@ -134,8 +150,9 @@ export async function dispatchNext(
     : takeWhile(waiting, (m) => !m.followUpRitualId);
   const members = await roomMembers(ctx, room._id);
   const messages = [];
-  for (const m of batch)
+  for (const m of batch) {
     messages.push(await renderMessage(ctx, m, "queued", members));
+  }
   const previous = await ctx.db
     .query("turns")
     .withIndex("by_participant", (q) => q.eq("participantId", participantId))
@@ -148,50 +165,52 @@ export async function dispatchNext(
       : null;
   const prompt = turnPrompt({
     context: contextBlock(await loadRoomContext(ctx, room, members)),
-    stoppedBy: stopper?.displayName,
     messages,
+    stoppedBy: stopper?.displayName,
   });
 
   const turnId = await ctx.db.insert("turns", {
-    roomId: room._id,
-    participantId,
-    status: "queued",
-    prompt,
+    editsEnabled: room.editsEnabled === true,
     followUp: first.followUpRitualId
       ? {
           ritualId: first.followUpRitualId,
           decisionId: first.followUpDecisionId,
         }
       : undefined,
+    participantId,
+    prompt,
     requestedByParticipantIds: [
       ...new Set(batch.map((m) => m.authorParticipantId)),
     ],
-    editsEnabled: room.editsEnabled === true,
+    roomId: room._id,
+    status: "queued",
   });
   await ctx.db.insert("commands", {
     runnerId: room.runnerId,
-    type: "run_turn",
-    turnId,
     status: "pending",
+    turnId,
+    type: "run_turn",
   });
   const messageLedgerIds = [];
   for (const m of batch) {
     await ctx.db.patch(m._id, {
-      delivery: "delivered",
       deliveredTurnId: turnId,
+      delivery: "delivered",
       steering: undefined,
     });
     const posted = await findLedger(ctx, m.roomId, "message.posted", m._id);
-    if (posted) messageLedgerIds.push(posted._id);
+    if (posted) {
+      messageLedgerIds.push(posted._id);
+    }
   }
   await record(ctx, {
-    roomId: room._id,
-    type: "turn.queued",
     actorParticipantId: participantId,
-    subjectId: turnId,
-    parentLedgerId: messageLedgerIds[0],
     model: participant.model,
+    parentLedgerId: messageLedgerIds[0],
     payload: { messageLedgerIds },
+    roomId: room._id,
+    subjectId: turnId,
+    type: "turn.queued",
   });
   return turnId;
 }
@@ -212,25 +231,25 @@ export async function steerMessage(
   actorParticipantId: Id<"participants">
 ) {
   const commandId = await ctx.db.insert("commands", {
-    runnerId,
-    type: "steer",
-    turnId: turn._id,
-    status: "pending",
     payload: {
       messageId: message._id,
       text: await renderMessage(ctx, message, "steered"),
     },
+    runnerId,
+    status: "pending",
+    turnId: turn._id,
+    type: "steer",
   });
   await ctx.db.patch(message._id, {
     delivery: "steering",
-    steering: { turnId: turn._id, commandId },
+    steering: { commandId, turnId: turn._id },
   });
   await record(ctx, {
-    roomId: message.roomId,
-    type: "message.steer_requested",
     actorParticipantId,
-    subjectId: message._id,
     payload: { turnId: turn._id },
+    roomId: message.roomId,
+    subjectId: message._id,
+    type: "message.steer_requested",
   });
 }
 
@@ -240,12 +259,14 @@ export async function steerRejected(
   ctx: MutationCtx,
   message: Doc<"messages">
 ) {
-  if (message.delivery !== "steering" || !message.toParticipantId) return;
+  if (message.delivery !== "steering" || !message.toParticipantId) {
+    return;
+  }
   await ctx.db.patch(message._id, { delivery: "queued", steering: undefined });
   await record(ctx, {
     roomId: message.roomId,
-    type: "message.steer_rejected",
     subjectId: message._id,
+    type: "message.steer_rejected",
   });
   await dispatchNext(ctx, message.toParticipantId);
 }
@@ -253,7 +274,9 @@ export async function steerRejected(
 function takeWhile<T>(items: T[], keep: (item: T) => boolean) {
   const out = [];
   for (const item of items) {
-    if (!keep(item)) break;
+    if (!keep(item)) {
+      break;
+    }
     out.push(item);
   }
   return out;

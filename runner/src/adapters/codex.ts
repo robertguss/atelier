@@ -31,8 +31,9 @@ export function codexHarness(opts: {
     },
     async *runTurn(req, signal, input) {
       signal.throwIfAborted();
-      if (req.mcpServers.length)
+      if (req.mcpServers.length) {
         throw new Error("Per-turn MCP injection is not implemented");
+      }
 
       let threadId: string | undefined;
       let turnId: string | undefined;
@@ -43,12 +44,14 @@ export function codexHarness(opts: {
       });
       input.steer = async (text) => {
         const expectedTurnId = turnId ?? (await started);
-        if (closed || !threadId || !expectedTurnId) return "rejected";
+        if (closed || !threadId || !expectedTurnId) {
+          return "rejected";
+        }
         try {
           await call("turn/steer", {
-            threadId,
-            input: [{ type: "text", text, text_elements: [] }],
             expectedTurnId,
+            input: [{ type: "text", text, text_elements: [] }],
+            threadId,
           });
           return "steered";
         } catch {
@@ -77,20 +80,22 @@ export function codexHarness(opts: {
         }
       >();
       const send = (value: unknown) =>
-        child.stdin.write(JSON.stringify(value) + "\n");
-      const call = (
+        child.stdin.write(`${JSON.stringify(value)}\n`);
+      const call = async (
         method: string,
         params: unknown,
         timeoutMs = 30_000
       ): Promise<any> =>
         new Promise((resolve, reject) => {
           const id = ++sequence;
-          if (method === "config/read") privateResponses.add(id);
+          if (method === "config/read") {
+            privateResponses.add(id);
+          }
           const timer = setTimeout(() => {
             pending.delete(id);
             reject(new Error(`${method} timed out`));
           }, timeoutMs);
-          pending.set(id, { method, resolve, reject, timer });
+          pending.set(id, { method, reject, resolve, timer });
           send({ id, method, params });
         });
       const fail = (error: Error) => {
@@ -100,9 +105,9 @@ export function codexHarness(opts: {
         }
         pending.clear();
         events.push({
-          type: "error",
           message: error.message,
           retryable: false,
+          type: "error",
         });
         events.end();
       };
@@ -112,17 +117,21 @@ export function codexHarness(opts: {
           child.kill();
         };
         // Stop the turn inside Codex first, so the thread is left resumable.
-        if (threadId && turnId)
+        if (threadId && turnId) {
           call("turn/interrupt", { threadId, turnId }, 5_000).then(stop, stop);
-        else stop();
+        } else {
+          stop();
+        }
       };
       signal.addEventListener("abort", abort, { once: true });
       child.on("error", fail);
       child.stdin.on("error", fail);
-      child.on("exit", () => fail(new Error("Codex process exited")));
-      child.stderr.on("data", (data) =>
-        opts.onRaw(req.turnId, { stderr: String(data) })
-      );
+      child.on("exit", () => {
+        fail(new Error("Codex process exited"));
+      });
+      child.stderr.on("data", (data) => {
+        opts.onRaw(req.turnId, { stderr: String(data) });
+      });
 
       // Paths each file change will write, from its `item/started`: Codex's
       // approval request names only the item.
@@ -130,8 +139,9 @@ export function codexHarness(opts: {
       const toolsSeen = new Set<string>();
       const answer = async (method: string, params: any) => {
         // Commands stay limited to what Codex runs unprompted.
-        if (method === "item/commandExecution/requestApproval")
+        if (method === "item/commandExecution/requestApproval") {
           return { result: { decision: "decline" } };
+        }
         if (method === "item/fileChange/requestApproval") {
           const allowed =
             req.editsEnabled &&
@@ -143,7 +153,7 @@ export function codexHarness(opts: {
         }
         return {
           error: {
-            code: -32601,
+            code: -32_601,
             message: "Atelier does not support this request",
           },
         };
@@ -155,27 +165,22 @@ export function codexHarness(opts: {
         try {
           const msg = JSON.parse(line);
           // config/read can contain secrets; never put that response in a transcript.
-          if (!privateResponses.has(msg.id)) opts.onRaw(req.turnId, msg);
+          if (!privateResponses.has(msg.id)) {
+            opts.onRaw(req.turnId, msg);
+          }
           if (msg.id !== undefined && !msg.method) {
             const p = pending.get(msg.id);
-            if (!p) return;
+            if (!p) {
+              return;
+            }
             clearTimeout(p.timer);
             pending.delete(msg.id);
-            if (msg.error) p.reject(new Error(msg.error.message));
-            else p.resolve(msg.result);
-          } else if (msg.id !== undefined) {
-            void answer(msg.method, msg.params).then(
-              (reply) => send({ id: msg.id, ...reply }),
-              () =>
-                send({
-                  id: msg.id,
-                  error: {
-                    code: -32603,
-                    message: "Atelier could not answer this request",
-                  },
-                })
-            );
-          } else {
+            if (msg.error) {
+              p.reject(new Error(msg.error.message));
+            } else {
+              p.resolve(msg.result);
+            }
+          } else if (msg.id === undefined) {
             const p = msg.params;
             if (msg.method === "item/agentMessage/delta")
               events.push({ type: "text_delta", text: p.delta });
@@ -228,6 +233,18 @@ export function codexHarness(opts: {
                 });
               events.end();
             }
+          } else {
+            void answer(msg.method, msg.params).then(
+              (reply) => send({ id: msg.id, ...reply }),
+              () =>
+                send({
+                  id: msg.id,
+                  error: {
+                    code: -32603,
+                    message: "Atelier could not answer this request",
+                  },
+                })
+            );
           }
         } catch (error) {
           fail(error as Error);
@@ -235,8 +252,8 @@ export function codexHarness(opts: {
       });
       try {
         await call("initialize", {
-          clientInfo: { name: "atelier", version: "0.0.0" },
           capabilities: { experimentalApi: true, requestAttestation: false },
+          clientInfo: { name: "atelier", version: "0.0.0" },
         });
         send({ method: "initialized", params: {} });
         let reviewConfig: Record<string, unknown> | undefined;
@@ -246,35 +263,36 @@ export function codexHarness(opts: {
             includeLayers: false,
           });
           reviewConfig = {
-            "features.shell_tool": false,
-            "features.unified_exec": false,
             "features.apps": false,
-            "features.plugins": false,
-            "features.hooks": false,
-            "features.multi_agent": false,
-            "features.multi_agent_v2": false,
-            "features.goals": false,
-            "features.runtime_agent_instances": false,
-            "features.js_repl": false,
+            "features.browser_use": false,
             "features.code_mode": false,
             "features.code_mode_host": false,
             "features.computer_use": false,
-            "features.browser_use": false,
+            "features.goals": false,
+            "features.hooks": false,
             "features.image_generation": false,
-            "features.view_image": false,
+            "features.js_repl": false,
             "features.memory_tool": false,
+            "features.multi_agent": false,
+            "features.multi_agent_v2": false,
+            "features.plugins": false,
+            "features.runtime_agent_instances": false,
+            "features.shell_tool": false,
             "features.skill_mcp_dependency_install": false,
-            web_search: "disabled",
+            "features.unified_exec": false,
+            "features.view_image": false,
             "plugins._default.enabled": false,
+            web_search: "disabled",
           };
           for (const section of ["mcp_servers", "plugins"] as const) {
             for (const name of Object.keys(config[section] ?? {})) {
               // Config override keys use dotted paths. Never accidentally leave
               // an unusual server name enabled by addressing a different key.
-              if (!/^[A-Za-z0-9_@-]+$/.test(name))
+              if (!/^[A-Za-z0-9_@-]+$/.test(name)) {
                 throw new Error(
                   `Cannot safely disable ${section} entry for review: ${name}`
                 );
+              }
               reviewConfig[`${section}.${name}.enabled`] = false;
             }
           }
@@ -285,11 +303,11 @@ export function codexHarness(opts: {
         const approvalPolicy = req.editsEnabled ? "untrusted" : "never";
         const sandboxPolicy = req.editsEnabled
           ? {
+              excludeSlashTmp: true,
+              excludeTmpdirEnvVar: true,
+              networkAccess: false,
               type: "workspaceWrite",
               writableRoots: [req.cwd],
-              networkAccess: false,
-              excludeTmpdirEnvVar: true,
-              excludeSlashTmp: true,
             }
           : { type: "readOnly" };
         const resume = req.independentReview ? undefined : req.resumeSessionId;
@@ -300,21 +318,21 @@ export function codexHarness(opts: {
             ...(req.independentReview
               ? { config: reviewConfig, ephemeral: true }
               : {}),
+            approvalPolicy,
             cwd: req.cwd,
             model: req.model,
-            approvalPolicy,
             sandbox: req.editsEnabled ? "workspace-write" : "read-only",
           }
         );
         threadId = thread.id;
-        yield { type: "session", sessionId: thread.id };
+        yield { sessionId: thread.id, type: "session" };
         const { turn } = await call("turn/start", {
-          threadId: thread.id,
+          approvalPolicy,
+          effort: req.reasoning,
           input: [{ type: "text", text: req.prompt }],
           model: req.model,
-          effort: req.reasoning,
-          approvalPolicy,
           sandboxPolicy,
+          threadId: thread.id,
         });
         turnId = turn.id;
         turnStarted(turnId);
@@ -324,7 +342,9 @@ export function codexHarness(opts: {
         turnStarted(undefined);
         signal.removeEventListener("abort", abort);
         lines.close();
-        for (const p of pending.values()) clearTimeout(p.timer);
+        for (const p of pending.values()) {
+          clearTimeout(p.timer);
+        }
         child.kill();
         const kill = setTimeout(() => child.kill("SIGKILL"), 2000);
         kill.unref();
@@ -346,16 +366,23 @@ const PROTECTED = new Set([
 
 /** Whether every path lands inside `cwd`, once symlinks resolve, and outside control files. */
 async function editAllowed(cwd: string, paths: string[]) {
-  if (!paths.length) return false;
+  if (!paths.length) {
+    return false;
+  }
   const root = await realpath(cwd);
   for (const path of paths) {
     const target = await realTarget(resolve(cwd, path));
-    if (!target) return false;
-    const rel = relative(root, target);
-    if (!rel || rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel))
+    if (!target) {
       return false;
+    }
+    const rel = relative(root, target);
+    if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      return false;
+    }
     const parts = rel.split(sep);
-    if (parts.some((part) => PROTECTED.has(part))) return false;
+    if (parts.some((part) => PROTECTED.has(part))) {
+      return false;
+    }
   }
   return true;
 }
@@ -374,8 +401,9 @@ async function realTarget(path: string): Promise<string | null> {
           () => true,
           () => false
         ))
-      )
+      ) {
         return null;
+      }
       rest.unshift(basename(p));
     }
   }
@@ -385,10 +413,12 @@ function toolCall(
   cwd: string,
   item: any
 ): { name: string; summary: string } | undefined {
-  const line = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 200);
-  if (item.type === "commandExecution")
+  const line = (text: string) =>
+    text.replaceAll(/\s+/g, " ").trim().slice(0, 200);
+  if (item.type === "commandExecution") {
     return { name: "Shell", summary: line(String(item.command ?? "")) };
-  if (item.type === "fileChange")
+  }
+  if (item.type === "fileChange") {
     return {
       name: "Edit",
       summary: line(
@@ -397,10 +427,12 @@ function toolCall(
           .join(", ")
       ),
     };
-  if (item.type === "mcpToolCall")
+  }
+  if (item.type === "mcpToolCall") {
     return {
       name: `${item.server}.${item.tool}`,
       summary: line(JSON.stringify(item.arguments ?? {})),
     };
+  }
   return undefined;
 }

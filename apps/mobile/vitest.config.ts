@@ -4,7 +4,7 @@ import { defineConfig } from "vitest/config";
 // source, so test files must not import react-native or Expo modules.
 export default defineConfig({
   test: {
+    coverage: { include: ["src/lib/**/*.ts"], provider: "v8" },
     include: ["src/**/*.test.ts"],
-    coverage: { provider: "v8", include: ["src/lib/**/*.ts"] },
   },
 });

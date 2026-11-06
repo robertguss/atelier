@@ -22,13 +22,15 @@ export type Participant = RoomData["participants"][number];
  * through the live query; this puts them back.
  */
 export function withLive(pane: Pane, live: LiveTurns | undefined): Pane {
-  if (!live?.length) return pane;
+  if (!live?.length) {
+    return pane;
+  }
   const byId = new Map<string, LiveTurns[number]>(live.map((l) => [l.id, l]));
   return {
     ...pane,
     turns: pane.turns.map((turn) => {
       const l = byId.get(turn.id);
-      return l ? { ...turn, partialText: l.partialText, items: l.items } : turn;
+      return l ? { ...turn, items: l.items, partialText: l.partialText } : turn;
     }),
   };
 }
@@ -36,7 +38,9 @@ export function withLive(pane: Pane, live: LiveTurns | undefined): Pane {
 /** The last value that wasn't undefined, so a query keeps showing old data while new arguments load. */
 export function useLastDefined<T>(value: T | undefined): T | undefined {
   const last = useRef(value);
-  if (value !== undefined) last.current = value;
+  if (value !== undefined) {
+    last.current = value;
+  }
   return value ?? last.current;
 }
 
@@ -82,7 +86,7 @@ export function buildTimeline(pane: Pane): TimelineItem[] {
         message,
       ]);
     } else if (!isWaiting(message)) {
-      items.push({ kind: "message", key: message.id, at: message.at, message });
+      items.push({ at: message.at, key: message.id, kind: "message", message });
     }
   }
   for (const turn of pane.turns) {
@@ -90,12 +94,12 @@ export function buildTimeline(pane: Pane): TimelineItem[] {
       (c) => c.turnId === turn.id && c.status !== "raised"
     );
     items.push({
-      kind: "turn",
-      key: turn.id,
       at: turn.at,
-      turn,
-      replies: replies.get(turn.id) ?? [],
       cards,
+      key: turn.id,
+      kind: "turn",
+      replies: replies.get(turn.id) ?? [],
+      turn,
     });
   }
   return items.sort((a, b) => a.at - b.at);
@@ -122,8 +126,12 @@ export function isOffline(pane: Pane, now: number) {
 
 /** Why a message to an agent was never delivered, as a sentence ending. */
 export function cancelReasonText(reason: string | null) {
-  if (reason === "removed") return "its author was removed from the room";
-  if (reason === "runner offline") return "the agents' machine was offline";
+  if (reason === "removed") {
+    return "its author was removed from the room";
+  }
+  if (reason === "runner offline") {
+    return "the agents' machine was offline";
+  }
   return reason ?? "it was cancelled";
 }
 
@@ -137,8 +145,12 @@ export function formatTime(at: number) {
 export function useNow(intervalMs: number) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), intervalMs);
-    return () => window.clearInterval(id);
+    const id = window.setInterval(() => {
+      setNow(Date.now());
+    }, intervalMs);
+    return () => {
+      window.clearInterval(id);
+    };
   }, [intervalMs]);
   return now;
 }
@@ -148,7 +160,9 @@ export function useMediaQuery(query: string) {
     (onChange) => {
       const list = window.matchMedia(query);
       list.addEventListener("change", onChange);
-      return () => list.removeEventListener("change", onChange);
+      return () => {
+        list.removeEventListener("change", onChange);
+      };
     },
     () => window.matchMedia(query).matches
   );
@@ -170,9 +184,13 @@ export function useStickToBottom<
   useLayoutEffect(() => {
     const scroller = scrollRef.current;
     const content = contentRef.current;
-    if (!scroller || !content) return;
+    if (!scroller || !content) {
+      return;
+    }
     const pin = () => {
-      if (atEnd.current) scroller.scrollTop = scroller.scrollHeight;
+      if (atEnd.current) {
+        scroller.scrollTop = scroller.scrollHeight;
+      }
     };
     const onScroll = () => {
       atEnd.current =
@@ -191,10 +209,12 @@ export function useStickToBottom<
   // New rows render before the observer sees the size change; pin in the same frame.
   useLayoutEffect(() => {
     const scroller = scrollRef.current;
-    if (scroller && atEnd.current) scroller.scrollTop = scroller.scrollHeight;
+    if (scroller && atEnd.current) {
+      scroller.scrollTop = scroller.scrollHeight;
+    }
   });
 
-  return { scrollRef, contentRef };
+  return { contentRef, scrollRef };
 }
 
 const lastTargetKey = (roomId: string) => `atelier:last-target:${roomId}`;

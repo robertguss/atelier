@@ -4,6 +4,7 @@ import type {
   QuestionCard,
   TurnInput,
 } from "@atelier/shared";
+
 export function eventQueue<T = HarnessEvent>() {
   const queue: T[] = [];
   let wake: (() => void) | undefined;
@@ -19,11 +20,13 @@ export function eventQueue<T = HarnessEvent>() {
     },
     async *[Symbol.asyncIterator]() {
       while (!ended || queue.length) {
-        if (queue.length) yield queue.shift()!;
-        else
+        if (queue.length) {
+          yield queue.shift()!;
+        } else {
           await new Promise<void>((resolve) => {
             wake = resolve;
           });
+        }
       }
     },
   };
@@ -38,7 +41,7 @@ export function turnInput(
 ): TurnInput {
   return {
     onQuestion,
-    steer: async () => "rejected",
     setEditsEnabled: () => {},
+    steer: async () => "rejected",
   };
 }

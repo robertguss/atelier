@@ -1,13 +1,8 @@
 import { api } from "@atelier/backend/api";
 import type { Id } from "@atelier/backend/dataModel";
 import { useQuery } from "convex/react";
-import {
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type PointerEvent,
-} from "react";
+import { useMemo, useRef, useState } from "react";
+import type { KeyboardEvent, PointerEvent } from "react";
 
 import { PageSpinner } from "~/components/page";
 import { Sheet, SheetPopup } from "~/components/ui/sheet";
@@ -41,7 +36,7 @@ export function RoomView({
   const [paneLimit, setPaneLimit] = useState(PANE_PAGE);
   // Keeps the shorter history on screen while a longer one loads.
   const history = useLastDefined(
-    useQuery(api.agent.pane, { roomId, limit: paneLimit })
+    useQuery(api.agent.pane, { limit: paneLimit, roomId })
   );
   const live = useQuery(api.agent.live, { roomId });
   const pane = useMemo(
@@ -49,22 +44,28 @@ export function RoomView({
     [history, live]
   );
   // Ticks so the offline banner appears when heartbeats stop, with no new data.
-  const now = useNow(5_000);
+  const now = useNow(5000);
   const narrow = useMediaQuery("(max-width: 759px)");
   const [membersOpen, setMembersOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
   const [teamWidth, setTeamWidth] = useState(TEAM_DEFAULT);
   const layoutRef = useRef<HTMLDivElement>(null);
 
-  if (data === undefined) return <PageSpinner />;
-  if (data === null) return null;
+  if (data === undefined) {
+    return <PageSpinner />;
+  }
+  if (data === null) {
+    return null;
+  }
 
   const names = namesFrom(data.participants);
   const offline = pane ? isOffline(pane, now) : false;
 
   const resizeTo = (clientX: number) => {
     const box = layoutRef.current?.getBoundingClientRect();
-    if (!box) return;
+    if (!box) {
+      return;
+    }
     setTeamWidth(
       Math.round(
         Math.min(Math.max(box.right - clientX, TEAM_MIN), box.width * 0.6)
@@ -75,11 +76,17 @@ export function RoomView({
     e.currentTarget.setPointerCapture(e.pointerId);
   };
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) resizeTo(e.clientX);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      resizeTo(e.clientX);
+    }
   };
   const onSeparatorKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "ArrowLeft") setTeamWidth((w) => w + 24);
-    if (e.key === "ArrowRight") setTeamWidth((w) => Math.max(TEAM_MIN, w - 24));
+    if (e.key === "ArrowLeft") {
+      setTeamWidth((w) => w + 24);
+    }
+    if (e.key === "ArrowRight") {
+      setTeamWidth((w) => Math.max(TEAM_MIN, w - 24));
+    }
   };
 
   const team = <TeamPane roomId={roomId} names={names} />;
@@ -92,8 +99,16 @@ export function RoomView({
         isOwner={isOwner}
         editsEnabled={pane?.editsEnabled}
         offline={offline}
-        onOpenMembers={() => setMembersOpen(true)}
-        onOpenTeam={narrow ? () => setTeamOpen(true) : undefined}
+        onOpenMembers={() => {
+          setMembersOpen(true);
+        }}
+        onOpenTeam={
+          narrow
+            ? () => {
+                setTeamOpen(true);
+              }
+            : undefined
+        }
       />
       <div ref={layoutRef} className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1">
@@ -105,7 +120,9 @@ export function RoomView({
               pane={pane}
               names={names}
               offline={offline}
-              onShowEarlier={() => setPaneLimit((n) => n + PANE_PAGE)}
+              onShowEarlier={() => {
+                setPaneLimit((n) => n + PANE_PAGE);
+              }}
             />
           )}
         </div>

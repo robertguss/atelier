@@ -16,9 +16,13 @@ export const list = query({
   args: {},
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not signed in");
+    if (!identity) {
+      throw new Error("Not signed in");
+    }
     const user = await getUser(ctx);
-    if (!user) return [];
+    if (!user) {
+      return [];
+    }
     const memberships = (
       await ctx.db
         .query("roomMembers")
@@ -28,15 +32,15 @@ export const list = query({
     const rooms = [];
     for (const m of memberships) {
       const room = await ctx.db.get(m.roomId);
-      if (room && room.archivedAt === undefined)
+      if (room && room.archivedAt === undefined) {
         rooms.push({ room, role: m.role });
+      }
     }
     rooms.sort((a, b) => b.room._creationTime - a.room._creationTime);
     // Reviews are the owner's alone, so members get no count.
     return await Promise.all(
       rooms.map(async ({ room, role }) => ({
         ...room,
-        role,
         readyReviews:
           role === "owner"
             ? (
@@ -46,6 +50,7 @@ export const list = query({
                   .collect()
               ).filter((r) => r.status !== "collecting").length
             : undefined,
+        role,
       }))
     );
   },
@@ -59,12 +64,19 @@ export const access = query({
     { roomId }
   ): Promise<"owner" | "member" | "removed" | "none"> => {
     const id = ctx.db.normalizeId("rooms", roomId);
-    if (!id) return "none";
+    if (!id) {
+      return "none";
+    }
     const found = await getMembership(ctx, id);
-    if (!found) return "none";
-    if (found.member.removedAt !== undefined) return "removed";
-    if (found.member.role === "owner")
+    if (!found) {
+      return "none";
+    }
+    if (found.member.removedAt !== undefined) {
+      return "removed";
+    }
+    if (found.member.role === "owner") {
       return (await getOwner(ctx)) ? "owner" : "none";
+    }
     return "member";
   },
 });
@@ -73,72 +85,76 @@ export const get = query({
   args: { roomId: v.id("rooms") },
   handler: async (ctx, { roomId }) => {
     const room = await ctx.db.get(roomId);
-    if (!room) return null;
+    if (!room) {
+      return null;
+    }
     await requireMember(ctx, roomId);
     const participants = await ctx.db
       .query("participants")
       .withIndex("by_room", (q) => q.eq("roomId", roomId))
       .collect();
-    return { room, participants };
+    return { participants, room };
   },
 });
 
 // Step 2: a room starts with the owner and a Claude Code participant.
 // Codex and Pi join in step 3.
 export const create = mutation({
-  args: { name: v.string(), runnerId: v.id("runners"), cwd: v.string() },
+  args: { cwd: v.string(), name: v.string(), runnerId: v.id("runners") },
   handler: async (ctx, { name, runnerId, cwd }) => {
     const owner = await requireOwner(ctx);
     const user = await ensureUser(ctx);
     const runner = await ctx.db.get(runnerId);
-    if (!runner) throw new Error("Unknown runner");
+    if (!runner) {
+      throw new Error("Unknown runner");
+    }
 
     const roomId = await ctx.db.insert("rooms", {
-      name: name.trim(),
-      runnerId,
       cwd: cwd.trim(),
       handbook: "",
+      name: name.trim(),
+      runnerId,
     });
     const created = await record(ctx, {
+      payload: { cwd, name, runner: runner.name },
       roomId,
-      type: "room.created",
       subjectId: roomId,
-      payload: { name, cwd, runner: runner.name },
+      type: "room.created",
     });
 
     const humanId = await ctx.db.insert("participants", {
-      roomId,
-      kind: "human",
       displayName: agentName(owner.name || owner.email, "You"),
+      kind: "human",
+      roomId,
       userId: user._id,
     });
     await ctx.db.insert("roomMembers", {
+      participantId: humanId,
+      role: "owner",
       roomId,
       userId: user._id,
-      role: "owner",
-      participantId: humanId,
     });
     await record(ctx, {
-      roomId,
-      type: "participant.joined",
-      subjectId: humanId,
       parentLedgerId: created,
       payload: { kind: "human" },
+      roomId,
+      subjectId: humanId,
+      type: "participant.joined",
     });
 
     const claudeId = await ctx.db.insert("participants", {
-      roomId,
-      kind: "harness",
-      harness: "claude",
       displayName: "Claude",
+      harness: "claude",
+      kind: "harness",
+      roomId,
     });
     await record(ctx, {
-      roomId,
-      type: "participant.joined",
-      subjectId: claudeId,
       parentLedgerId: created,
+      payload: { harness: "claude", kind: "harness" },
       provider: "anthropic",
-      payload: { kind: "harness", harness: "claude" },
+      roomId,
+      subjectId: claudeId,
+      type: "participant.joined",
     });
 
     return roomId;
@@ -147,33 +163,38 @@ export const create = mutation({
 
 export const addParticipant = mutation({
   args: {
-    roomId: v.id("rooms"),
     harness: v.union(v.literal("claude"), v.literal("codex"), v.literal("pi")),
+    roomId: v.id("rooms"),
   },
   handler: async (ctx, { roomId, harness }) => {
     await requireOwner(ctx);
     const room = await ctx.db.get(roomId);
-    if (!room) throw new Error("Unknown room");
+    if (!room) {
+      throw new Error("Unknown room");
+    }
     const existing = await ctx.db
       .query("participants")
       .withIndex("by_room", (q) => q.eq("roomId", roomId))
       .collect();
     const found = existing.find((p) => p.harness === harness);
-    if (found) return found._id;
+    if (found) {
+      return found._id;
+    }
     const runner = await ctx.db.get(room.runnerId);
-    if (!runner?.harnesses.some((h) => h.id === harness))
+    if (!runner?.harnesses.some((h) => h.id === harness)) {
       throw new Error("Harness unavailable on this runner");
+    }
     const id = await ctx.db.insert("participants", {
-      roomId,
-      kind: "harness",
-      harness,
       displayName: { claude: "Claude", codex: "Codex", pi: "Pi" }[harness],
+      harness,
+      kind: "harness",
+      roomId,
     });
     await record(ctx, {
+      payload: { harness, kind: "harness" },
       roomId,
-      type: "participant.joined",
       subjectId: id,
-      payload: { kind: "harness", harness },
+      type: "participant.joined",
     });
     return id;
   },
@@ -184,20 +205,24 @@ export const addParticipant = mutation({
 // permissions when a turn starts, so turning edits off also interrupts those
 // that started with edits on; one that started with edits off never had them.
 export const setEditsEnabled = mutation({
-  args: { roomId: v.id("rooms"), on: v.boolean() },
+  args: { on: v.boolean(), roomId: v.id("rooms") },
   handler: async (ctx, { roomId, on }) => {
     await requireOwner(ctx);
     const { participant: owner } = await requireMember(ctx, roomId);
     const room = await ctx.db.get(roomId);
-    if (!room) throw new Error("Unknown room");
-    if ((room.editsEnabled === true) === on) return;
+    if (!room) {
+      throw new Error("Unknown room");
+    }
+    if ((room.editsEnabled === true) === on) {
+      return;
+    }
     await ctx.db.patch(roomId, { editsEnabled: on });
     await record(ctx, {
-      roomId,
-      type: "room.edits_changed",
       actorParticipantId: owner._id,
-      subjectId: roomId,
       payload: { editsEnabled: on },
+      roomId,
+      subjectId: roomId,
+      type: "room.edits_changed",
     });
 
     const running = (
@@ -208,11 +233,11 @@ export const setEditsEnabled = mutation({
     ).filter((t) => t.status === "running" && !t.ritualId);
     for (const turn of running) {
       await ctx.db.insert("commands", {
-        runnerId: room.runnerId,
-        type: "settings",
-        turnId: turn._id,
-        status: "pending",
         payload: { editsEnabled: on },
+        runnerId: room.runnerId,
+        status: "pending",
+        turnId: turn._id,
+        type: "settings",
       });
       const agent = await ctx.db.get(turn.participantId);
       if (
@@ -221,11 +246,11 @@ export const setEditsEnabled = mutation({
         (agent?.harness === "codex" || agent?.harness === "pi")
       ) {
         await ctx.db.insert("commands", {
-          runnerId: room.runnerId,
-          type: "interrupt",
-          turnId: turn._id,
-          status: "pending",
           payload: { reason: "File edits were turned off" },
+          runnerId: room.runnerId,
+          status: "pending",
+          turnId: turn._id,
+          type: "interrupt",
         });
       }
     }

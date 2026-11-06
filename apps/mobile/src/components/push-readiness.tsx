@@ -24,19 +24,21 @@ export function PushReadiness() {
     setBusy(true);
     try {
       const notifications = await import("expo-notifications");
-      if (Platform.OS === "android")
+      if (Platform.OS === "android") {
         await notifications.setNotificationChannelAsync("default", {
           name: "Reviews",
           importance: notifications.AndroidImportance.DEFAULT,
         });
+      }
       const permission = await notifications.requestPermissionsAsync();
-      if (!permission.granted)
+      if (!permission.granted) {
         throw new Error("Notifications are not enabled in device settings.");
+      }
       const token = await notifications.getExpoPushTokenAsync({ projectId });
-      await register({ token: token.data, platform: Platform.OS });
+      await register({ platform: Platform.OS, token: token.data });
       setError("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+    } catch (error_) {
+      setError(error_ instanceof Error ? error_.message : String(error_));
     } finally {
       setBusy(false);
     }

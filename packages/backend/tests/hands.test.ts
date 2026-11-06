@@ -6,6 +6,7 @@ import { beforeEach, afterEach, test, expect, vi } from "vitest";
 import { api, internal } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import schema from "../convex/schema";
+
 const modules = import.meta.glob("../convex/**/*.ts");
 
 const SECRET = "test-secret";
@@ -34,50 +35,49 @@ async function setup() {
   workflow.register(t);
   const owner = t.withIdentity({
     email: "owner@example.com",
-    subject: "owner",
     name: "Robert",
+    subject: "owner",
   });
   const dana = t.withIdentity({
     email: "dana@example.com",
-    subject: "dana",
     name: "Dana",
+    subject: "dana",
   });
   const runnerId = await heartbeat(t);
   const roomId = await owner.mutation(api.rooms.create, {
+    cwd: "/tmp/planning",
     name: "Planning",
     runnerId,
-    cwd: "/tmp/planning",
   });
-  await owner.mutation(api.rooms.addParticipant, { roomId, harness: "codex" });
-  await owner.mutation(api.rooms.addParticipant, { roomId, harness: "pi" });
+  await owner.mutation(api.rooms.addParticipant, { harness: "codex", roomId });
+  await owner.mutation(api.rooms.addParticipant, { harness: "pi", roomId });
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => Response.json([{ id: "user_1" }]))
   );
   const invite = await owner.action(api.invites.create, {
-    roomId,
     email: "dana@example.com",
+    roomId,
   });
   await dana.mutation(api.invites.accept, {
     token: invite.url.split("/invite/")[1]!,
   });
   vi.unstubAllGlobals();
-  const participants = (await owner.query(api.rooms.get, { roomId }))!
-    .participants;
+  const { participants } = (await owner.query(api.rooms.get, { roomId }))!;
   const claude = participants.find((p) => p.harness === "claude")!;
   const codex = participants.find((p) => p.harness === "codex")!;
   const pi = participants.find((p) => p.harness === "pi")!;
   const robert = participants.find((p) => p.displayName === "Robert")!;
   const danaP = participants.find((p) => p.displayName === "Dana")!;
-  return { t, owner, dana, runnerId, roomId, claude, codex, pi, robert, danaP };
+  return { claude, codex, dana, danaP, owner, pi, robert, roomId, runnerId, t };
 }
 
 async function heartbeat(t: T) {
   return await t.mutation(api.runners.heartbeat, {
-    secret: SECRET,
-    name: "test",
-    machine: "test",
     harnesses: HARNESSES,
+    machine: "test",
+    name: "test",
+    secret: SECRET,
   });
 }
 
@@ -90,28 +90,28 @@ async function startTurn(t: T, turnId: Id<"turns">) {
     (c) => c.turnId === turnId && c.type === "run_turn"
   )!;
   await t.mutation(api.runner.claim, {
-    secret: SECRET,
     commandId: command._id,
+    secret: SECRET,
   });
   await t.mutation(api.runner.start, {
+    harnessVersion: "test",
     secret: SECRET,
     turnId,
-    harnessVersion: "test",
   });
   return command._id;
 }
 
 function question(id: string, text: string, labels = ["Option A", "Option B"]) {
   return {
-    id,
+    allowFreeText: true,
     header: id.toUpperCase(),
-    text,
+    id,
+    multiSelect: false,
     options: labels.map((label) => ({
       label,
       description: `${label} described`,
     })),
-    multiSelect: false,
-    allowFreeText: true,
+    text,
   };
 }
 
@@ -122,10 +122,10 @@ async function raise(
   requestId = "req-1"
 ) {
   return await t.mutation(api.runner.raiseHand, {
+    questions,
+    requestId,
     secret: SECRET,
     turnId,
-    requestId,
-    questions,
   });
 }
 
@@ -135,27 +135,27 @@ async function waitingClaude(
   questions?: ReturnType<typeof question>[]
 ) {
   const turnId = (await s.owner.mutation(api.messages.send, {
-    roomId: s.roomId,
     body: "Brainstorm the plan",
+    roomId: s.roomId,
     toParticipantId: s.claude._id,
   }))!;
   const commandId = await startTurn(s.t, turnId);
   const handId = await raise(s.t, turnId, questions);
-  return { turnId, commandId, handId };
+  return { commandId, handId, turnId };
 }
 
 async function ledger(t: T, type: string) {
-  return (await t.run((ctx) => ctx.db.query("ledger").collect())).filter(
+  return (await t.run(async (ctx) => ctx.db.query("ledger").collect())).filter(
     (e) => e.type === type
   );
 }
 
 async function decisions(t: T) {
-  return await t.run((ctx) => ctx.db.query("decisions").collect());
+  return await t.run(async (ctx) => ctx.db.query("decisions").collect());
 }
 
 async function ordinaryTurns(t: T, participantId: Id<"participants">) {
-  return (await t.run((ctx) => ctx.db.query("turns").collect())).filter(
+  return (await t.run(async (ctx) => ctx.db.query("turns").collect())).filter(
     (x) => x.participantId === participantId && !x.ritualId
   );
 }
@@ -163,7 +163,9 @@ async function ordinaryTurns(t: T, participantId: Id<"participants">) {
 test("raising a card shows it in the pane and marks the agent waiting, with the turn still running", async () => {
   const s = await setup();
   const { turnId, handId } = await waitingClaude(s);
-  expect(await s.t.run((ctx) => ctx.db.get(turnId))).toMatchObject({
+  await expect(
+    s.t.run(async (ctx) => ctx.db.get(turnId))
+  ).resolves.toMatchObject({
     status: "running",
     waitingOnHandId: handId,
   });
@@ -174,9 +176,7 @@ test("raising a card shows it in the pane and marks the agent waiting, with the 
   expect(pane.cards).toHaveLength(1);
   expect(pane.cards[0]).toMatchObject({
     id: handId,
-    turnId,
     participantId: s.claude._id,
-    status: "raised",
     questions: [
       {
         id: "scope",
@@ -190,61 +190,63 @@ test("raising a card shows it in the pane and marks the agent waiting, with the 
         allowFreeText: true,
       },
     ],
+    status: "raised",
+    turnId,
   });
-  expect(await ledger(s.t, "hand.raised")).toHaveLength(1);
+  await expect(ledger(s.t, "hand.raised")).resolves.toHaveLength(1);
 });
 
 test("two answers to one card: the first applies, the second is told who answered and changes nothing", async () => {
   const s = await setup();
   const { turnId, handId } = await waitingClaude(s);
   await s.owner.mutation(api.hands.answer, {
-    handId,
     answers: [{ questionId: "scope", labels: ["Option A"] }],
+    handId,
   });
   await expect(
     s.dana.mutation(api.hands.answer, {
-      handId,
       answers: [{ questionId: "scope", labels: ["Option B"] }],
+      handId,
     })
   ).rejects.toThrow(/already answered by Robert/i);
 
-  const hand = (await s.t.run((ctx) => ctx.db.get(handId)))!;
+  const hand = (await s.t.run(async (ctx) => ctx.db.get(handId)))!;
   expect(hand).toMatchObject({
-    status: "answered",
     answeredByParticipantId: s.robert._id,
-    via: "card",
     answers: [{ questionId: "scope", labels: ["Option A"] }],
+    status: "answered",
+    via: "card",
   });
   expect(
-    (await s.t.run((ctx) => ctx.db.get(turnId)))!.waitingOnHandId
+    (await s.t.run(async (ctx) => ctx.db.get(turnId)))!.waitingOnHandId
   ).toBeUndefined();
-  expect(await decisions(s.t)).toHaveLength(1);
+  await expect(decisions(s.t)).resolves.toHaveLength(1);
   expect((await decisions(s.t))[0]).toMatchObject({
-    handId,
-    questionId: "scope",
     answeredByParticipantId: s.robert._id,
     choice: "Option A",
+    handId,
+    questionId: "scope",
   });
   const answers = (await allCommands(s.t)).filter((c) => c.type === "answer");
   expect(answers).toHaveLength(1);
   expect(answers[0]).toMatchObject({
-    turnId,
-    status: "pending",
     payload: {
-      handId,
-      requestId: "req-1",
       answeredBy: "Robert",
-      via: "card",
       answers: [
         { questionId: "scope", question: "Which scope?", labels: ["Option A"] },
       ],
+      handId,
+      requestId: "req-1",
+      via: "card",
     },
+    status: "pending",
+    turnId,
   });
-  expect(await ledger(s.t, "hand.answered")).toHaveLength(1);
+  await expect(ledger(s.t, "hand.answered")).resolves.toHaveLength(1);
   const pane = await s.dana.query(api.agent.pane, { roomId: s.roomId });
   expect(pane.cards[0]).toMatchObject({
-    status: "answered",
     answeredByParticipantId: s.robert._id,
+    status: "answered",
     via: "card",
   });
   expect(
@@ -258,12 +260,12 @@ test("a decision links the team messages posted while the card was open, and not
   vi.setSystemTime(new Date("2026-11-06T14:09:30Z"));
   await heartbeat(s.t);
   const before = await s.dana.mutation(api.team.post, {
-    roomId: s.roomId,
     body: "before the question",
+    roomId: s.roomId,
   });
   const turnId = (await s.owner.mutation(api.messages.send, {
-    roomId: s.roomId,
     body: "Plan",
+    roomId: s.roomId,
     toParticipantId: s.claude._id,
   }))!;
   await startTurn(s.t, turnId);
@@ -271,24 +273,24 @@ test("a decision links the team messages posted while the card was open, and not
   const handId = await raise(s.t, turnId);
   vi.setSystemTime(new Date("2026-11-06T14:11:00Z"));
   const at1411 = await s.dana.mutation(api.team.post, {
-    roomId: s.roomId,
     body: "I lean towards A",
+    roomId: s.roomId,
   });
   vi.setSystemTime(new Date("2026-11-06T14:13:00Z"));
   const at1413 = await s.owner.mutation(api.team.post, {
-    roomId: s.roomId,
     body: "A is cheaper",
+    roomId: s.roomId,
   });
   vi.setSystemTime(new Date("2026-11-06T14:15:00Z"));
   await heartbeat(s.t);
   await s.dana.mutation(api.hands.answer, {
-    handId,
     answers: [{ questionId: "scope", labels: ["Option A"] }],
+    handId,
   });
   vi.setSystemTime(new Date("2026-11-06T14:16:00Z"));
   await s.owner.mutation(api.team.post, {
-    roomId: s.roomId,
     body: "good call",
+    roomId: s.roomId,
   });
 
   const recorded = await ledger(s.t, "decision.recorded");
@@ -305,26 +307,26 @@ test("a message to an agent waiting on its card answers the card in chat and sta
   const s = await setup();
   const { turnId, handId } = await waitingClaude(s);
   const result = await s.dana.mutation(api.messages.send, {
-    roomId: s.roomId,
     body: "go with option B but keep it short",
+    roomId: s.roomId,
     toParticipantId: s.claude._id,
   });
   expect(result).toBeNull();
 
-  expect(await ordinaryTurns(s.t, s.claude._id)).toHaveLength(1);
+  await expect(ordinaryTurns(s.t, s.claude._id)).resolves.toHaveLength(1);
   expect(
     (await allCommands(s.t)).filter((c) => c.type === "run_turn")
   ).toHaveLength(1);
   const message = (
-    await s.t.run((ctx) => ctx.db.query("messages").collect())
+    await s.t.run(async (ctx) => ctx.db.query("messages").collect())
   ).find((m) => m.body === "go with option B but keep it short")!;
   expect(message).toMatchObject({
-    delivery: "answeredCard",
     deliveredTurnId: turnId,
+    delivery: "answeredCard",
   });
-  expect(await s.t.run((ctx) => ctx.db.get(handId))).toMatchObject({
-    status: "answered",
-    via: "chat",
+  await expect(
+    s.t.run(async (ctx) => ctx.db.get(handId))
+  ).resolves.toMatchObject({
     answeredByParticipantId: s.danaP._id,
     answers: [
       {
@@ -333,21 +335,23 @@ test("a message to an agent waiting on its card answers the card in chat and sta
         freeText: "go with option B but keep it short",
       },
     ],
+    status: "answered",
+    via: "chat",
   });
   expect(
-    (await s.t.run((ctx) => ctx.db.get(turnId)))!.waitingOnHandId
+    (await s.t.run(async (ctx) => ctx.db.get(turnId)))!.waitingOnHandId
   ).toBeUndefined();
   const answer = (await allCommands(s.t)).find((c) => c.type === "answer")!;
   expect(answer.payload).toMatchObject({
     answeredBy: "Dana",
-    via: "chat",
     answers: [
       { questionId: "scope", freeText: "go with option B but keep it short" },
     ],
+    via: "chat",
   });
   expect((await decisions(s.t))[0]).toMatchObject({
-    choice: "go with option B but keep it short",
     answeredByParticipantId: s.danaP._id,
+    choice: "go with option B but keep it short",
   });
 });
 
@@ -358,48 +362,48 @@ test("a chat answer to a two-question card records one decision, while the agent
     question("q2", "Second?"),
   ]);
   await s.dana.mutation(api.messages.send, {
-    roomId: s.roomId,
     body: "ship the small one",
+    roomId: s.roomId,
     toParticipantId: s.claude._id,
   });
 
   const rows = await decisions(s.t);
   expect(rows).toHaveLength(1);
   expect(rows[0]).toMatchObject({
-    handId,
-    choice: "ship the small one",
     answeredByParticipantId: s.danaP._id,
+    choice: "ship the small one",
+    handId,
   });
-  expect(await ledger(s.t, "decision.recorded")).toHaveLength(1);
+  await expect(ledger(s.t, "decision.recorded")).resolves.toHaveLength(1);
   const answer = (await allCommands(s.t)).find((c) => c.type === "answer")!;
   expect(answer.payload.answers).toEqual([
     {
-      questionId: "q1",
-      labels: [],
       freeText: "ship the small one",
+      labels: [],
       question: "First?",
+      questionId: "q1",
     },
     {
-      questionId: "q2",
-      labels: [],
       freeText: "ship the small one",
+      labels: [],
       question: "Second?",
+      questionId: "q2",
     },
   ]);
 
   await s.t.mutation(api.runner.finish, {
-    secret: SECRET,
-    turnId,
     commandId,
     finalText: "ok",
+    secret: SECRET,
     transcriptRef: "/t",
+    turnId,
   });
   const next = (await s.owner.mutation(api.messages.send, {
-    roomId: s.roomId,
     body: "Continue",
+    roomId: s.roomId,
     toParticipantId: s.claude._id,
   }))!;
-  const prompt = (await s.t.run((ctx) => ctx.db.get(next)))!.prompt;
+  const { prompt } = (await s.t.run(async (ctx) => ctx.db.get(next)))!;
   expect(prompt).toMatch(
     /- First\? \(and 1 more\) → ship the small one \(decided by Dana, /
   );
@@ -415,17 +419,17 @@ test("a four-question card answered once records four decisions sharing the same
   ];
   const { handId } = await waitingClaude(s, questions);
   const teamId = await s.dana.mutation(api.team.post, {
-    roomId: s.roomId,
     body: "thoughts",
+    roomId: s.roomId,
   });
   await s.owner.mutation(api.hands.answer, {
-    handId,
     answers: [
       { questionId: "q1", labels: ["Option A"] },
       { questionId: "q2", labels: ["Option B"] },
       { questionId: "q3", labels: [], freeText: "neither" },
       { questionId: "q4", labels: ["Option A"], freeText: "with a caveat" },
     ],
+    handId,
   });
   const rows = await decisions(s.t);
   expect(rows.map((d) => [d.questionId, d.choice])).toEqual([
@@ -436,8 +440,9 @@ test("a four-question card answered once records four decisions sharing the same
   ]);
   const recorded = await ledger(s.t, "decision.recorded");
   expect(recorded).toHaveLength(4);
-  for (const entry of recorded)
+  for (const entry of recorded) {
     expect(entry.payload.teamMessageIds).toEqual([teamId]);
+  }
   expect(
     (await allCommands(s.t)).filter((c) => c.type === "answer")
   ).toHaveLength(1);
@@ -451,29 +456,31 @@ test("a card must be answered whole", async () => {
   ]);
   await expect(
     s.owner.mutation(api.hands.answer, {
-      handId,
       answers: [{ questionId: "q1", labels: ["Option A"] }],
+      handId,
     })
   ).rejects.toThrow(/every question/i);
-  expect((await s.t.run((ctx) => ctx.db.get(handId)))!.status).toBe("raised");
+  expect((await s.t.run(async (ctx) => ctx.db.get(handId)))!.status).toBe(
+    "raised"
+  );
 });
 
 test("stopping a turn with an open card cancels the card and records no decision", async () => {
   const s = await setup();
   const { turnId, handId } = await waitingClaude(s);
   await s.dana.mutation(api.messages.cancel, { turnId });
-  expect((await s.t.run((ctx) => ctx.db.get(handId)))!.status).toBe(
+  expect((await s.t.run(async (ctx) => ctx.db.get(handId)))!.status).toBe(
     "cancelled"
   );
   expect(
-    (await s.t.run((ctx) => ctx.db.get(turnId)))!.waitingOnHandId
+    (await s.t.run(async (ctx) => ctx.db.get(turnId)))!.waitingOnHandId
   ).toBeUndefined();
-  expect(await ledger(s.t, "hand.cancelled")).toHaveLength(1);
-  expect(await decisions(s.t)).toHaveLength(0);
+  await expect(ledger(s.t, "hand.cancelled")).resolves.toHaveLength(1);
+  await expect(decisions(s.t)).resolves.toHaveLength(0);
   await expect(
     s.owner.mutation(api.hands.answer, {
-      handId,
       answers: [{ questionId: "scope", labels: ["Option A"] }],
+      handId,
     })
   ).rejects.toThrow(/closed without an answer/i);
   expect(
@@ -485,28 +492,30 @@ test("a runner restart expires the card, and a later message starts a normal tur
   const s = await setup();
   const { turnId, handId } = await waitingClaude(s);
   await s.t.mutation(api.runner.recover, {
-    secret: SECRET,
     runnerId: s.runnerId,
+    secret: SECRET,
   });
-  expect((await s.t.run((ctx) => ctx.db.get(handId)))!.status).toBe("expired");
-  expect((await s.t.run((ctx) => ctx.db.get(turnId)))!.status).toBe(
+  expect((await s.t.run(async (ctx) => ctx.db.get(handId)))!.status).toBe(
+    "expired"
+  );
+  expect((await s.t.run(async (ctx) => ctx.db.get(turnId)))!.status).toBe(
     "interrupted"
   );
-  expect(await ledger(s.t, "hand.expired")).toHaveLength(1);
-  expect(await decisions(s.t)).toHaveLength(0);
+  await expect(ledger(s.t, "hand.expired")).resolves.toHaveLength(1);
+  await expect(decisions(s.t)).resolves.toHaveLength(0);
 
   const next = await s.dana.mutation(api.messages.send, {
-    roomId: s.roomId,
     body: "Late answer: option B",
+    roomId: s.roomId,
     toParticipantId: s.claude._id,
   });
   expect(next).not.toBeNull();
   const message = (
-    await s.t.run((ctx) => ctx.db.query("messages").collect())
+    await s.t.run(async (ctx) => ctx.db.query("messages").collect())
   ).find((m) => m.body === "Late answer: option B")!;
   expect(message).toMatchObject({
-    delivery: "delivered",
     deliveredTurnId: next,
+    delivery: "delivered",
   });
 });
 
@@ -515,27 +524,31 @@ test("a reclaimed lease expires the open card", async () => {
   const { handId } = await waitingClaude(s);
   vi.advanceTimersByTime(6 * 60_000);
   await s.t.mutation(internal.runner.reclaimExpiredLeases, {});
-  expect((await s.t.run((ctx) => ctx.db.get(handId)))!.status).toBe("expired");
-  expect(await ledger(s.t, "hand.expired")).toHaveLength(1);
+  expect((await s.t.run(async (ctx) => ctx.db.get(handId)))!.status).toBe(
+    "expired"
+  );
+  await expect(ledger(s.t, "hand.expired")).resolves.toHaveLength(1);
 });
 
 test("a card left past the ceiling expires and the agent is told no decision was made", async () => {
   const s = await setup();
   const { turnId, handId } = await waitingClaude(s);
-  await s.t.mutation(api.runner.handTimedOut, { secret: SECRET, handId });
-  expect((await s.t.run((ctx) => ctx.db.get(handId)))!.status).toBe("expired");
-  const turn = (await s.t.run((ctx) => ctx.db.get(turnId)))!;
+  await s.t.mutation(api.runner.handTimedOut, { handId, secret: SECRET });
+  expect((await s.t.run(async (ctx) => ctx.db.get(handId)))!.status).toBe(
+    "expired"
+  );
+  const turn = (await s.t.run(async (ctx) => ctx.db.get(turnId)))!;
   expect(turn.status).toBe("running");
   expect(turn.waitingOnHandId).toBeUndefined();
   const answer = (await allCommands(s.t)).find((c) => c.type === "answer")!;
   expect(answer).toMatchObject({
-    turnId,
+    payload: { handId, noDecision: true, requestId: "req-1" },
     status: "pending",
-    payload: { handId, requestId: "req-1", noDecision: true },
+    turnId,
   });
   expect(answer.payload.message).toMatch(/no decision/i);
-  expect(await decisions(s.t)).toHaveLength(0);
-  expect(await ledger(s.t, "hand.expired")).toHaveLength(1);
+  await expect(decisions(s.t)).resolves.toHaveLength(0);
+  await expect(ledger(s.t, "hand.expired")).resolves.toHaveLength(1);
 });
 
 test("a removed member's answer is rejected", async () => {
@@ -549,12 +562,14 @@ test("a removed member's answer is rejected", async () => {
   });
   await expect(
     s.dana.mutation(api.hands.answer, {
-      handId,
       answers: [{ questionId: "scope", labels: ["Option B"] }],
+      handId,
     })
   ).rejects.toThrow(/no longer a member/i);
-  expect((await s.t.run((ctx) => ctx.db.get(handId)))!.status).toBe("raised");
-  expect(await decisions(s.t)).toHaveLength(0);
+  expect((await s.t.run(async (ctx) => ctx.db.get(handId)))!.status).toBe(
+    "raised"
+  );
+  await expect(decisions(s.t)).resolves.toHaveLength(0);
 });
 
 test("the next context block shows a card decision as question, choice and answerer only, and leaves out review decisions", async () => {
@@ -562,50 +577,50 @@ test("the next context block shows a card decision as question, choice and answe
   const TOKEN = "TEAM-TOKEN-91b2";
   const { commandId, turnId, handId } = await waitingClaude(s);
   await s.dana.mutation(api.team.post, {
-    roomId: s.roomId,
     body: `quietly: ${TOKEN}`,
+    roomId: s.roomId,
   });
   await s.dana.mutation(api.hands.answer, {
-    handId,
     answers: [{ questionId: "scope", labels: ["Option B"] }],
+    handId,
   });
   await s.t.run(async (ctx) => {
     const ritualId = await ctx.db.insert("rituals", {
-      roomId: s.roomId,
-      type: "independent_review",
-      status: "decided",
-      request: "r",
       participantIds: [],
+      request: "r",
+      roomId: s.roomId,
+      status: "decided",
+      type: "independent_review",
     });
     await ctx.db.insert("decisions", {
-      roomId: s.roomId,
-      ritualId,
       choice: "REVIEW-CHOICE",
       rationale: "REVIEW-RATIONALE",
+      ritualId,
+      roomId: s.roomId,
     });
   });
   await s.t.mutation(api.runner.finish, {
-    secret: SECRET,
-    turnId,
     commandId,
     finalText: "ok",
+    secret: SECRET,
     transcriptRef: "/t",
+    turnId,
   });
 
   const next = (await s.owner.mutation(api.messages.send, {
-    roomId: s.roomId,
     body: "Continue",
+    roomId: s.roomId,
     toParticipantId: s.claude._id,
   }))!;
-  const prompt = (await s.t.run((ctx) => ctx.db.get(next)))!.prompt;
+  const { prompt } = (await s.t.run(async (ctx) => ctx.db.get(next)))!;
   expect(prompt).toMatch(/- Which scope\? → Option B \(decided by Dana, /);
   expect(prompt).not.toContain(TOKEN);
   expect(prompt).not.toContain("REVIEW-CHOICE");
   const job = await s.t.mutation(api.runner.claim, {
-    secret: SECRET,
     commandId: (await allCommands(s.t)).find(
       (c) => c.turnId === next && c.type === "run_turn"
     )!._id,
+    secret: SECRET,
   });
   expect(JSON.stringify(job)).not.toContain(TOKEN);
   expect(JSON.stringify(await allCommands(s.t))).not.toContain(TOKEN);
@@ -620,13 +635,13 @@ test("the pane says which agents can raise cards, once the runner reports it", a
     null,
   ]);
   await s.t.mutation(api.runner.reportCapabilities, {
-    secret: SECRET,
-    runnerId: s.runnerId,
     harnesses: [
       { id: "claude", canRaiseCards: true },
       { id: "codex", canRaiseCards: false },
       { id: "pi", canRaiseCards: false },
     ],
+    runnerId: s.runnerId,
+    secret: SECRET,
   });
   await heartbeat(s.t);
   pane = await s.dana.query(api.agent.pane, { roomId: s.roomId });

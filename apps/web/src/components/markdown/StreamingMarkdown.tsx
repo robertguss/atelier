@@ -1,5 +1,6 @@
 import { memo, useState } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown from "react-markdown";
+import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PluggableList } from "unified";
 
@@ -16,19 +17,15 @@ const components: Components = {
   ),
 };
 
-const MarkdownBlock = memo(function MarkdownBlock({
-  text,
-  plugins,
-}: {
-  text: string;
-  plugins: PluggableList;
-}) {
-  return (
-    <ReactMarkdown remarkPlugins={plugins} components={components}>
-      {text}
-    </ReactMarkdown>
-  );
-});
+const MarkdownBlock = memo(
+  ({ text, plugins }: { text: string; plugins: PluggableList }) => {
+    return (
+      <ReactMarkdown remarkPlugins={plugins} components={components}>
+        {text}
+      </ReactMarkdown>
+    );
+  }
+);
 
 /**
  * Markdown that may still be streaming. While it streams, finished blocks

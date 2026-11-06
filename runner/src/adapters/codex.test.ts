@@ -8,9 +8,9 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, test } from "vitest";
 
 import type { HarnessEvent, TurnRequest } from "@atelier/shared";
+import { expect, test } from "vitest";
 
 import { codexHarness } from "./codex.ts";
 import { turnInput } from "./events.ts";
@@ -63,7 +63,7 @@ const completed = {
 };
 const message = (text: string) => ({
   method: "item/completed",
-  params: { item: { type: "agentMessage", id: "m1", text } },
+  params: { item: { id: "m1", text, type: "agentMessage" } },
 });
 
 async function fakeCodex(spec: unknown) {
@@ -75,22 +75,23 @@ async function fakeCodex(spec: unknown) {
     dir,
     executable,
     async calls(): Promise<any[]> {
-      return (await readFile(join(dir, "calls.jsonl"), "utf8"))
+      return (await readFile(join(dir, "calls.jsonl"), "utf-8"))
         .trim()
         .split("\n")
         .map((l) => JSON.parse(l));
     },
-    [Symbol.asyncDispose]: () => rm(dir, { recursive: true, force: true }),
+    [Symbol.asyncDispose]: async () =>
+      rm(dir, { force: true, recursive: true }),
   };
 }
 
 function request(dir: string, extra: Partial<TurnRequest> = {}): TurnRequest {
   return {
-    turnId: "test",
     cwd: dir,
-    prompt: "go",
     editsEnabled: false,
     mcpServers: [],
+    prompt: "go",
+    turnId: "test",
     ...extra,
   };
 }
@@ -131,9 +132,9 @@ test("Codex review starts fresh with denied tools, disabled MCP, and never logs 
       },
     }).runTurn(
       request(fake.dir, {
+        independentReview: true,
         prompt: "review",
         resumeSessionId: "ordinary",
-        independentReview: true,
       }),
       new AbortController().signal,
       turnInput()
@@ -142,7 +143,7 @@ test("Codex review starts fresh with denied tools, disabled MCP, and never logs 
   const calls = await fake.calls();
   expect(calls.find((c) => c.id === 2).method).toBe("config/read");
   const start = calls.find((c) => c.method === "thread/start");
-  expect(start.params.threadId).toBe(undefined);
+  expect(start.params.threadId).toBeUndefined();
   expect(start.params.ephemeral).toBe(true);
   expect(start.params.config["mcp_servers.fixture.enabled"]).toBe(false);
   expect(start.params.config["features.shell_tool"]).toBe(false);
@@ -151,7 +152,9 @@ test("Codex review starts fresh with denied tools, disabled MCP, and never logs 
   expect(start.params.config["features.hooks"]).toBe(false);
   expect(start.params.sandbox).toBe("read-only");
   expect(JSON.stringify(raw)).not.toMatch(/CONFIG_SECRET/);
-  expect(results.some((e) => e.type === "final" && e.text === "Independent answer")).toBeTruthy();
+  expect(
+    results.some((e) => e.type === "final" && e.text === "Independent answer")
+  ).toBeTruthy();
 });
 
 test("Codex initialize opts into the experimental API", async () => {
@@ -177,7 +180,7 @@ test("Codex steers into the running turn by its id, and a refused steer resolves
         { result: { turnId: "turn-1" } },
         {
           error: {
-            code: -32600,
+            code: -32_600,
             message: "expected active turn id `turn-1` but found `turn-2`",
           },
         },
@@ -198,17 +201,17 @@ test("Codex steers into the running turn by its id, and a refused steer resolves
       input
     )
   );
-  expect(await input.steer("Use the second option")).toBe("steered");
-  expect(await input.steer("Too late")).toBe("rejected");
+  await expect(input.steer("Use the second option")).resolves.toBe("steered");
+  await expect(input.steer("Too late")).resolves.toBe("rejected");
   await running;
-  expect(await input.steer("After the turn")).toBe("rejected");
+  await expect(input.steer("After the turn")).resolves.toBe("rejected");
 
   const steers = (await fake.calls()).filter((c) => c.method === "turn/steer");
-  expect(steers.length).toBe(2);
+  expect(steers).toHaveLength(2);
   expect(steers[0].params).toStrictEqual({
-    threadId: "thread-1",
-    input: [{ type: "text", text: "Use the second option", text_elements: [] }],
     expectedTurnId: "turn-1",
+    input: [{ type: "text", text: "Use the second option", text_elements: [] }],
+    threadId: "thread-1",
   });
 });
 
@@ -217,10 +220,10 @@ test("Codex stop interrupts the turn before the process is killed", async () => 
     method: "item/started",
     params: {
       item: {
-        type: "commandExecution",
-        id: "c1",
         command: "sleep 60",
+        id: "c1",
         status: "inProgress",
+        type: "commandExecution",
       },
     },
   };
@@ -244,7 +247,9 @@ test("Codex stop interrupts the turn before the process is killed", async () => 
       turnInput()
     ),
     (e) => {
-      if (e.type === "tool_call") stop.abort();
+      if (e.type === "tool_call") {
+        stop.abort();
+      }
     }
   );
   const interrupt = (await fake.calls()).find(
@@ -267,7 +272,7 @@ test("Codex with edits off keeps the read-only sandbox, never asks, and raises n
           method: "item/tool/requestUserInput",
           params: {
             itemId: "u1",
-            questions: [{ id: "color", question: "Which?", options: [] }],
+            questions: [{ id: "color", options: [], question: "Which?" }],
           },
         },
       },
@@ -291,7 +296,7 @@ test("Codex with edits off keeps the read-only sandbox, never asks, and raises n
   const turn = calls.find((c) => c.method === "turn/start");
   expect(turn.params.sandboxPolicy).toStrictEqual({ type: "readOnly" });
   expect(turn.params.approvalPolicy).toBe("never");
-  expect(calls.find((c) => c.id === "q1").error.code).toBe(-32601);
+  expect(calls.find((c) => c.id === "q1").error.code).toBe(-32_601);
 });
 
 test("Codex with edits on declines commands and accepts file changes only inside the folder and outside control files", async () => {
@@ -303,32 +308,32 @@ test("Codex with edits on declines commands and accepts file changes only inside
   await symlink(join(outside, "missing"), join(dir, "dangling"));
 
   const change = (path: string, kind: object = { type: "add" }) => ({
-    path,
-    kind,
     diff: "",
+    kind,
+    path,
   });
   const files: Record<string, object[]> = {
-    inside: [change(join(dir, "docs/plan.md"))],
-    relative: [change("notes.md", { type: "update", move_path: null })],
-    outside: [change(join(outside, "plan.md"))],
-    parent: [change(join(dir, "../escape.md"))],
-    git: [change(join(dir, ".git/hooks/pre-commit"))],
-    codex: [change(join(dir, ".codex/config.toml"))],
     agents: [change(join(dir, ".agents/skills/x.md"))],
     claude: [change(join(dir, ".claude/settings.json"))],
-    pi: [change(join(dir, ".pi/extensions/x.ts"))],
+    codex: [change(join(dir, ".codex/config.toml"))],
+    git: [change(join(dir, ".git/hooks/pre-commit"))],
+    inside: [change(join(dir, "docs/plan.md"))],
     mcp: [change(join(dir, ".mcp.json"))],
-    nestedGit: [change(join(dir, "sub/.git/config"))],
-    underMcp: [change(join(dir, ".mcp.json/x"))],
+    mixed: [change(join(dir, "ok.md")), change(join(dir, ".git/config"))],
     movedIntoGit: [
       change(join(dir, "notes.md"), {
         type: "update",
         move_path: join(dir, ".git/notes.md"),
       }),
     ],
-    mixed: [change(join(dir, "ok.md")), change(join(dir, ".git/config"))],
-    throughLink: [change(join(dir, "linked/plan.md"))],
+    nestedGit: [change(join(dir, "sub/.git/config"))],
+    outside: [change(join(outside, "plan.md"))],
+    parent: [change(join(dir, "../escape.md"))],
+    pi: [change(join(dir, ".pi/extensions/x.ts"))],
+    relative: [change("notes.md", { type: "update", move_path: null })],
     throughDangling: [change(join(dir, "dangling"))],
+    throughLink: [change(join(dir, "linked/plan.md"))],
+    underMcp: [change(join(dir, ".mcp.json/x"))],
   };
   const steps: object[] = [
     {
@@ -336,10 +341,10 @@ test("Codex with edits on declines commands and accepts file changes only inside
         method: "item/started",
         params: {
           item: {
-            type: "commandExecution",
-            id: "cmd",
             command: "touch x\nmore",
+            id: "cmd",
             status: "inProgress",
+            type: "commandExecution",
           },
         },
       },
@@ -349,10 +354,10 @@ test("Codex with edits on declines commands and accepts file changes only inside
         id: "approve-cmd",
         method: "item/commandExecution/requestApproval",
         params: {
+          command: "touch x",
+          itemId: "cmd",
           threadId: "thread-1",
           turnId: "turn-1",
-          itemId: "cmd",
-          command: "touch x",
         },
       },
     },
@@ -362,10 +367,10 @@ test("Codex with edits on declines commands and accepts file changes only inside
         method: "item/completed",
         params: {
           item: {
-            type: "commandExecution",
-            id: "cmd",
             command: "touch x\nmore",
+            id: "cmd",
             status: "declined",
+            type: "commandExecution",
           },
         },
       },
@@ -377,7 +382,7 @@ test("Codex with edits on declines commands and accepts file changes only inside
         send: {
           method: "item/started",
           params: {
-            item: { type: "fileChange", id, changes, status: "inProgress" },
+            item: { changes, id, status: "inProgress", type: "fileChange" },
           },
         },
       },
@@ -385,7 +390,7 @@ test("Codex with edits on declines commands and accepts file changes only inside
         send: {
           id: `approve-${id}`,
           method: "item/fileChange/requestApproval",
-          params: { threadId: "thread-1", turnId: "turn-1", itemId: id },
+          params: { itemId: id, threadId: "thread-1", turnId: "turn-1" },
         },
       },
       { response: `approve-${id}` }
@@ -397,9 +402,9 @@ test("Codex with edits on declines commands and accepts file changes only inside
         id: "approve-unknown",
         method: "item/fileChange/requestApproval",
         params: {
+          itemId: "never-started",
           threadId: "thread-1",
           turnId: "turn-1",
-          itemId: "never-started",
         },
       },
     },
@@ -409,10 +414,10 @@ test("Codex with edits on declines commands and accepts file changes only inside
         method: "item/completed",
         params: {
           item: {
-            type: "fileChange",
-            id: "inside",
             changes: files.inside,
+            id: "inside",
             status: "completed",
+            type: "fileChange",
           },
         },
       },
@@ -422,12 +427,12 @@ test("Codex with edits on declines commands and accepts file changes only inside
         method: "item/completed",
         params: {
           item: {
-            type: "mcpToolCall",
+            arguments: { a: 1 },
             id: "mcp1",
             server: "atelier",
-            tool: "post",
-            arguments: { a: 1 },
             status: "failed",
+            tool: "post",
+            type: "mcpToolCall",
           },
         },
       },
@@ -452,11 +457,11 @@ test("Codex with edits on declines commands and accepts file changes only inside
     const turn = calls.find((c) => c.method === "turn/start");
     expect(turn.params.approvalPolicy).toBe("untrusted");
     expect(turn.params.sandboxPolicy).toStrictEqual({
+      excludeSlashTmp: true,
+      excludeTmpdirEnvVar: true,
+      networkAccess: false,
       type: "workspaceWrite",
       writableRoots: [dir],
-      networkAccess: false,
-      excludeTmpdirEnvVar: true,
-      excludeSlashTmp: true,
     });
 
     const decision = (id: string) =>
@@ -488,36 +493,38 @@ test("Codex with edits on declines commands and accepts file changes only inside
     const tools = results.filter(
       (e) => e.type === "tool_call" || e.type === "tool_result"
     );
-    expect(tools.filter(
+    expect(
+      tools.filter(
         (e) =>
           e.type === "tool_call" &&
           (e.id === "cmd" || e.id === "inside" || e.id === "mcp1")
-      )).toStrictEqual([
-        {
-          type: "tool_call",
-          id: "cmd",
-          name: "Shell",
-          summary: "touch x more",
-        },
-        {
-          type: "tool_call",
-          id: "inside",
-          name: "Edit",
-          summary: "docs/plan.md",
-        },
-        {
-          type: "tool_call",
-          id: "mcp1",
-          name: "atelier.post",
-          summary: '{"a":1}',
-        },
-      ]);
+      )
+    ).toStrictEqual([
+      {
+        id: "cmd",
+        name: "Shell",
+        summary: "touch x more",
+        type: "tool_call",
+      },
+      {
+        id: "inside",
+        name: "Edit",
+        summary: "docs/plan.md",
+        type: "tool_call",
+      },
+      {
+        id: "mcp1",
+        name: "atelier.post",
+        summary: '{"a":1}',
+        type: "tool_call",
+      },
+    ]);
     expect(tools.filter((e) => e.type === "tool_result")).toStrictEqual([
-        { type: "tool_result", id: "cmd", ok: false },
-        { type: "tool_result", id: "inside", ok: true },
-        { type: "tool_result", id: "mcp1", ok: false },
-      ]);
+      { id: "cmd", ok: false, type: "tool_result" },
+      { id: "inside", ok: true, type: "tool_result" },
+      { id: "mcp1", ok: false, type: "tool_result" },
+    ]);
   } finally {
-    await rm(outside, { recursive: true, force: true });
+    await rm(outside, { force: true, recursive: true });
   }
 });

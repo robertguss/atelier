@@ -30,7 +30,9 @@ export function Reviews({
       <Button
         kind="secondary"
         label={open ? "Close review composer" : "Independent review"}
-        onPress={() => setOpen(!open)}
+        onPress={() => {
+          setOpen(!open);
+        }}
       />
       {open && (
         <>
@@ -43,7 +45,9 @@ export function Reviews({
               kind="secondary"
               key={p._id}
               label={`${excluded.includes(p._id) ? "○" : "✓"} ${p.displayName}`}
-              onPress={() => setExcluded((ids) => toggleExcluded(ids, p._id))}
+              onPress={() => {
+                setExcluded((ids) => toggleExcluded(ids, p._id));
+              }}
             />
           ))}
           <Field
@@ -64,19 +68,19 @@ export function Reviews({
               setBusy(true);
               try {
                 const id = await begin({
-                  roomId,
-                  request,
                   participantIds: includedParticipantIds(
                     participants,
                     excluded
                   ),
+                  request,
+                  roomId,
                 });
                 setRequest("");
                 setError("");
                 setOpen(false);
-                router.push({ pathname: "/ritual/[id]", params: { id } });
-              } catch (e) {
-                setError(String(e));
+                router.push({ params: { id }, pathname: "/ritual/[id]" });
+              } catch (error_) {
+                setError(String(error_));
               } finally {
                 setBusy(false);
               }
@@ -90,9 +94,9 @@ export function Reviews({
           key={r._id}
           kind="secondary"
           label={`${r.status === "collecting" ? "Collecting" : "Complete"} · ${r.request.slice(0, 70)}`}
-          onPress={() =>
-            router.push({ pathname: "/ritual/[id]", params: { id: r._id } })
-          }
+          onPress={() => {
+            router.push({ params: { id: r._id }, pathname: "/ritual/[id]" });
+          }}
         />
       ))}
     </View>

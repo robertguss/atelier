@@ -9,7 +9,7 @@ const response = (
   notification: { request: { content: { data }, identifier } },
 });
 
-describe("notificationRitualId", () => {
+describe(notificationRitualId, () => {
   it("returns the ritual id from a new notification", () => {
     expect(
       notificationRitualId(response("n-1", { ritualId: "abc123" }), undefined)

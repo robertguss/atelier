@@ -1,7 +1,8 @@
 // Copied from T3 Code (https://github.com/pingdotgg/t3code), apps/web/src/components/ui/empty.tsx.
 // Copyright (c) 2026 T3 Tools Inc. MIT License; see THIRD_PARTY_NOTICES.md.
 
-import { cva, type VariantProps } from "class-variance-authority";
+import { cva } from "class-variance-authority";
+import type { VariantProps } from "class-variance-authority";
 
 import { cn } from "~/lib/utils";
 

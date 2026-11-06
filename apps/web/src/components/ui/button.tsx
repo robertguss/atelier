@@ -3,7 +3,8 @@
 
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
-import { cva, type VariantProps } from "class-variance-authority";
+import { cva } from "class-variance-authority";
+import type { VariantProps } from "class-variance-authority";
 import type * as React from "react";
 
 import { cn } from "~/lib/utils";
@@ -24,9 +25,9 @@ const buttonVariants = cva(
         "icon-lg": "size-10 sm:size-9",
         "icon-micro":
           "size-5 rounded-sm p-0 before:rounded-[calc(var(--radius-sm)-1px)] [&_svg:not([class*='size-'])]:size-3",
-        "icon-tiny": "size-4 p-0 [&_svg:not([class*='size-'])]:size-3",
         "icon-sm": "size-8 sm:size-7",
         "icon-sm-pill": "size-8 rounded-full before:rounded-full sm:size-7",
+        "icon-tiny": "size-4 p-0 [&_svg:not([class*='size-'])]:size-3",
         "icon-xl":
           "size-11 sm:size-10 [&_svg:not([class*='size-'])]:size-5 sm:[&_svg:not([class*='size-'])]:size-4.5",
         "icon-xs":
@@ -37,9 +38,9 @@ const buttonVariants = cva(
         multiline:
           "min-h-9 px-[calc(--spacing(3)-1px)] py-[calc(--spacing(1.5)-1px)] whitespace-normal sm:min-h-8",
         sm: "h-8 gap-1.5 px-[calc(--spacing(2.5)-1px)] sm:h-7",
-        "sm-pill": "h-8 gap-1.5 rounded-full px-2.5 sm:h-7",
         "sm-multiline":
           "min-h-8 gap-1.5 px-[calc(--spacing(2.5)-1px)] py-[calc(--spacing(1)-1px)] whitespace-normal sm:min-h-7",
+        "sm-pill": "h-8 gap-1.5 rounded-full px-2.5 sm:h-7",
         xl: "h-11 px-[calc(--spacing(4)-1px)] text-lg sm:h-10 sm:text-base [&_svg:not([class*='size-'])]:size-5 sm:[&_svg:not([class*='size-'])]:size-4.5",
         xs: "h-7 gap-1 px-[calc(--spacing(2)-1px)] text-sm sm:h-6 sm:text-xs [&_svg:not([class*='size-'])]:size-4 sm:[&_svg:not([class*='size-'])]:size-3.5",
       },
@@ -52,10 +53,10 @@ const buttonVariants = cva(
           "border-input bg-popover text-destructive-foreground dark:bg-input/32 [:hover,[data-pressed]]:border-destructive/32 [:hover,[data-pressed]]:bg-destructive/4 shadow-xs/5 not-dark:bg-clip-padding not-disabled:not-active:not-data-pressed:before:shadow-[0_1px_--theme(--color-black/4%)] dark:not-disabled:before:shadow-[0_-1px_--theme(--color-white/2%)] dark:not-disabled:not-active:not-data-pressed:before:shadow-[0_-1px_--theme(--color-white/6%)] [:disabled,:active,[data-pressed]]:shadow-none",
         ghost:
           "text-foreground data-pressed:bg-accent [:hover,[data-pressed]]:bg-accent border-transparent [--control-icon-color:var(--contrast-muted-foreground)]",
-        "ghost-muted":
-          "text-muted-foreground data-pressed:bg-accent [:hover,[data-pressed]]:bg-accent [:hover,[data-pressed]]:text-foreground border-transparent [--control-icon-color:currentColor]",
         "ghost-destructive":
           "text-muted-foreground data-pressed:bg-accent [:hover,[data-pressed]]:bg-accent [:hover,[data-pressed]]:text-destructive border-transparent [--control-icon-color:currentColor]",
+        "ghost-muted":
+          "text-muted-foreground data-pressed:bg-accent [:hover,[data-pressed]]:bg-accent [:hover,[data-pressed]]:text-foreground border-transparent [--control-icon-color:currentColor]",
         glass:
           "surface-glass border-border/60 text-foreground [:hover,[data-pressed]]:border-border rounded-full shadow-sm [--control-icon-color:var(--contrast-muted-foreground)] before:rounded-full",
         link: "border-transparent underline-offset-4 [:hover,[data-pressed]]:underline",
@@ -110,15 +111,15 @@ const inlineButtonVariants = cva(
   {
     defaultVariants: { tone: "default" },
     variants: {
-      touchTarget: {
-        padded: "pointer-coarse:min-h-11 pointer-coarse:px-1.5",
-      },
       tone: {
         default: "text-foreground",
-        muted: "text-muted-foreground hover:text-foreground",
         destructive: "text-destructive/80 hover:text-destructive",
+        muted: "text-muted-foreground hover:text-foreground",
         picker:
           "text-foreground gap-1 decoration-from-font underline-offset-4 data-popup-open:underline",
+      },
+      touchTarget: {
+        padded: "pointer-coarse:min-h-11 pointer-coarse:px-1.5",
       },
     },
   }

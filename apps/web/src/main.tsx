@@ -21,7 +21,7 @@ const applyAppearance = () =>
 applyAppearance();
 darkQuery.addEventListener("change", applyAppearance);
 
-createRoot(document.getElementById("root") as HTMLElement).render(
+createRoot(document.querySelector("#root") as HTMLElement).render(
   <StrictMode>
     <ClerkShell>
       <RouterProvider router={router} />

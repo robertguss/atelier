@@ -6,15 +6,17 @@ export const get = query({
   args: {},
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return { signedIn: false as const };
+    if (!identity) {
+      return { signedIn: false as const };
+    }
     const owner = await getOwner(ctx);
     const user = await getUser(ctx);
     return {
-      signedIn: true as const,
-      isOwner: owner !== null,
-      userId: user?._id ?? null,
       email: identity.email ?? null,
+      isOwner: owner !== null,
       name: identity.name ?? null,
+      signedIn: true as const,
+      userId: user?._id ?? null,
     };
   },
 });

@@ -23,8 +23,11 @@ export async function setStreamedText(
     .query("turnStreams")
     .withIndex("by_turn", (q) => q.eq("turnId", turnId))
     .unique();
-  if (!row) await ctx.db.insert("turnStreams", { turnId, text });
-  else if (row.text !== text) await ctx.db.patch(row._id, { text });
+  if (!row) {
+    await ctx.db.insert("turnStreams", { turnId, text });
+  } else if (row.text !== text) {
+    await ctx.db.patch(row._id, { text });
+  }
 }
 
 export async function toolItems(ctx: QueryCtx, turnId: Id<"turns">) {
@@ -35,12 +38,12 @@ export async function toolItems(ctx: QueryCtx, turnId: Id<"turns">) {
       .collect()
   )
     .sort((a, b) => a.seq - b.seq)
-    .map((i) => ({ name: i.name, summary: i.summary, ok: i.ok ?? null }));
+    .map((i) => ({ name: i.name, ok: i.ok ?? null, summary: i.summary }));
 }
 
 // Queued and running turns in a room, oldest first.
 export async function activeRoomTurns(ctx: QueryCtx, roomId: Id<"rooms">) {
-  const withStatus = (status: "queued" | "running") =>
+  const withStatus = async (status: "queued" | "running") =>
     ctx.db
       .query("turns")
       .withIndex("by_room_status", (q) =>

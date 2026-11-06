@@ -28,12 +28,16 @@ export const steer = mutation({
     turnId?: Id<"turns">;
   }> => {
     const message = await ctx.db.get(messageId);
-    if (!message) throw new Error("Unknown message");
+    if (!message) {
+      throw new Error("Unknown message");
+    }
     const { participant } = await requireMember(ctx, message.roomId);
-    if (message.delivery !== "queued" || !message.toParticipantId)
+    if (message.delivery !== "queued" || !message.toParticipantId) {
       throw new Error("This message is no longer waiting");
-    if (message.followUpRitualId)
+    }
+    if (message.followUpRitualId) {
       throw new Error("A follow-up runs as its own turn");
+    }
     const room = await requireRunnerOnline(
       ctx,
       await ctx.db.get(message.roomId)
@@ -62,7 +66,7 @@ const MESSAGES_PER_TURN = 4;
 // carries, so the runner's streaming writes never rerun this query.
 // Members never see reviews, follow-ups to them, or any turn's prompt.
 export const pane = query({
-  args: { roomId: v.id("rooms"), limit: v.optional(v.number()) },
+  args: { limit: v.optional(v.number()), roomId: v.id("rooms") },
   handler: async (ctx, { roomId, limit }) => {
     const { isOwner } = await requireMember(ctx, roomId);
     const room = (await ctx.db.get(roomId))!;
@@ -122,13 +126,13 @@ export const pane = query({
     const agents = [];
     for (const p of harnesses) {
       const active = await activeOrdinaryTurn(ctx, p._id);
-      const status = !active
-        ? "idle"
-        : active.status === "queued"
+      const status = active
+        ? active.status === "queued"
           ? "starting"
           : active.waitingOnHandId
             ? "waiting"
-            : "running";
+            : "running"
+        : "idle";
       agents.push({
         participantId: p._id,
         displayName: p.displayName,
@@ -164,25 +168,7 @@ export const pane = query({
     ];
 
     return {
-      runner: {
-        lastHeartbeatAt: runner?.lastHeartbeatAt ?? 0,
-        offlineAfterMs: OFFLINE_AFTER_MS,
-      },
-      editsEnabled: room.editsEnabled === true,
-      hasOlder: moreTurns || moreMessages,
       agents,
-      messages: messages.map((m) => ({
-        id: m._id,
-        at: m._creationTime,
-        authorParticipantId: m.authorParticipantId,
-        body: m.body,
-        toParticipantId: m.toParticipantId ?? null,
-        // Set on an agent's reply.
-        turnId: m.turnId ?? null,
-        delivery: m.delivery ?? null,
-        deliveredTurnId: m.deliveredTurnId ?? null,
-        cancelReason: m.cancelReason ?? null,
-      })),
       cards: cards.map((h) => ({
         id: h._id,
         turnId: h.turnId,
@@ -197,6 +183,24 @@ export const pane = query({
         closedAt: h.closedAt ?? null,
         closeReason: h.closeReason ?? null,
       })),
+      editsEnabled: room.editsEnabled === true,
+      hasOlder: moreTurns || moreMessages,
+      messages: messages.map((m) => ({
+        id: m._id,
+        at: m._creationTime,
+        authorParticipantId: m.authorParticipantId,
+        body: m.body,
+        toParticipantId: m.toParticipantId ?? null,
+        // Set on an agent's reply.
+        turnId: m.turnId ?? null,
+        delivery: m.delivery ?? null,
+        deliveredTurnId: m.deliveredTurnId ?? null,
+        cancelReason: m.cancelReason ?? null,
+      })),
+      runner: {
+        lastHeartbeatAt: runner?.lastHeartbeatAt ?? 0,
+        offlineAfterMs: OFFLINE_AFTER_MS,
+      },
       turns: await Promise.all(
         turns.map(async (t) => {
           const ended = !isActiveTurnStatus(t.status);
@@ -229,11 +233,11 @@ export const live = query({
     const turns = (await activeRoomTurns(ctx, roomId)).filter((t) =>
       visibleTurn(t, isOwner)
     );
-    return Promise.all(
+    return await Promise.all(
       turns.map(async (t) => ({
         id: t._id,
-        partialText: await streamedText(ctx, t),
         items: await toolItems(ctx, t._id),
+        partialText: await streamedText(ctx, t),
       }))
     );
   },

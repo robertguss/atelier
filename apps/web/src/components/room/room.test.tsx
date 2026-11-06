@@ -25,7 +25,7 @@ const DANA = "p-dana";
 const CLAUDE = "p-claude";
 const CODEX = "p-codex";
 
-type Pane = {
+interface Pane {
   runner: { lastHeartbeatAt: number; offlineAfterMs: number };
   editsEnabled: boolean;
   hasOlder: boolean;
@@ -33,7 +33,7 @@ type Pane = {
   messages: Record<string, unknown>[];
   cards: Record<string, unknown>[];
   turns: Record<string, unknown>[];
-};
+}
 
 let pane: Pane;
 
@@ -44,76 +44,76 @@ function agent(
   overrides: Record<string, unknown> = {}
 ) {
   return {
-    participantId,
+    activeTurnId: null,
+    canRaiseCards: true,
     displayName,
     harness,
-    status: "idle",
-    activeTurnId: null,
+    participantId,
     queued: 0,
-    canRaiseCards: true,
+    status: "idle",
     ...overrides,
   };
 }
 
 function message(overrides: Record<string, unknown>) {
   return {
-    id: "m1",
     at: 1_000,
     authorParticipantId: DANA,
     body: "Hello",
+    cancelReason: null,
+    deliveredTurnId: null,
+    delivery: "delivered",
+    id: "m1",
     toParticipantId: CLAUDE,
     turnId: null,
-    delivery: "delivered",
-    deliveredTurnId: null,
-    cancelReason: null,
     ...overrides,
   };
 }
 
 function turn(overrides: Record<string, unknown>) {
   return {
-    id: "t1",
     at: 2_000,
-    participantId: CLAUDE,
-    status: "running",
-    partialText: "",
-    error: null,
-    requestedByParticipantIds: [ROBERT],
-    waitingOnHandId: null,
-    stoppedByParticipantId: null,
-    startedAt: 2_000,
     endedAt: null,
+    error: null,
+    id: "t1",
     items: [],
+    partialText: "",
+    participantId: CLAUDE,
+    requestedByParticipantIds: [ROBERT],
+    startedAt: 2_000,
+    status: "running",
+    stoppedByParticipantId: null,
+    waitingOnHandId: null,
     ...overrides,
   };
 }
 
 const scopeQuestion = {
-  id: "scope",
+  allowFreeText: true,
   header: "Scope",
-  text: "How big should the plan be?",
+  id: "scope",
+  multiSelect: false,
   options: [
     { label: "Small" },
     { label: "Large", description: "Everything at once" },
   ],
-  multiSelect: false,
-  allowFreeText: true,
+  text: "How big should the plan be?",
 };
 
 function card(overrides: Record<string, unknown>) {
   return {
+    answeredAt: null,
+    answeredByParticipantId: null,
+    answers: null,
+    closeReason: null,
+    closedAt: null,
     id: "h1",
-    turnId: "t1",
     participantId: CLAUDE,
     questions: [scopeQuestion],
-    status: "raised",
-    answers: null,
-    answeredByParticipantId: null,
-    answeredAt: null,
-    via: null,
     raisedAt: 3_000,
-    closedAt: null,
-    closeReason: null,
+    status: "raised",
+    turnId: "t1",
+    via: null,
     ...overrides,
   };
 }
@@ -121,18 +121,17 @@ function card(overrides: Record<string, unknown>) {
 function room(access: "owner" | "member" = "owner") {
   backend.queries["rooms:access"] = () => access;
   backend.queries["members:notice"] = () => ({
-    currentVersion: 1,
     acceptedVersion: 1,
+    currentVersion: 1,
   });
   backend.queries["me:get"] = () => ({
-    signedIn: true,
-    isOwner: access === "owner",
-    userId: access === "owner" ? "u-robert" : "u-dana",
     email: null,
+    isOwner: access === "owner",
     name: null,
+    signedIn: true,
+    userId: access === "owner" ? "u-robert" : "u-dana",
   });
   backend.queries["rooms:get"] = () => ({
-    room: { _id: ROOM, name: "Pricing plan", editsEnabled: pane.editsEnabled },
     participants: [
       { _id: ROBERT, kind: "human", displayName: "Robert", userId: "u-robert" },
       { _id: DANA, kind: "human", displayName: "Dana", userId: "u-dana" },
@@ -144,10 +143,11 @@ function room(access: "owner" | "member" = "owner") {
       },
       { _id: CODEX, kind: "harness", harness: "codex", displayName: "Codex" },
     ],
+    room: { _id: ROOM, editsEnabled: pane.editsEnabled, name: "Pricing plan" },
   });
   backend.queries["agent:pane"] = () => pane;
   backend.queries["team:list"] = () => [];
-  backend.queries["members:list"] = () => ({ members: [], invites: [] });
+  backend.queries["members:list"] = () => ({ invites: [], members: [] });
 }
 
 async function openRoom(access: "owner" | "member" = "owner") {
@@ -160,15 +160,15 @@ async function openRoom(access: "owner" | "member" = "owner") {
 beforeEach(() => {
   resetBackend();
   pane = {
-    runner: { lastHeartbeatAt: Date.now(), offlineAfterMs: 45_000 },
-    editsEnabled: false,
-    hasOlder: false,
     agents: [
       agent(CLAUDE, "claude", "Claude"),
       agent(CODEX, "codex", "Codex", { canRaiseCards: false }),
     ],
-    messages: [],
     cards: [],
+    editsEnabled: false,
+    hasOlder: false,
+    messages: [],
+    runner: { lastHeartbeatAt: Date.now(), offlineAfterMs: 45_000 },
     turns: [],
   };
 });
@@ -193,12 +193,12 @@ describe("composers", () => {
     });
     fireEvent.keyDown(team, { key: "Enter" });
 
-    await waitFor(() =>
+    await waitFor(() => {
       expect(backend.mutations["team:post"]).toHaveBeenCalledWith({
-        roomId: ROOM,
         body: "between us, this plan is too big",
-      })
-    );
+        roomId: ROOM,
+      });
+    });
     expect(backend.mutations["messages:send"]).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(team);
   });
@@ -212,13 +212,13 @@ describe("composers", () => {
     expect(backend.mutations["messages:send"]).not.toHaveBeenCalled();
 
     fireEvent.keyDown(toClaude, { key: "Enter" });
-    await waitFor(() =>
+    await waitFor(() => {
       expect(backend.mutations["messages:send"]).toHaveBeenCalledWith({
-        roomId: ROOM,
         body: "Draft the plan",
+        roomId: ROOM,
         toParticipantId: CLAUDE,
-      })
-    );
+      });
+    });
     expect(backend.mutations["team:post"]).not.toHaveBeenCalled();
   });
 
@@ -242,8 +242,8 @@ describe("composers", () => {
   it('offers "Send and steer now" while the target agent works, and sends the message as a steer', async () => {
     pane.agents = [
       agent(CLAUDE, "claude", "Claude", {
-        status: "running",
         activeTurnId: "t1",
+        status: "running",
       }),
     ];
     pane.turns = [turn({})];
@@ -253,15 +253,15 @@ describe("composers", () => {
     fireEvent.change(toClaude, { target: { value: "Stop, keep it short" } });
     fireEvent.click(screen.getByRole("button", { name: "Send and steer now" }));
 
-    await waitFor(() =>
+    await waitFor(() => {
       expect(backend.mutations["messages:send"]).toHaveBeenCalledWith({
-        roomId: ROOM,
         body: "Stop, keep it short",
-        toParticipantId: CLAUDE,
+        roomId: ROOM,
         steer: true,
-      })
-    );
-    expect(backend.mutations["messages:send"]).toHaveBeenCalledTimes(1);
+        toParticipantId: CLAUDE,
+      });
+    });
+    expect(backend.mutations["messages:send"]).toHaveBeenCalledOnce();
     expect(backend.mutations["agent:steer"]).not.toHaveBeenCalled();
   });
 
@@ -273,42 +273,52 @@ describe("composers", () => {
 
     pane.agents = [
       agent(CLAUDE, "claude", "Claude"),
-      agent(CODEX, "codex", "Codex", { status: "waiting", activeTurnId: "t1" }),
+      agent(CODEX, "codex", "Codex", { activeTurnId: "t1", status: "waiting" }),
     ];
     pane.turns = [turn({ participantId: CODEX, waitingOnHandId: "h1" })];
     pane.cards = [card({ participantId: CODEX })];
-    act(() => pushBackend());
+    act(() => {
+      pushBackend();
+    });
     await screen.findByRole("group", { name: /Codex asks/ });
 
     const composer = screen.getByRole("textbox", { name: "To Claude" });
     expect(composer).toHaveValue("Keep the plan small");
     fireEvent.keyDown(composer, { key: "Enter" });
-    await waitFor(() =>
+    await waitFor(() => {
       expect(backend.mutations["messages:send"]).toHaveBeenCalledWith({
-        roomId: ROOM,
         body: "Keep the plan small",
+        roomId: ROOM,
         toParticipantId: CLAUDE,
-      })
-    );
+      });
+    });
   });
 
   it("keeps text typed while a message is still sending", async () => {
     let finish = () => {};
     backend.mutations["messages:send"] = vi.fn(
-      () => new Promise<null>((resolve) => (finish = () => resolve(null)))
+      async () =>
+        new Promise<null>(
+          (resolve) =>
+            (finish = () => {
+              resolve(null);
+            })
+        )
     );
     await openRoom();
     const toClaude = screen.getByRole("textbox", { name: "To Claude" });
     fireEvent.change(toClaude, { target: { value: "Draft the plan" } });
     fireEvent.keyDown(toClaude, { key: "Enter" });
-    await waitFor(() =>
-      expect(backend.mutations["messages:send"]).toHaveBeenCalledTimes(1)
-    );
+    await waitFor(() => {
+      expect(backend.mutations["messages:send"]).toHaveBeenCalledOnce();
+    });
 
     fireEvent.change(toClaude, {
       target: { value: "Draft the plan. Also list the risks" },
     });
-    await act(async () => finish());
+    await act(async () => {
+      finish();
+    });
     expect(screen.getByRole("textbox", { name: "To Claude" })).toHaveValue(
       "Draft the plan. Also list the risks"
     );
@@ -327,8 +337,8 @@ describe("question cards", () => {
   it("answers an open card with the chosen option without moving focus to the agent composer", async () => {
     pane.agents = [
       agent(CLAUDE, "claude", "Claude", {
-        status: "waiting",
         activeTurnId: "t1",
+        status: "waiting",
       }),
     ];
     pane.turns = [turn({ waitingOnHandId: "h1" })];
@@ -344,12 +354,12 @@ describe("question cards", () => {
     fireEvent.click(large);
     fireEvent.click(within(open).getByRole("button", { name: "Answer" }));
 
-    await waitFor(() =>
+    await waitFor(() => {
       expect(backend.mutations["hands:answer"]).toHaveBeenCalledWith({
-        handId: "h1",
         answers: [{ questionId: "scope", labels: ["Large"] }],
-      })
-    );
+        handId: "h1",
+      });
+    });
     expect(document.activeElement).not.toBe(
       screen.getByRole("textbox", { name: "To Claude" })
     );
@@ -359,10 +369,10 @@ describe("question cards", () => {
     pane.turns = [turn({ status: "done" })];
     pane.cards = [
       card({
-        status: "answered",
-        via: "card",
         answeredByParticipantId: DANA,
         answers: [{ questionId: "scope", labels: ["Large"] }],
+        status: "answered",
+        via: "card",
       }),
     ];
     await openRoom();
@@ -377,8 +387,6 @@ describe("question cards", () => {
     pane.turns = [turn({ status: "done" })];
     pane.cards = [
       card({
-        status: "answered",
-        via: "chat",
         answeredByParticipantId: DANA,
         answers: [
           {
@@ -387,6 +395,8 @@ describe("question cards", () => {
             freeText: "go with option B but keep it short",
           },
         ],
+        status: "answered",
+        via: "chat",
       }),
     ];
     await openRoom();
@@ -397,9 +407,9 @@ describe("question cards", () => {
   });
 
   it("shows a card cancelled because the turn was stopped", async () => {
-    pane.turns = [turn({ status: "interrupted", error: "Cancelled by Dana" })];
+    pane.turns = [turn({ error: "Cancelled by Dana", status: "interrupted" })];
     pane.cards = [
-      card({ status: "cancelled", closeReason: "Cancelled by Dana" }),
+      card({ closeReason: "Cancelled by Dana", status: "cancelled" }),
     ];
     await openRoom();
     expect(
@@ -410,7 +420,7 @@ describe("question cards", () => {
   it("offers to send a late answer to an expired card as a message", async () => {
     pane.turns = [turn({ status: "done" })];
     pane.cards = [
-      card({ status: "expired", closeReason: "No answer within 2 hours" }),
+      card({ closeReason: "No answer within 2 hours", status: "expired" }),
     ];
     await openRoom();
     expect(screen.getByText(/Expired with no decision/)).toBeInTheDocument();
@@ -421,13 +431,13 @@ describe("question cards", () => {
     const late = screen.getByRole("textbox", { name: "Late answer to Claude" });
     fireEvent.change(late, { target: { value: "Small, please" } });
     fireEvent.click(screen.getByRole("button", { name: "Send late answer" }));
-    await waitFor(() =>
+    await waitFor(() => {
       expect(backend.mutations["messages:send"]).toHaveBeenCalledWith({
-        roomId: ROOM,
         body: "Small, please",
+        roomId: ROOM,
         toParticipantId: CLAUDE,
-      })
-    );
+      });
+    });
   });
 
   it("marks an agent that can't raise question cards", async () => {
@@ -445,18 +455,18 @@ describe("queue, delivery and stopping", () => {
   it("steers a queued message on request", async () => {
     pane.agents = [
       agent(CLAUDE, "claude", "Claude", {
-        status: "running",
         activeTurnId: "t1",
         queued: 1,
+        status: "running",
       }),
     ];
     pane.turns = [turn({})];
     pane.messages = [
       message({
-        id: "m-q",
         at: 3_000,
         body: "Use the old pricing",
         delivery: "queued",
+        id: "m-q",
       }),
     ];
     await openRoom();
@@ -472,18 +482,18 @@ describe("queue, delivery and stopping", () => {
   it("shows a rejected steer back in the queue", async () => {
     pane.agents = [
       agent(CLAUDE, "claude", "Claude", {
-        status: "running",
         activeTurnId: "t1",
         queued: 1,
+        status: "running",
       }),
     ];
     pane.turns = [turn({})];
     pane.messages = [
       message({
-        id: "m-q",
         at: 3_000,
         body: "Use the old pricing",
         delivery: "steering",
+        id: "m-q",
       }),
     ];
     await openRoom();
@@ -491,16 +501,18 @@ describe("queue, delivery and stopping", () => {
 
     pane.messages = [
       message({
-        id: "m-q",
         at: 3_000,
         body: "Use the old pricing",
         delivery: "queued",
+        id: "m-q",
       }),
     ];
-    act(() => pushBackend());
-    expect(
-      await screen.findByText(/Couldn't steer into the running turn/)
-    ).toBeInTheDocument();
+    act(() => {
+      pushBackend();
+    });
+    await expect(
+      screen.findByText(/Couldn't steer into the running turn/)
+    ).resolves.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Steer now" })
     ).toBeInTheDocument();
@@ -509,17 +521,17 @@ describe("queue, delivery and stopping", () => {
   it("says why a message was never delivered", async () => {
     pane.messages = [
       message({
-        id: "m-a",
         body: "From a removed member",
-        delivery: "cancelled",
         cancelReason: "removed",
+        delivery: "cancelled",
+        id: "m-a",
       }),
       message({
-        id: "m-b",
         at: 1_500,
         body: "Sent while offline",
-        delivery: "cancelled",
         cancelReason: "runner offline",
+        delivery: "cancelled",
+        id: "m-b",
       }),
     ];
     await openRoom();
@@ -540,8 +552,8 @@ describe("queue, delivery and stopping", () => {
   it("stops a running turn", async () => {
     pane.agents = [
       agent(CLAUDE, "claude", "Claude", {
-        status: "running",
         activeTurnId: "t1",
+        status: "running",
       }),
     ];
     pane.turns = [turn({ partialText: "Working on **it**" })];
@@ -556,16 +568,16 @@ describe("queue, delivery and stopping", () => {
   it("streams a running turn's text and tool activity from the live query", async () => {
     pane.agents = [
       agent(CLAUDE, "claude", "Claude", {
-        status: "running",
         activeTurnId: "t1",
+        status: "running",
       }),
     ];
     pane.turns = [turn({})];
     backend.queries["agent:live"] = () => [
       {
         id: "t1",
-        partialText: "Checking **pricing**",
         items: [{ name: "Grep", summary: "price", ok: null }],
+        partialText: "Checking **pricing**",
       },
     ];
     await openRoom();
@@ -577,7 +589,7 @@ describe("queue, delivery and stopping", () => {
   it("asks for a longer history from Show earlier", async () => {
     const limits: unknown[] = [];
     pane.hasOlder = true;
-    pane.turns = [turn({ status: "done", partialText: "Recent work." })];
+    pane.turns = [turn({ partialText: "Recent work.", status: "done" })];
     await openRoom();
     const handler = backend.queries["agent:pane"]!;
     backend.queries["agent:pane"] = (args) => (
@@ -585,27 +597,29 @@ describe("queue, delivery and stopping", () => {
       handler(args)
     );
     fireEvent.click(screen.getByRole("button", { name: "Show earlier" }));
-    await waitFor(() => expect(limits).toContain(80));
+    await waitFor(() => {
+      expect(limits).toContain(80);
+    });
     expect(screen.getByText("Recent work.")).toBeInTheDocument();
   });
 
   it("keeps a finished turn's streamed text and tool activity next to its answer", async () => {
     pane.turns = [
       turn({
-        status: "done",
-        partialText: "Looking at the files first.",
         items: [{ name: "Read", summary: "docs/plan.md", ok: true }],
+        partialText: "Looking at the files first.",
+        status: "done",
       }),
     ];
     pane.messages = [
       message({
-        id: "m-r",
         at: 9_000,
         authorParticipantId: CLAUDE,
+        body: "Here is the plan.",
+        delivery: null,
+        id: "m-r",
         toParticipantId: null,
         turnId: "t1",
-        delivery: null,
-        body: "Here is the plan.",
       }),
     ];
     await openRoom();
@@ -630,8 +644,8 @@ describe("room header and access", () => {
       screen.getByRole("switch", { name: /agents may edit files/i })
     );
     expect(backend.mutations["rooms:setEditsEnabled"]).toHaveBeenCalledWith({
-      roomId: ROOM,
       on: true,
+      roomId: ROOM,
     });
   });
 
@@ -650,29 +664,29 @@ describe("room header and access", () => {
 
   it("lets the owner invite by email and shows the link to share", async () => {
     backend.actions["invites:create"] = vi.fn(async () => ({
+      emailed: true,
       inviteId: "i1",
       url: "https://atelier.example/invite/tok",
-      emailed: true,
     }));
     await openRoom("owner");
     fireEvent.click(screen.getByRole("button", { name: "Members" }));
     const email = await screen.findByRole("textbox", { name: "Email" });
     fireEvent.change(email, { target: { value: "dana@example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "Invite" }));
-    expect(
-      await screen.findByText("https://atelier.example/invite/tok")
-    ).toBeInTheDocument();
+    await expect(
+      screen.findByText("https://atelier.example/invite/tok")
+    ).resolves.toBeInTheDocument();
     expect(backend.actions["invites:create"]).toHaveBeenCalledWith({
-      roomId: ROOM,
       email: "dana@example.com",
+      roomId: ROOM,
     });
   });
 
   it("keeps the one-time invite link after the members sheet is closed and reopened", async () => {
     backend.actions["invites:create"] = vi.fn(async () => ({
+      emailed: false,
       inviteId: "i1",
       url: "https://atelier.example/invite/tok",
-      emailed: false,
     }));
     await openRoom("owner");
     fireEvent.click(screen.getByRole("button", { name: "Members" }));
@@ -680,9 +694,9 @@ describe("room header and access", () => {
       target: { value: "dana@example.com" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Invite" }));
-    expect(
-      await screen.findByText("https://atelier.example/invite/tok")
-    ).toBeInTheDocument();
+    await expect(
+      screen.findByText("https://atelier.example/invite/tok")
+    ).resolves.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() =>
@@ -691,9 +705,9 @@ describe("room header and access", () => {
       ).not.toBeInTheDocument()
     );
     fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    expect(
-      await screen.findByText("https://atelier.example/invite/tok")
-    ).toBeInTheDocument();
+    await expect(
+      screen.findByText("https://atelier.example/invite/tok")
+    ).resolves.toBeInTheDocument();
   });
 
   it("swaps a removed member's open room for the no-access page", async () => {
@@ -705,9 +719,11 @@ describe("room header and access", () => {
     backend.queries["agent:pane"] = gone;
     backend.queries["team:list"] = gone;
     backend.queries["rooms:get"] = gone;
-    act(() => pushBackend());
-    expect(
-      await screen.findByRole("heading", { name: "You no longer have access" })
-    ).toBeInTheDocument();
+    act(() => {
+      pushBackend();
+    });
+    await expect(
+      screen.findByRole("heading", { name: "You no longer have access" })
+    ).resolves.toBeInTheDocument();
   });
 });

@@ -2,17 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { composerTarget } from "./composerTarget";
 
-const claude = { participantId: "p-claude", harness: "claude" };
-const codex = { participantId: "p-codex", harness: "codex" };
-const pi = { participantId: "p-pi", harness: "pi" };
+const claude = { harness: "claude", participantId: "p-claude" };
+const codex = { harness: "codex", participantId: "p-codex" };
+const pi = { harness: "pi", participantId: "p-pi" };
 
-describe("composerTarget", () => {
+describe(composerTarget, () => {
   it("picks the agent with an open card over the last target", () => {
     expect(
       composerTarget({
         agents: [claude, codex, pi],
-        openCardAgentIds: ["p-pi"],
         lastTarget: "p-codex",
+        openCardAgentIds: ["p-pi"],
       })
     ).toBe("p-pi");
   });
@@ -21,8 +21,8 @@ describe("composerTarget", () => {
     expect(
       composerTarget({
         agents: [claude, codex, pi],
-        openCardAgentIds: ["p-codex", "p-pi"],
         lastTarget: null,
+        openCardAgentIds: ["p-codex", "p-pi"],
       })
     ).toBe("p-codex");
   });
@@ -31,8 +31,8 @@ describe("composerTarget", () => {
     expect(
       composerTarget({
         agents: [claude, codex],
-        openCardAgentIds: [],
         lastTarget: "p-codex",
+        openCardAgentIds: [],
       })
     ).toBe("p-codex");
   });
@@ -41,15 +41,15 @@ describe("composerTarget", () => {
     expect(
       composerTarget({
         agents: [codex, claude],
-        openCardAgentIds: [],
         lastTarget: null,
+        openCardAgentIds: [],
       })
     ).toBe("p-claude");
     expect(
       composerTarget({
         agents: [codex, claude],
-        openCardAgentIds: [],
         lastTarget: "p-gone",
+        openCardAgentIds: [],
       })
     ).toBe("p-claude");
   });
@@ -58,8 +58,8 @@ describe("composerTarget", () => {
     expect(
       composerTarget({
         agents: [claude],
-        openCardAgentIds: ["p-gone"],
         lastTarget: null,
+        openCardAgentIds: ["p-gone"],
       })
     ).toBe("p-claude");
   });
@@ -68,12 +68,12 @@ describe("composerTarget", () => {
     expect(
       composerTarget({
         agents: [codex, pi],
-        openCardAgentIds: [],
         lastTarget: null,
+        openCardAgentIds: [],
       })
     ).toBe("p-codex");
     expect(
-      composerTarget({ agents: [], openCardAgentIds: [], lastTarget: null })
+      composerTarget({ agents: [], lastTarget: null, openCardAgentIds: [] })
     ).toBeNull();
   });
 });

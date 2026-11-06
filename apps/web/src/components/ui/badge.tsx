@@ -3,7 +3,8 @@
 
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
-import { cva, type VariantProps } from "class-variance-authority";
+import { cva } from "class-variance-authority";
+import type { VariantProps } from "class-variance-authority";
 
 import { cn } from "~/lib/utils";
 
@@ -32,14 +33,14 @@ const badgeVariants = cva(
         error:
           "bg-destructive/8 text-destructive-foreground dark:bg-destructive/16",
         info: "bg-info/8 text-info-foreground dark:bg-info/16",
+        label:
+          "bg-[color-mix(in_srgb,var(--label)_8%,transparent)] text-[color-mix(in_srgb,var(--label)_30%,var(--color-foreground))] dark:bg-[color-mix(in_srgb,var(--label)_12%,transparent)] dark:text-[color-mix(in_srgb,var(--label)_45%,var(--color-foreground))]",
         outline:
           "border-input bg-background text-foreground dark:bg-input/32 [button&,a&]:hover:bg-accent/50 dark:[button&,a&]:hover:bg-input/48",
         secondary:
           "bg-secondary text-secondary-foreground [button&,a&]:hover:bg-secondary/90",
         success: "bg-success/8 text-success-foreground dark:bg-success/16",
         warning: "bg-warning/8 text-warning-foreground dark:bg-warning/16",
-        label:
-          "bg-[color-mix(in_srgb,var(--label)_8%,transparent)] text-[color-mix(in_srgb,var(--label)_30%,var(--color-foreground))] dark:bg-[color-mix(in_srgb,var(--label)_12%,transparent)] dark:text-[color-mix(in_srgb,var(--label)_45%,var(--color-foreground))]",
       },
     },
   }

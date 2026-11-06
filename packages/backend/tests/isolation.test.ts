@@ -6,6 +6,7 @@ import { beforeEach, afterEach, test, expect, vi } from "vitest";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import schema from "../convex/schema";
+
 const modules = import.meta.glob("../convex/**/*.ts");
 
 const SECRET = "test-secret";
@@ -30,30 +31,32 @@ async function setup({ withMember }: { withMember: boolean }) {
   workflow.register(t);
   const owner = t.withIdentity({
     email: "owner@example.com",
-    subject: "owner",
     name: "Robert",
+    subject: "owner",
   });
   const dana = t.withIdentity({
     email: "dana@example.com",
-    subject: "dana",
     name: "Dana",
+    subject: "dana",
   });
   const runnerId = await t.mutation(api.runners.heartbeat, {
-    secret: SECRET,
-    name: "test",
-    machine: "test",
     harnesses: [
       { id: "claude", version: "test" },
       { id: "pi", version: "test" },
     ],
+    machine: "test",
+    name: "test",
+    secret: SECRET,
   });
   const roomId = await owner.mutation(api.rooms.create, {
+    cwd: "/tmp/planning",
     name: "Planning",
     runnerId,
-    cwd: "/tmp/planning",
   });
-  await owner.mutation(api.rooms.addParticipant, { roomId, harness: "pi" });
-  if (withMember) await addMember(owner, dana, roomId);
+  await owner.mutation(api.rooms.addParticipant, { harness: "pi", roomId });
+  if (withMember) {
+    await addMember(owner, dana, roomId);
+  }
   const room = (await owner.query(api.rooms.get, { roomId }))!;
   const claude = room.participants.find((p) => p.harness === "claude")!;
   const pi = room.participants.find((p) => p.harness === "pi")!;
@@ -63,7 +66,7 @@ async function setup({ withMember }: { withMember: boolean }) {
   await t.run(async (ctx) => {
     await ctx.db.patch(claude._id, { harnessSessionId: "ordinary-session" });
   });
-  return { t, owner, dana, runnerId, roomId, claude, pi, ownerHuman };
+  return { claude, dana, owner, ownerHuman, pi, roomId, runnerId, t };
 }
 
 async function addMember(
@@ -76,7 +79,7 @@ async function addMember(
     "fetch",
     vi.fn(async () => Response.json([{ id: "user_1" }]))
   );
-  const invite = await owner.action(api.invites.create, { roomId, email });
+  const invite = await owner.action(api.invites.create, { email, roomId });
   await member.mutation(api.invites.accept, {
     token: invite.url.split("/invite/")[1]!,
   });
@@ -93,56 +96,57 @@ async function revealedReview(
   pi: Id<"participants">
 ) {
   const ritualId = await owner.mutation(api.rituals.begin, {
-    roomId,
-    request: "Review independently",
     participantIds: [claude, pi],
+    request: "Review independently",
+    roomId,
   });
   const commands = await t.query(api.runner.pendingCommands, {
-    secret: SECRET,
     runnerId,
+    secret: SECRET,
   });
-  const turns = await t.run(async (ctx) =>
-    Promise.all(commands.map((c) => ctx.db.get(c.turnId)))
+  const turns = await t.run(
+    async (ctx) =>
+      await Promise.all(commands.map(async (c) => ctx.db.get(c.turnId)))
   );
   const claudeCommand =
     commands[turns.findIndex((turn) => turn!.participantId === claude)]!;
   const piCommand =
     commands[turns.findIndex((turn) => turn!.participantId === pi)]!;
   await t.mutation(api.runner.claim, {
-    secret: SECRET,
     commandId: claudeCommand._id,
+    secret: SECRET,
   });
   await t.mutation(api.runner.finish, {
-    secret: SECRET,
-    turnId: claudeCommand.turnId,
     commandId: claudeCommand._id,
     finalText: "REVIEW-ANSWER",
+    secret: SECRET,
     sessionId: "review-session",
     transcriptRef: "/review",
+    turnId: claudeCommand.turnId,
   });
   await t.mutation(api.runner.fail, {
-    secret: SECRET,
-    turnId: piCommand.turnId,
     commandId: piCommand._id,
     error: "REVIEW-FAILURE",
+    secret: SECRET,
+    turnId: piCommand.turnId,
   });
   await t.finishAllScheduledFunctions(() => vi.runAllTimers());
   // Draining the workflow advances the fake clock; a live runner keeps beating.
   await t.mutation(api.runners.heartbeat, {
-    secret: SECRET,
-    name: "test",
-    machine: "test",
     harnesses: [
       { id: "claude", version: "test" },
       { id: "pi", version: "test" },
     ],
+    machine: "test",
+    name: "test",
+    secret: SECRET,
   });
-  return { ritualId, reviewTurnId: claudeCommand.turnId };
+  return { reviewTurnId: claudeCommand.turnId, ritualId };
 }
 
 async function commandFor(t: T, runnerId: Id<"runners">, turnId: Id<"turns">) {
   return (
-    await t.query(api.runner.pendingCommands, { secret: SECRET, runnerId })
+    await t.query(api.runner.pendingCommands, { runnerId, secret: SECRET })
   ).find((c) => c.turnId === turnId)!;
 }
 
@@ -156,21 +160,21 @@ async function runTurn(
 ) {
   const command = await commandFor(t, runnerId, turnId);
   const job = await t.mutation(api.runner.claim, {
-    secret: SECRET,
     commandId: command._id,
+    secret: SECRET,
   });
   await t.mutation(api.runner.start, {
+    harnessVersion: "test",
     secret: SECRET,
     turnId,
-    harnessVersion: "test",
   });
   await t.mutation(api.runner.finish, {
-    secret: SECRET,
-    turnId,
     commandId: command._id,
     finalText,
+    secret: SECRET,
     sessionId,
     transcriptRef: "/turn",
+    turnId,
   });
   return job!.participant.sessionId;
 }
@@ -201,26 +205,26 @@ test("a member never sees review answers or follow-ups, while the owner still do
   ).not.toContain("REVIEW");
 
   const followUpId = await owner.mutation(api.messages.send, {
-    roomId,
     body: "FOLLOWUP-QUESTION",
-    toParticipantId: claude._id,
     reviewTurnId,
+    roomId,
+    toParticipantId: claude._id,
   });
   const command = await commandFor(t, runnerId, followUpId);
   await t.mutation(api.runner.claim, {
-    secret: SECRET,
     commandId: command._id,
+    secret: SECRET,
   });
   await t.mutation(api.runner.start, {
+    harnessVersion: "test",
     secret: SECRET,
     turnId: followUpId,
-    harnessVersion: "test",
   });
   await t.mutation(api.runner.progress, {
-    secret: SECRET,
-    turnId: followUpId,
     commandId: command._id,
     partialText: "FOLLOWUP-PARTIAL",
+    secret: SECRET,
+    turnId: followUpId,
   });
   const danaWhileRunning = JSON.stringify(
     await dana.query(api.messages.timeline, { roomId })
@@ -234,31 +238,31 @@ test("a member never sees review answers or follow-ups, while the owner still do
     JSON.stringify(await owner.query(api.agent.live, { roomId }))
   ).toContain("FOLLOWUP-PARTIAL");
   await t.mutation(api.runner.finish, {
-    secret: SECRET,
-    turnId: followUpId,
     commandId: command._id,
     finalText: "FOLLOWUP-REPLY",
+    secret: SECRET,
     sessionId: "followup-session",
     transcriptRef: "/f",
+    turnId: followUpId,
   });
 
   await owner.mutation(api.rituals.recordCrux, {
+    options: ["A", "B"],
     ritualId,
     statement: "Tradeoff",
-    options: ["A", "B"],
   });
   await owner.mutation(api.rituals.decide, {
-    ritualId,
     choice: "A",
     rationale: "Because",
+    ritualId,
   });
   const decision = (await owner.query(api.rituals.get, { ritualId }))!
     .decisions[0]!;
   const decisionTurnId = await owner.mutation(api.messages.send, {
-    roomId,
     body: "DECISION-FOLLOWUP",
-    toParticipantId: claude._id,
     decisionId: decision._id,
+    roomId,
+    toParticipantId: claude._id,
   });
   await runTurn(
     t,
@@ -277,26 +281,28 @@ test("a member never sees review answers or follow-ups, while the owner still do
     "FOLLOWUP-REPLY",
     "DECISION-FOLLOWUP",
     "DECISION-REPLY",
-  ])
+  ]) {
     expect(ownerView).toContain(text);
+  }
   const danaView = await dana.query(api.messages.timeline, { roomId });
-  for (const text of ["REVIEW", "FOLLOWUP", "DECISION", "independent review"])
+  for (const text of ["REVIEW", "FOLLOWUP", "DECISION", "independent review"]) {
     expect(JSON.stringify(danaView)).not.toContain(text);
+  }
 
   await expect(
     dana.mutation(api.messages.send, {
-      roomId,
       body: "sneak",
-      toParticipantId: claude._id,
       reviewTurnId,
+      roomId,
+      toParticipantId: claude._id,
     })
   ).rejects.toThrow();
   await expect(
     dana.mutation(api.messages.send, {
-      roomId,
       body: "sneak",
-      toParticipantId: claude._id,
       decisionId: decision._id,
+      roomId,
+      toParticipantId: claude._id,
     })
   ).rejects.toThrow();
 
@@ -322,25 +328,22 @@ test("the owner answering a follow-up card by chat stays hidden from a member", 
     pi._id
   );
   const followUpId = await owner.mutation(api.messages.send, {
-    roomId,
     body: "Expand on it",
-    toParticipantId: claude._id,
     reviewTurnId,
+    roomId,
+    toParticipantId: claude._id,
   });
   const command = await commandFor(t, runnerId, followUpId);
   await t.mutation(api.runner.claim, {
-    secret: SECRET,
     commandId: command._id,
+    secret: SECRET,
   });
   await t.mutation(api.runner.start, {
+    harnessVersion: "test",
     secret: SECRET,
     turnId: followUpId,
-    harnessVersion: "test",
   });
   await t.mutation(api.runner.raiseHand, {
-    secret: SECRET,
-    turnId: followUpId,
-    requestId: "req-1",
     questions: [
       {
         id: "q",
@@ -351,14 +354,17 @@ test("the owner answering a follow-up card by chat stays hidden from a member", 
         allowFreeText: true,
       },
     ],
+    requestId: "req-1",
+    secret: SECRET,
+    turnId: followUpId,
   });
-  expect(
-    await owner.mutation(api.messages.send, {
+  await expect(
+    owner.mutation(api.messages.send, {
       roomId,
       body: "CARD-CHAT-ANSWER",
       toParticipantId: claude._id,
     })
-  ).toBeNull();
+  ).resolves.toBeNull();
 
   expect(
     JSON.stringify(await owner.query(api.agent.pane, { roomId }))
@@ -374,13 +380,15 @@ test("the owner answering a follow-up card by chat stays hidden from a member", 
 test("a member never receives turn prompts", async () => {
   const { dana, roomId, claude } = await setup({ withMember: true });
   await dana.mutation(api.messages.send, {
-    roomId,
     body: "hello",
+    roomId,
     toParticipantId: claude._id,
   });
   const items = await dana.query(api.messages.timeline, { roomId });
   expect(items.some((i) => i.kind === "turn")).toBe(true);
-  for (const item of items) expect(Object.keys(item)).not.toContain("prompt");
+  for (const item of items) {
+    expect(Object.keys(item)).not.toContain("prompt");
+  }
 });
 
 test("in a shared room a follow-up runs on a session stored on its review, never the ordinary one", async () => {
@@ -397,18 +405,18 @@ test("in a shared room a follow-up runs on a session stored on its review, never
   );
 
   const first = await owner.mutation(api.messages.send, {
-    roomId,
     body: "Why?",
-    toParticipantId: claude._id,
     reviewTurnId,
+    roomId,
+    toParticipantId: claude._id,
   });
   await t.run(async (ctx) => {
     expect((await ctx.db.get(first))!.followUp).toMatchObject({ ritualId });
   });
-  expect(
-    await runTurn(t, runnerId, first, "Because", "followup-1")
-  ).toBeUndefined();
-  expect(await sessionOf(t, claude._id)).toBe("ordinary-session");
+  await expect(
+    runTurn(t, runnerId, first, "Because", "followup-1")
+  ).resolves.toBeUndefined();
+  await expect(sessionOf(t, claude._id)).resolves.toBe("ordinary-session");
   await t.run(async (ctx) => {
     expect((await ctx.db.get(ritualId))!.followUpSessions).toEqual([
       { participantId: claude._id, sessionId: "followup-1" },
@@ -416,15 +424,15 @@ test("in a shared room a follow-up runs on a session stored on its review, never
   });
 
   const second = await owner.mutation(api.messages.send, {
-    roomId,
     body: "And then?",
-    toParticipantId: claude._id,
     reviewTurnId,
+    roomId,
+    toParticipantId: claude._id,
   });
-  expect(await runTurn(t, runnerId, second, "Then this", "followup-2")).toBe(
-    "followup-1"
-  );
-  expect(await sessionOf(t, claude._id)).toBe("ordinary-session");
+  await expect(
+    runTurn(t, runnerId, second, "Then this", "followup-2")
+  ).resolves.toBe("followup-1");
+  await expect(sessionOf(t, claude._id)).resolves.toBe("ordinary-session");
   await t.run(async (ctx) => {
     expect((await ctx.db.get(ritualId))!.followUpSessions).toEqual([
       { participantId: claude._id, sessionId: "followup-2" },
@@ -432,14 +440,14 @@ test("in a shared room a follow-up runs on a session stored on its review, never
   });
 
   const ordinary = await dana.mutation(api.messages.send, {
-    roomId,
     body: "What did we decide?",
+    roomId,
     toParticipantId: claude._id,
   });
-  expect(await runTurn(t, runnerId, ordinary, "No idea", "ordinary-2")).toBe(
-    "ordinary-session"
-  );
-  expect(await sessionOf(t, claude._id)).toBe("ordinary-2");
+  await expect(
+    runTurn(t, runnerId, ordinary, "No idea", "ordinary-2")
+  ).resolves.toBe("ordinary-session");
+  await expect(sessionOf(t, claude._id)).resolves.toBe("ordinary-2");
   await t.run(async (ctx) => {
     expect((await ctx.db.get(ritualId))!.followUpSessions).toEqual([
       { participantId: claude._id, sessionId: "followup-2" },
@@ -460,27 +468,27 @@ test("a follow-up queued behind a teammate message runs as its own turn", async 
     pi._id
   );
   const teammateTurn = (await dana.mutation(api.messages.send, {
-    roomId,
     body: "TEAMMATE-ASK",
+    roomId,
     toParticipantId: claude._id,
   }))!;
-  expect(
-    await owner.mutation(api.messages.send, {
+  await expect(
+    owner.mutation(api.messages.send, {
       roomId,
       body: "Expand on it",
       toParticipantId: claude._id,
       reviewTurnId,
     })
-  ).toBeNull();
-  expect(
-    await dana.mutation(api.messages.send, {
+  ).resolves.toBeNull();
+  await expect(
+    dana.mutation(api.messages.send, {
       roomId,
       body: "TEAMMATE-LATER",
       toParticipantId: claude._id,
     })
-  ).toBeNull();
+  ).resolves.toBeNull();
   const ordinaryTurns = async () =>
-    (await t.run((ctx) => ctx.db.query("turns").collect())).filter(
+    (await t.run(async (ctx) => ctx.db.query("turns").collect())).filter(
       (x) => !x.ritualId && x.participantId === claude._id
     );
 
@@ -516,15 +524,15 @@ test("in a solo room a follow-up continues the ordinary session, and stays hidde
     pi._id
   );
   const followUp = await owner.mutation(api.messages.send, {
-    roomId,
     body: "SOLO-FOLLOWUP",
-    toParticipantId: claude._id,
     reviewTurnId,
+    roomId,
+    toParticipantId: claude._id,
   });
-  expect(await runTurn(t, runnerId, followUp, "SOLO-REPLY", "solo-next")).toBe(
-    "ordinary-session"
-  );
-  expect(await sessionOf(t, claude._id)).toBe("solo-next");
+  await expect(
+    runTurn(t, runnerId, followUp, "SOLO-REPLY", "solo-next")
+  ).resolves.toBe("ordinary-session");
+  await expect(sessionOf(t, claude._id)).resolves.toBe("solo-next");
   await t.run(async (ctx) => {
     expect((await ctx.db.get(ritualId))!.followUpSessions).toBeUndefined();
   });
@@ -554,43 +562,43 @@ test("the first teammate to join resets the session of each agent that ran a fol
     await ctx.db.patch(pi._id, { harnessSessionId: "pi-ordinary" });
   });
   const followUp = await owner.mutation(api.messages.send, {
-    roomId,
     body: "SOLO-FOLLOWUP",
-    toParticipantId: claude._id,
     reviewTurnId,
+    roomId,
+    toParticipantId: claude._id,
   });
-  expect(await runTurn(t, runnerId, followUp, "SOLO-REPLY", "solo-next")).toBe(
-    "ordinary-session"
-  );
-  expect(await sessionOf(t, claude._id)).toBe("solo-next");
+  await expect(
+    runTurn(t, runnerId, followUp, "SOLO-REPLY", "solo-next")
+  ).resolves.toBe("ordinary-session");
+  await expect(sessionOf(t, claude._id)).resolves.toBe("solo-next");
 
   await addMember(owner, dana, roomId);
-  expect(await sessionOf(t, claude._id)).toBeFalsy();
-  expect(await sessionOf(t, pi._id)).toBe("pi-ordinary");
+  await expect(sessionOf(t, claude._id)).resolves.toBeFalsy();
+  await expect(sessionOf(t, pi._id)).resolves.toBe("pi-ordinary");
   const resets = async () =>
-    (await t.run((ctx) => ctx.db.query("ledger").collect())).filter(
+    (await t.run(async (ctx) => ctx.db.query("ledger").collect())).filter(
       (e) => e.type === "participant.session_reset"
     );
   expect((await resets()).map((e) => e.subjectId)).toEqual([claude._id]);
 
   const ordinary = await dana.mutation(api.messages.send, {
-    roomId,
     body: "What did you tell Robert?",
+    roomId,
     toParticipantId: claude._id,
   });
-  expect(
-    await runTurn(t, runnerId, ordinary!, "Nothing I recall", "fresh-1")
-  ).toBeUndefined();
-  expect(await sessionOf(t, claude._id)).toBe("fresh-1");
+  await expect(
+    runTurn(t, runnerId, ordinary!, "Nothing I recall", "fresh-1")
+  ).resolves.toBeUndefined();
+  await expect(sessionOf(t, claude._id)).resolves.toBe("fresh-1");
 
   const erin = t.withIdentity({
     email: "erin@example.com",
-    subject: "erin",
     name: "Erin",
+    subject: "erin",
   });
   await addMember(owner, erin, roomId, "erin@example.com");
-  expect(await sessionOf(t, claude._id)).toBe("fresh-1");
-  expect(await resets()).toHaveLength(1);
+  await expect(sessionOf(t, claude._id)).resolves.toBe("fresh-1");
+  await expect(resets()).resolves.toHaveLength(1);
 });
 
 test("a follow-up still running when the first teammate joins does not save its session as the ordinary one", async () => {
@@ -606,44 +614,44 @@ test("a follow-up still running when the first teammate joins does not save its 
     pi._id
   );
   const followUp = await owner.mutation(api.messages.send, {
-    roomId,
     body: "SOLO-FOLLOWUP",
-    toParticipantId: claude._id,
     reviewTurnId,
+    roomId,
+    toParticipantId: claude._id,
   });
   const command = await commandFor(t, runnerId, followUp);
   await t.mutation(api.runner.claim, {
-    secret: SECRET,
     commandId: command._id,
+    secret: SECRET,
   });
   await t.mutation(api.runner.start, {
+    harnessVersion: "test",
     secret: SECRET,
     turnId: followUp,
-    harnessVersion: "test",
   });
 
   await addMember(owner, dana, roomId);
   await t.mutation(api.runner.finish, {
-    secret: SECRET,
-    turnId: followUp,
     commandId: command._id,
     finalText: "SOLO-REPLY",
+    secret: SECRET,
     sessionId: "solo-next",
     transcriptRef: "/f",
+    turnId: followUp,
   });
-  expect(await sessionOf(t, claude._id)).toBeFalsy();
+  await expect(sessionOf(t, claude._id)).resolves.toBeFalsy();
 });
 
 test("a member cannot cancel a review turn; stopping a turn records who stopped it", async () => {
   const { t, owner, dana, runnerId, roomId, claude, pi, ownerHuman } =
     await setup({ withMember: true });
   await owner.mutation(api.rituals.begin, {
-    roomId,
-    request: "Review independently",
     participantIds: [claude._id, pi._id],
+    request: "Review independently",
+    roomId,
   });
   const reviewTurns = (
-    await t.query(api.runner.pendingCommands, { secret: SECRET, runnerId })
+    await t.query(api.runner.pendingCommands, { runnerId, secret: SECRET })
   ).map((c) => c.turnId);
   await expect(
     dana.mutation(api.messages.cancel, { turnId: reviewTurns[0]! })
@@ -657,8 +665,8 @@ test("a member cannot cancel a review turn; stopping a turn records who stopped 
     roomId,
   }))!.participants.find((p) => p.displayName === "Dana")!;
   const ordinary = await owner.mutation(api.messages.send, {
-    roomId,
     body: "Start something",
+    roomId,
     toParticipantId: claude._id,
   });
   await dana.mutation(api.messages.cancel, { turnId: ordinary });
@@ -685,13 +693,13 @@ test("a message sent by the teammate is authored by the teammate, and removal en
     roomId,
   }))!.participants.find((p) => p.displayName === "Dana")!;
   await dana.mutation(api.messages.send, {
-    roomId,
     body: "hello from Dana",
+    roomId,
     toParticipantId: claude._id,
   });
   await owner.mutation(api.messages.send, {
-    roomId,
     body: "hello from Robert",
+    roomId,
     toParticipantId: claude._id,
   });
   const items = await owner.query(api.messages.timeline, { roomId });
@@ -721,8 +729,8 @@ test("a message sent by the teammate is authored by the teammate, and removal en
   });
   await expect(
     dana.mutation(api.messages.send, {
-      roomId,
       body: "still here?",
+      roomId,
       toParticipantId: claude._id,
     })
   ).rejects.toThrow();

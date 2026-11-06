@@ -16,8 +16,11 @@ export function withEnvValue(text: string, key: string, value: string) {
   const at = lines.findIndex((l) =>
     l.replace(/^export\s+/, "").startsWith(`${key}=`)
   );
-  if (at >= 0) lines[at] = line;
-  else lines.splice(lines.at(-1) === "" ? -1 : lines.length, 0, line);
+  if (at !== -1) {
+    lines[at] = line;
+  } else {
+    lines.splice(lines.at(-1) === "" ? -1 : lines.length, 0, line);
+  }
   return lines.join("\n") + (lines.at(-1) === "" ? "" : "\n");
 }
 
@@ -30,7 +33,7 @@ if (import.meta.main) {
 
   let current = "";
   try {
-    current = readFileSync(envFile, "utf8");
+    current = readFileSync(envFile, "utf-8");
   } catch {
     // No file yet; the new one holds just the secret.
   }

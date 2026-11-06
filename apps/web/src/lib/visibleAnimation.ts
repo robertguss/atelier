@@ -26,26 +26,36 @@ function updateAnimation(animation: ObservedAnimation) {
 }
 
 function updateAnimations() {
-  for (const animation of animations.values()) updateAnimation(animation);
+  for (const animation of animations.values()) {
+    updateAnimation(animation);
+  }
 }
 
 export function observeVisibleAnimation(
   element: HTMLElement | SVGElement | null
 ) {
-  if (element === null) return;
+  if (element === null) {
+    return;
+  }
   element.style.setProperty("--visible-animation-state", "paused");
   element.style.setProperty("--visible-animation-will-change", "auto");
-  if (typeof IntersectionObserver === "undefined") return;
+  if (typeof IntersectionObserver === "undefined") {
+    return;
+  }
 
   if (observer === null) {
     reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     reducedMotion.addEventListener("change", updateAnimations);
     document.addEventListener("visibilitychange", updateAnimations);
     observer = new IntersectionObserver((entries, source) => {
-      if (source !== observer) return;
+      if (source !== observer) {
+        return;
+      }
       for (const entry of entries) {
         const animation = animations.get(entry.target);
-        if (!animation) continue;
+        if (!animation) {
+          continue;
+        }
         animation.intersecting = entry.isIntersecting;
         updateAnimation(animation);
       }
@@ -57,7 +67,9 @@ export function observeVisibleAnimation(
   observer.observe(element);
 
   return () => {
-    if (animations.get(element) !== animation) return;
+    if (animations.get(element) !== animation) {
+      return;
+    }
     animations.delete(element);
     observer?.unobserve(element);
     element.style.setProperty("--visible-animation-state", "paused");

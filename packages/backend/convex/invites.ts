@@ -8,8 +8,8 @@ import {
   internalQuery,
   mutation,
   query,
-  type QueryCtx,
 } from "./_generated/server";
+import type { QueryCtx } from "./_generated/server";
 import { ensureUser, hasActiveTeammate, requireOwner } from "./lib/auth";
 import { record } from "./lib/ledger";
 import { agentName } from "./lib/prompt";
@@ -23,7 +23,7 @@ const INVITE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 const CLERK_API = "https://api.clerk.com/v1";
 
 export const create = action({
-  args: { roomId: v.id("rooms"), email: v.string() },
+  args: { email: v.string(), roomId: v.id("rooms") },
   handler: async (
     ctx,
     { roomId, email: rawEmail }
@@ -34,12 +34,16 @@ export const create = action({
   }> => {
     await requireOwner(ctx);
     const email = rawEmail.trim().toLowerCase();
-    if (!/^[^@\s]+@[^@\s]+$/.test(email))
+    if (!/^[^@\s]+@[^@\s]+$/.test(email)) {
       throw new Error("Enter an email address");
-    if (!(await ctx.runQuery(internal.invites.roomExists, { roomId })))
+    }
+    if (!(await ctx.runQuery(internal.invites.roomExists, { roomId }))) {
       throw new Error("Unknown room");
+    }
     const webUrl = process.env.ATELIER_WEB_URL;
-    if (!webUrl) throw new Error("ATELIER_WEB_URL is not set");
+    if (!webUrl) {
+      throw new Error("ATELIER_WEB_URL is not set");
+    }
 
     const token = randomToken();
     const url = `${webUrl.replace(/\/+$/, "")}/invite/${token}`;
@@ -51,22 +55,22 @@ export const create = action({
     if (users.length === 0) {
       const invitation = await clerk<{ id: string }>("POST", "/invitations", {
         email_address: email,
-        redirect_url: url,
-        notify: true,
         ignore_existing: true,
+        notify: true,
+        redirect_url: url,
       });
       clerkInvitationId = invitation.id;
     }
     const inviteId: Id<"roomInvites"> = await ctx.runMutation(
       internal.invites.insert,
       {
-        roomId,
-        email,
-        tokenHash: await hashToken(token),
         clerkInvitationId,
+        email,
+        roomId,
+        tokenHash: await hashToken(token),
       }
     );
-    return { inviteId, url, emailed: clerkInvitationId !== undefined };
+    return { emailed: clerkInvitationId !== undefined, inviteId, url };
   },
 });
 
@@ -77,22 +81,22 @@ export const roomExists = internalQuery({
 
 export const insert = internalMutation({
   args: {
-    roomId: v.id("rooms"),
-    email: v.string(),
-    tokenHash: v.string(),
     clerkInvitationId: v.optional(v.string()),
+    email: v.string(),
+    roomId: v.id("rooms"),
+    tokenHash: v.string(),
   },
   handler: async (ctx, args) => {
     const inviteId = await ctx.db.insert("roomInvites", {
       ...args,
-      status: "pending",
       expiresAt: Date.now() + INVITE_LIFETIME_MS,
+      status: "pending",
     });
     await record(ctx, {
-      roomId: args.roomId,
-      type: "invite.created",
-      subjectId: inviteId,
       payload: { email: args.email },
+      roomId: args.roomId,
+      subjectId: inviteId,
+      type: "invite.created",
     });
     return inviteId;
   },
@@ -109,14 +113,16 @@ export const revoke = action({
       internal.invites.markRevoked,
       { inviteId }
     );
-    if (!clerkInvitationId) return;
+    if (!clerkInvitationId) {
+      return;
+    }
     await clerk(
       "POST",
       `/invitations/${encodeURIComponent(clerkInvitationId)}/revoke`
     );
     await ctx.runMutation(internal.invites.clearClerkInvitation, {
-      inviteId,
       clerkInvitationId,
+      inviteId,
     });
   },
 });
@@ -127,27 +133,32 @@ export const markRevoked = internalMutation({
   args: { inviteId: v.id("roomInvites") },
   handler: async (ctx, { inviteId }) => {
     const invite = await ctx.db.get(inviteId);
-    if (!invite) throw new Error("Unknown invite");
-    if (invite.status === "revoked" && invite.clerkInvitationId)
+    if (!invite) {
+      throw new Error("Unknown invite");
+    }
+    if (invite.status === "revoked" && invite.clerkInvitationId) {
       return invite.clerkInvitationId;
-    if (invite.status !== "pending")
+    }
+    if (invite.status !== "pending") {
       throw new Error(`This invite is already ${invite.status}`);
-    await ctx.db.patch(inviteId, { status: "revoked", revokedAt: Date.now() });
+    }
+    await ctx.db.patch(inviteId, { revokedAt: Date.now(), status: "revoked" });
     await record(ctx, {
       roomId: invite.roomId,
-      type: "invite.revoked",
       subjectId: inviteId,
+      type: "invite.revoked",
     });
     return invite.clerkInvitationId ?? null;
   },
 });
 
 export const clearClerkInvitation = internalMutation({
-  args: { inviteId: v.id("roomInvites"), clerkInvitationId: v.string() },
+  args: { clerkInvitationId: v.string(), inviteId: v.id("roomInvites") },
   handler: async (ctx, { inviteId, clerkInvitationId }) => {
     const invite = await ctx.db.get(inviteId);
-    if (invite?.clerkInvitationId === clerkInvitationId)
+    if (invite?.clerkInvitationId === clerkInvitationId) {
       await ctx.db.patch(inviteId, { clerkInvitationId: undefined });
+    }
   },
 });
 
@@ -156,19 +167,21 @@ export const lookup = query({
   args: { token: v.string() },
   handler: async (ctx, { token }) => {
     const invite = await findInvite(ctx, token);
-    if (!invite) return null;
+    if (!invite) {
+      return null;
+    }
     const room = await ctx.db.get(invite.roomId);
     const identity = await ctx.auth.getUserIdentity();
     return {
+      email: maskEmail(invite.email),
+      expiresAt: invite.expiresAt,
+      matches: emailMatches(identity, invite.email),
       roomId: invite.roomId,
       roomName: room?.name ?? "",
-      email: maskEmail(invite.email),
       status:
         invite.status === "pending" && invite.expiresAt <= Date.now()
           ? ("expired" as const)
           : invite.status,
-      matches: emailMatches(identity, invite.email),
-      expiresAt: invite.expiresAt,
     };
   },
 });
@@ -191,25 +204,31 @@ export const accept = mutation({
   args: { token: v.string() },
   handler: async (ctx, { token }): Promise<AcceptResult> => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Sign in to accept this invite");
+    if (!identity) {
+      throw new Error("Sign in to accept this invite");
+    }
     const invite = await findInvite(ctx, token);
-    if (!invite) return { ok: false, reason: "not_found" };
-    if (!emailMatches(identity, invite.email))
+    if (!invite) {
+      return { ok: false, reason: "not_found" };
+    }
+    if (!emailMatches(identity, invite.email)) {
       return { ok: false, reason: "email_mismatch" };
+    }
     const user = await ensureUser(ctx);
     if (invite.status === "accepted") {
       return invite.acceptedByUserId === user._id
         ? { ok: true, roomId: invite.roomId }
         : { ok: false, reason: "accepted" };
     }
-    if (invite.status !== "pending")
+    if (invite.status !== "pending") {
       return { ok: false, reason: invite.status };
+    }
     if (invite.expiresAt <= Date.now()) {
       await ctx.db.patch(invite._id, { status: "expired" });
       return { ok: false, reason: "expired" };
     }
 
-    const roomId = invite.roomId;
+    const { roomId } = invite;
     const existing = await ctx.db
       .query("roomMembers")
       .withIndex("by_room_user", (q) =>
@@ -222,35 +241,36 @@ export const accept = mutation({
     let participantId = existing?.participantId;
     if (!existing) {
       participantId = await ctx.db.insert("participants", {
-        roomId,
-        kind: "human",
         displayName: agentName(identity.name || identity.email),
+        kind: "human",
+        roomId,
         userId: user._id,
       });
       memberId = await ctx.db.insert("roomMembers", {
+        participantId,
+        role: "member",
         roomId,
         userId: user._id,
-        role: "member",
-        participantId,
       });
     } else if (existing.removedAt !== undefined) {
       await ctx.db.patch(existing._id, { removedAt: undefined });
     }
     await ctx.db.patch(invite._id, {
-      status: "accepted",
-      acceptedByUserId: user._id,
       acceptedAt: Date.now(),
+      acceptedByUserId: user._id,
+      status: "accepted",
     });
     if (joins) {
       const joinedLedgerId = await record(ctx, {
-        roomId,
-        type: "member.joined",
         actorParticipantId: participantId,
-        subjectId: memberId,
         payload: { inviteId: invite._id },
+        roomId,
+        subjectId: memberId,
+        type: "member.joined",
       });
-      if (firstTeammate)
+      if (firstTeammate) {
         await resetSoloFollowUpSessions(ctx, roomId, joinedLedgerId);
+      }
     }
     return { ok: true, roomId };
   },
@@ -284,9 +304,9 @@ function maskEmail(email: string) {
 function randomToken() {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return btoa(String.fromCharCode(...bytes))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/[=]+$/, "");
 }
 
 async function hashToken(token: string) {
@@ -305,18 +325,21 @@ async function clerk<T = unknown>(
   body?: object
 ): Promise<T> {
   const key = process.env.CLERK_SECRET_KEY;
-  if (!key) throw new Error("CLERK_SECRET_KEY is not set");
+  if (!key) {
+    throw new Error("CLERK_SECRET_KEY is not set");
+  }
   const response = await fetch(`${CLERK_API}${path}`, {
-    method,
+    body: body ? JSON.stringify(body) : undefined,
     headers: {
       Authorization: `Bearer ${key}`,
       "Content-Type": "application/json",
     },
-    body: body ? JSON.stringify(body) : undefined,
+    method,
   });
-  if (!response.ok)
+  if (!response.ok) {
     throw new Error(
       `Clerk ${method} ${path.split("?")[0]} failed: ${response.status}`
     );
+  }
   return (await response.json()) as T;
 }

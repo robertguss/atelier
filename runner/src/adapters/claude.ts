@@ -11,14 +11,14 @@ import {
 } from "node:path";
 import { promisify } from "node:util";
 
-import {
-  query,
-  type CanUseTool,
-  type Options,
-  type PermissionResult,
-  type Query,
-  type SDKMessage,
-  type SDKUserMessage,
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  CanUseTool,
+  Options,
+  PermissionResult,
+  Query,
+  SDKMessage,
+  SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
   Harness,
@@ -51,16 +51,8 @@ export function claudeHarness(opts: {
   onRaw: (turnId: string, msg: SDKMessage) => void;
 }): Harness {
   return {
-    id: "claude",
     capabilities: { canRaiseCards: true },
-
-    async version() {
-      const { stdout } = await run(opts.executable, ["--version"], {
-        timeout: 10_000,
-      });
-      return stdout.trim();
-    },
-
+    id: "claude",
     async *runTurn(req, signal, input): AsyncIterable<HarnessEvent> {
       // Installed before the first await, so no steer or switch change is lost.
       let editsEnabled = req.editsEnabled;
@@ -77,7 +69,7 @@ export function claudeHarness(opts: {
         };
         // Sent as typed, with priority 'next': it joins the running turn at the
         // next tool result. 'now' would end the turn instead.
-        input.steer = (text) => {
+        input.steer = async (text) => {
           if (!accepting) return Promise.resolve("rejected");
           const uuid = randomUUID();
           return new Promise<SteerOutcome>((resolveSteer) => {
@@ -94,9 +86,15 @@ export function claudeHarness(opts: {
       }
 
       const abortController = new AbortController();
-      signal.addEventListener("abort", () => abortController.abort(), {
-        once: true,
-      });
+      signal.addEventListener(
+        "abort",
+        () => {
+          abortController.abort();
+        },
+        {
+          once: true,
+        }
+      );
 
       const canUseTool: CanUseTool = async (
         toolName,
@@ -188,9 +186,15 @@ export function claudeHarness(opts: {
         });
         q = query({ prompt, options });
       }
-      abortController.signal.addEventListener("abort", () => prompt.close(), {
-        once: true,
-      });
+      abortController.signal.addEventListener(
+        "abort",
+        () => {
+          prompt.close();
+        },
+        {
+          once: true,
+        }
+      );
 
       let sawText = false;
       const finals: string[] = [];
@@ -305,6 +309,12 @@ export function claudeHarness(opts: {
         for (const uuid of [...steers.keys()]) settle(uuid, "rejected");
       }
     },
+    async version() {
+      const { stdout } = await run(opts.executable, ["--version"], {
+        timeout: 10_000,
+      });
+      return stdout.trim();
+    },
   };
 }
 
@@ -351,7 +361,6 @@ async function askRoom(
     Array.isArray(toolInput.questions) ? toolInput.questions : []
   ) as AskedQuestion[];
   const card: QuestionCard = {
-    requestId: toolUseID,
     questions: asked.map((q, i) => ({
       id: `q${i + 1}`,
       header: q.header ?? "",
@@ -363,12 +372,15 @@ async function askRoom(
       multiSelect: q.multiSelect === true,
       allowFreeText: true,
     })),
+    requestId: toolUseID,
   };
   const answer = await onQuestion(card);
   const answers: Record<string, string> = {};
   const annotations: Record<string, { notes: string }> = {};
   if ("noDecision" in answer) {
-    for (const q of asked) answers[q.question] = answer.message;
+    for (const q of asked) {
+      answers[q.question] = answer.message;
+    }
   } else {
     for (const a of answer.answers) {
       const question =
@@ -397,7 +409,9 @@ async function editableInFolder(cwd: string, target: string) {
   try {
     const root = await realpath(cwd);
     const rel = relative(root, await resolveReal(resolve(cwd, target)));
-    if (!rel || rel.startsWith("..") || isAbsolute(rel)) return false;
+    if (!rel || rel.startsWith("..") || isAbsolute(rel)) {
+      return false;
+    }
     return !rel.split(sep).some((part) => PROTECTED.has(part));
   } catch {
     return false;
@@ -409,8 +423,8 @@ async function editableInFolder(cwd: string, target: string) {
 async function resolveReal(path: string): Promise<string> {
   try {
     return await realpath(path);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   let link: string | undefined;
   try {
@@ -418,14 +432,20 @@ async function resolveReal(path: string): Promise<string> {
   } catch {
     /* not a symlink, or missing */
   }
-  if (link !== undefined) return resolveReal(resolve(dirname(path), link));
+  if (link !== undefined) {
+    return await resolveReal(resolve(dirname(path), link));
+  }
   const parent = dirname(path);
-  if (parent === path) return path;
+  if (parent === path) {
+    return path;
+  }
   return resolve(await resolveReal(parent), basename(path));
 }
 
 function summarize(input: unknown): string {
-  if (!input || typeof input !== "object") return "";
+  if (!input || typeof input !== "object") {
+    return "";
+  }
   const o = input as Record<string, unknown>;
   const pick =
     o.file_path ?? o.path ?? o.pattern ?? o.command ?? o.url ?? o.query;

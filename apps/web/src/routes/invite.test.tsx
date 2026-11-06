@@ -19,12 +19,12 @@ function invite(overrides: Record<string, unknown>) {
   backend.queries["invites:lookup"] = ({ token }) =>
     token === TOKEN
       ? {
+          email: "d***@example.com",
+          expiresAt: Date.now() + 86_400_000,
+          matches: true,
           roomId: "room1",
           roomName: "Pricing plan",
-          email: "d***@example.com",
           status: "pending",
-          matches: true,
-          expiresAt: Date.now() + 86_400_000,
           ...overrides,
         }
       : null;
@@ -37,22 +37,24 @@ describe("invite page", () => {
     invite({ matches: false });
     renderAt(`/invite/${TOKEN}`);
 
-    expect(await screen.findByText(/d\*\*\*@example\.com/)).toBeInTheDocument();
+    await expect(
+      screen.findByText(/d\*\*\*@example\.com/)
+    ).resolves.toBeInTheDocument();
     expect(screen.getByText(/sam@other\.example/)).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /join/i })
     ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /sign out/i }));
-    expect(signOut).toHaveBeenCalled();
+    expect(signOut).toHaveBeenCalledWith();
   });
 
   it("says an expired invite has expired", async () => {
     invite({ status: "expired" });
     renderAt(`/invite/${TOKEN}`);
-    expect(
-      await screen.findByRole("heading", { name: /this invite has expired/i })
-    ).toBeInTheDocument();
+    await expect(
+      screen.findByRole("heading", { name: /this invite has expired/i })
+    ).resolves.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /join/i })
     ).not.toBeInTheDocument();
@@ -61,9 +63,9 @@ describe("invite page", () => {
   it("says a revoked invite was revoked", async () => {
     invite({ status: "revoked" });
     renderAt(`/invite/${TOKEN}`);
-    expect(
-      await screen.findByRole("heading", { name: /this invite was revoked/i })
-    ).toBeInTheDocument();
+    await expect(
+      screen.findByRole("heading", { name: /this invite was revoked/i })
+    ).resolves.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /join/i })
     ).not.toBeInTheDocument();
@@ -84,25 +86,27 @@ describe("invite page", () => {
     expect(backend.mutations["invites:accept"]).toHaveBeenCalledWith({
       token: TOKEN,
     });
-    await waitFor(() =>
-      expect(router.state.location.pathname).toBe("/rooms/room1")
-    );
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/rooms/room1");
+    });
   });
 
   it("asks a signed-out visitor to sign in", async () => {
     backend.signedIn = false;
     invite({ matches: false });
     renderAt(`/invite/${TOKEN}`);
-    expect(await screen.findByText("Clerk sign-in form")).toBeInTheDocument();
+    await expect(
+      screen.findByText("Clerk sign-in form")
+    ).resolves.toBeInTheDocument();
     expect(screen.getByText(/Pricing plan/)).toBeInTheDocument();
   });
 
   it("reveals nothing for an unknown token", async () => {
     invite({});
     renderAt("/invite/someone-elses-guess");
-    expect(
-      await screen.findByRole("heading", { name: /invite link isn.t valid/i })
-    ).toBeInTheDocument();
+    await expect(
+      screen.findByRole("heading", { name: /invite link isn.t valid/i })
+    ).resolves.toBeInTheDocument();
     expect(screen.queryByText(/Pricing plan/)).not.toBeInTheDocument();
   });
 });

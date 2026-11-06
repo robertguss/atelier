@@ -6,6 +6,7 @@ import { beforeEach, afterEach, test, expect, vi } from "vitest";
 import { api } from "../convex/_generated/api";
 import schema from "../convex/schema";
 import * as team from "../convex/team";
+
 const modules = import.meta.glob("../convex/**/*.ts");
 
 beforeEach(() => {
@@ -25,58 +26,57 @@ async function setup() {
   workflow.register(t);
   const owner = t.withIdentity({
     email: "owner@example.com",
-    subject: "owner",
     name: "Robert",
+    subject: "owner",
   });
   const dana = t.withIdentity({
     email: "dana@example.com",
-    subject: "dana",
     name: "Dana",
+    subject: "dana",
   });
   const eve = t.withIdentity({
     email: "eve@example.com",
-    subject: "eve",
     name: "Eve",
+    subject: "eve",
   });
   const runnerId = await t.mutation(api.runners.heartbeat, {
-    secret: "test-secret",
-    name: "test",
-    machine: "test",
     harnesses: [{ id: "claude", version: "test" }],
+    machine: "test",
+    name: "test",
+    secret: "test-secret",
   });
   const roomId = await owner.mutation(api.rooms.create, {
+    cwd: "/tmp/planning",
     name: "Planning",
     runnerId,
-    cwd: "/tmp/planning",
   });
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => Response.json([{ id: "user_1" }]))
   );
   const invite = await owner.action(api.invites.create, {
-    roomId,
     email: "dana@example.com",
+    roomId,
   });
   await dana.mutation(api.invites.accept, {
     token: invite.url.split("/invite/")[1]!,
   });
-  const participants = (await owner.query(api.rooms.get, { roomId }))!
-    .participants;
+  const { participants } = (await owner.query(api.rooms.get, { roomId }))!;
   const robert = participants.find((p) => p.displayName === "Robert")!;
   const danaParticipant = participants.find((p) => p.displayName === "Dana")!;
-  return { t, owner, dana, eve, roomId, robert, danaParticipant };
+  return { dana, danaParticipant, eve, owner, robert, roomId, t };
 }
 
 test("the owner and a member can post and both read the team chat, with authors and a ledger row per post", async () => {
   const { t, owner, dana, roomId, robert, danaParticipant } = await setup();
   const first = await owner.mutation(api.team.post, {
-    roomId,
     body: "  between us, is this too big?  ",
+    roomId,
   });
   vi.advanceTimersByTime(1000);
   const second = await dana.mutation(api.team.post, {
-    roomId,
     body: "TEAM-ONLY-TOKEN yes",
+    roomId,
   });
 
   for (const caller of [owner, dana]) {
@@ -114,10 +114,10 @@ test("the owner and a member can post and both read the team chat, with authors 
 
 test("a non-member and a removed member can neither post nor read", async () => {
   const { owner, dana, eve, roomId } = await setup();
-  await owner.mutation(api.team.post, { roomId, body: "hello" });
+  await owner.mutation(api.team.post, { body: "hello", roomId });
   await expect(eve.query(api.team.list, { roomId })).rejects.toThrow();
   await expect(
-    eve.mutation(api.team.post, { roomId, body: "let me in" })
+    eve.mutation(api.team.post, { body: "let me in", roomId })
   ).rejects.toThrow();
 
   const { members } = await owner.query(api.members.list, { roomId });
@@ -126,7 +126,7 @@ test("a non-member and a removed member can neither post nor read", async () => 
   });
   await expect(dana.query(api.team.list, { roomId })).rejects.toThrow();
   await expect(
-    dana.mutation(api.team.post, { roomId, body: "still here?" })
+    dana.mutation(api.team.post, { body: "still here?", roomId })
   ).rejects.toThrow();
   expect(
     (await owner.query(api.team.list, { roomId })).map((m) => m.body)
@@ -136,12 +136,12 @@ test("a non-member and a removed member can neither post nor read", async () => 
 test("an empty or whitespace-only post is rejected", async () => {
   const { owner, dana, roomId } = await setup();
   await expect(
-    owner.mutation(api.team.post, { roomId, body: "" })
+    owner.mutation(api.team.post, { body: "", roomId })
   ).rejects.toThrow();
   await expect(
-    dana.mutation(api.team.post, { roomId, body: " \n\t " })
+    dana.mutation(api.team.post, { body: " \n\t ", roomId })
   ).rejects.toThrow();
-  expect(await owner.query(api.team.list, { roomId })).toEqual([]);
+  await expect(owner.query(api.team.list, { roomId })).resolves.toEqual([]);
 });
 
 test("team messages cannot be edited or deleted: only list and post exist", () => {

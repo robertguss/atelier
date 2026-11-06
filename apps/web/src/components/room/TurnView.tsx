@@ -14,13 +14,13 @@ import { StreamingMarkdown } from "~/components/markdown/StreamingMarkdown";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
-import {
-  formatTime,
-  type Names,
-  type PaneCard,
-  type PaneMessage,
-  type PaneTurn,
-  type ToolItem,
+import { formatTime } from "~/lib/room";
+import type {
+  Names,
+  PaneCard,
+  PaneMessage,
+  PaneTurn,
+  ToolItem,
 } from "~/lib/room";
 import { cn } from "~/lib/utils";
 
@@ -115,17 +115,19 @@ function streamedText(partialText: string, replies: PaneMessage[]) {
   let text = partialText.trim();
   for (const reply of replies) {
     const answer = reply.body.trim();
-    if (answer && text.endsWith(answer))
+    if (answer && text.endsWith(answer)) {
       text = text.slice(0, -answer.length).trim();
+    }
   }
   return text;
 }
 
 function TurnStatus({ turn, names }: { turn: PaneTurn; names: Names }) {
   switch (turn.status) {
-    case "queued":
+    case "queued": {
       return <Badge variant="secondary">Starting</Badge>;
-    case "running":
+    }
+    case "running": {
       return turn.waitingOnHandId ? (
         <Badge variant="info">Waiting on you</Badge>
       ) : (
@@ -134,11 +136,14 @@ function TurnStatus({ turn, names }: { turn: PaneTurn; names: Names }) {
           Working
         </Badge>
       );
-    case "done":
+    }
+    case "done": {
       return null;
-    case "failed":
+    }
+    case "failed": {
       return <Badge variant="error">Failed</Badge>;
-    case "interrupted":
+    }
+    case "interrupted": {
       return (
         <Badge variant="warning">
           {turn.stoppedByParticipantId
@@ -146,6 +151,7 @@ function TurnStatus({ turn, names }: { turn: PaneTurn; names: Names }) {
             : "Interrupted"}
         </Badge>
       );
+    }
   }
 }
 
@@ -166,7 +172,9 @@ function StopButton({
         aria-label={`Stop ${agentName}`}
         onClick={() => {
           setError(null);
-          cancel({ turnId }).catch((e: unknown) => setError(errorText(e)));
+          cancel({ turnId }).catch((error_: unknown) => {
+            setError(errorText(error_));
+          });
         }}
       >
         <SquareIcon className="size-3" />
@@ -192,7 +200,9 @@ function ToolActivity({
       <button
         type="button"
         aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          setOpen((o) => !o);
+        }}
         className="text-muted-foreground hover:text-foreground flex items-center gap-1"
       >
         <ChevronRightIcon

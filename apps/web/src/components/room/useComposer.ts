@@ -1,4 +1,5 @@
-import { useState, type KeyboardEvent } from "react";
+import { useState } from "react";
+import type { KeyboardEvent } from "react";
 
 import { errorText } from "./errors";
 
@@ -13,24 +14,28 @@ export function useComposer(
 
   const submit = async (steer = false) => {
     const body = draft.trim();
-    if (!body || busy || blocked) return;
+    if (!body || busy || blocked) {
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       await send(body, steer);
       // Keep anything typed while the send was in flight.
       setDraft((current) => (current.trim() === body ? "" : current));
-    } catch (e) {
-      setError(errorText(e));
+    } catch (error_) {
+      setError(errorText(error_));
     }
     setBusy(false);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) {
+      return;
+    }
     e.preventDefault();
     void submit();
   };
 
-  return { draft, setDraft, busy, error, submit, onKeyDown };
+  return { busy, draft, error, onKeyDown, setDraft, submit };
 }

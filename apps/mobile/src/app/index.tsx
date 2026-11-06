@@ -27,20 +27,24 @@ export default function Home() {
   const { isLoaded, isSignedIn } = useAuth();
   const { isAuthenticated } = useConvexAuth();
 
-  if (!isLoaded)
+  if (!isLoaded) {
     return (
       <Centered>
         <ActivityIndicator />
       </Centered>
     );
-  if (!isSignedIn) return <SignIn />;
-  if (!isAuthenticated)
+  }
+  if (!isSignedIn) {
+    return <SignIn />;
+  }
+  if (!isAuthenticated) {
     return (
       <Centered>
         <ActivityIndicator />
         <Body>Connecting to Convex…</Body>
       </Centered>
     );
+  }
   return <SignedIn />;
 }
 
@@ -54,8 +58,8 @@ function SignIn() {
     setBusy(true);
     try {
       await startHostedAuth({ mode: "sign-in" });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+    } catch (error_) {
+      setError(error_ instanceof Error ? error_.message : String(error_));
     } finally {
       setBusy(false);
     }
@@ -87,10 +91,15 @@ function SignedIn() {
     let live = true;
     ensureUser().then(
       () => {
-        if (live) setEnsured(true);
+        if (live) {
+          setEnsured(true);
+        }
       },
-      (e: unknown) => {
-        if (live) setEnsureError(e instanceof Error ? e.message : String(e));
+      (error: unknown) => {
+        if (live)
+          setEnsureError(
+            error instanceof Error ? error.message : String(error)
+          );
       }
     );
     return () => {
@@ -103,16 +112,17 @@ function SignedIn() {
     return (
       <Centered>
         <Body style={{ color: "#d33" }}>{ensureError}</Body>
-        <Button label="Sign out" onPress={() => signOut()} />
+        <Button label="Sign out" onPress={async () => signOut()} />
       </Centered>
     );
   }
-  if (me === undefined || !ensured)
+  if (me === undefined || !ensured) {
     return (
       <Centered>
         <ActivityIndicator />
       </Centered>
     );
+  }
   if (!isOwner) {
     return (
       <Centered>
@@ -121,7 +131,7 @@ function SignedIn() {
             ? `${me.email ?? "This account"} is not the Atelier owner.`
             : "Not signed in."}
         </Body>
-        <Button label="Sign out" onPress={() => signOut()} />
+        <Button label="Sign out" onPress={async () => signOut()} />
       </Centered>
     );
   }
@@ -136,7 +146,11 @@ function SignedIn() {
       <PushReadiness />
       <Section title="You">
         <Body>{me.email ?? me.name}</Body>
-        <Button label="Sign out" kind="secondary" onPress={() => signOut()} />
+        <Button
+          label="Sign out"
+          kind="secondary"
+          onPress={async () => signOut()}
+        />
       </Section>
     </ScrollView>
   );
@@ -153,11 +167,13 @@ function Rooms() {
 
   const runner = runners?.[0];
   const submit = async () => {
-    if (!runner || !name.trim() || !cwd.trim()) return;
-    const roomId = await createRoom({ name, cwd, runnerId: runner._id });
+    if (!runner || !name.trim() || !cwd.trim()) {
+      return;
+    }
+    const roomId = await createRoom({ cwd, name, runnerId: runner._id });
     setCreating(false);
     setName("");
-    router.push({ pathname: "/room/[id]", params: { id: roomId } });
+    router.push({ params: { id: roomId }, pathname: "/room/[id]" });
   };
 
   return (
@@ -167,9 +183,9 @@ function Rooms() {
       {rooms?.map((room) => (
         <Pressable
           key={room._id}
-          onPress={() =>
-            router.push({ pathname: "/room/[id]", params: { id: room._id } })
-          }
+          onPress={() => {
+            router.push({ params: { id: room._id }, pathname: "/room/[id]" });
+          }}
           style={({ pressed }) => [
             styles.card,
             { backgroundColor: colors.card, opacity: pressed ? 0.6 : 1 },
@@ -205,7 +221,9 @@ function Rooms() {
               <Button
                 label="Cancel"
                 kind="secondary"
-                onPress={() => setCreating(false)}
+                onPress={() => {
+                  setCreating(false);
+                }}
               />
             </View>
             <View style={{ flex: 1 }}>
@@ -221,7 +239,9 @@ function Rooms() {
         <Button
           label="New room"
           kind="secondary"
-          onPress={() => setCreating(true)}
+          onPress={() => {
+            setCreating(true);
+          }}
         />
       )}
     </Section>
@@ -252,15 +272,19 @@ function Runners() {
 function useNow(intervalMs: number) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(id);
+    const id = setInterval(() => {
+      setNow(Date.now());
+    }, intervalMs);
+    return () => {
+      clearInterval(id);
+    };
   }, [intervalMs]);
   return now;
 }
 
 const styles = StyleSheet.create({
-  scroll: { padding: 20, gap: 28 },
-  card: { padding: 14, borderRadius: 12, gap: 2 },
+  card: { borderRadius: 12, gap: 2, padding: 14 },
   form: { gap: 10 },
   row: { flexDirection: "row", gap: 10 },
+  scroll: { gap: 28, padding: 20 },
 });

@@ -4,7 +4,7 @@ import { includedParticipantIds, toggleExcluded } from "./review-participants";
 
 const participants = [{ _id: "a" }, { _id: "b" }, { _id: "c" }];
 
-describe("toggleExcluded", () => {
+describe(toggleExcluded, () => {
   it("excludes an included participant and re-includes them on a second toggle", () => {
     const excluded = toggleExcluded([], "b");
     expect(excluded).toStrictEqual(["b"]);
@@ -12,7 +12,7 @@ describe("toggleExcluded", () => {
   });
 });
 
-describe("includedParticipantIds", () => {
+describe(includedParticipantIds, () => {
   it("keeps the original participant order", () => {
     expect(includedParticipantIds(participants, ["b"])).toStrictEqual([
       "a",

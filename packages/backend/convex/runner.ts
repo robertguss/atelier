@@ -1,12 +1,8 @@
 import { v } from "convex/values";
 
 import type { Doc, Id } from "./_generated/dataModel";
-import {
-  internalMutation,
-  mutation,
-  query,
-  type MutationCtx,
-} from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { hasActiveTeammate, requireRunnerSecret } from "./lib/auth";
 import { closeOpenCards, expireUnanswered } from "./lib/cards";
 import {
@@ -27,7 +23,7 @@ const LEASE_MS = 5 * 60_000;
 const LEASE_RENEW_AFTER_MS = 30_000;
 
 export const pendingCommands = query({
-  args: { secret: v.string(), runnerId: v.id("runners") },
+  args: { runnerId: v.id("runners"), secret: v.string() },
   handler: async (ctx, { secret, runnerId }) => {
     requireRunnerSecret(secret);
     return await ctx.db
@@ -45,50 +41,55 @@ export const pendingCommands = query({
 // and the runner reports back through commandHandled. Returns null if another
 // claim got there first or the command no longer applies.
 export const claim = mutation({
-  args: { secret: v.string(), commandId: v.id("commands") },
+  args: { commandId: v.id("commands"), secret: v.string() },
   handler: async (ctx, { secret, commandId }) => {
     requireRunnerSecret(secret);
     const command = await ctx.db.get(commandId);
-    if (!command || command.status !== "pending") return null;
+    if (!command || command.status !== "pending") {
+      return null;
+    }
     if (command.type !== "run_turn") {
       const target = await ctx.db.get(command.turnId);
       if (!target || target.status !== "running") {
         await ctx.db.patch(commandId, {
-          status: "failed",
           error: "Turn is not running",
+          status: "failed",
         });
         return null;
       }
       await ctx.db.patch(commandId, { status: "claimed" });
       return {
         commandId,
-        type: command.type,
-        turn: { id: target._id },
         payload: command.payload,
+        turn: { id: target._id },
+        type: command.type,
       };
     }
     await ctx.db.patch(commandId, {
-      status: "claimed",
       leaseExpiresAt: Date.now() + LEASE_MS,
+      status: "claimed",
     });
 
     const turn = await ctx.db.get(command.turnId);
     if (!turn || turn.status !== "queued") {
       await ctx.db.patch(commandId, {
-        status: "failed",
         error: "Turn is no longer queued",
         leaseExpiresAt: undefined,
+        status: "failed",
       });
       return null;
     }
     const participant = await ctx.db.get(turn.participantId);
     const room = await ctx.db.get(turn.roomId);
-    if (!participant || !room || !participant.harness) return null;
+    if (!participant || !room || !participant.harness) {
+      return null;
+    }
 
     // The turn runs with the switch as it is now, not as it was at dispatch.
     const editsEnabled = room.editsEnabled === true;
-    if (turn.editsEnabled !== editsEnabled)
+    if (turn.editsEnabled !== editsEnabled) {
       await ctx.db.patch(turn._id, { editsEnabled });
+    }
 
     let sessionId = turn.ritualId ? undefined : participant.harnessSessionId;
     if (turn.followUp && !turn.ritualId) {
@@ -109,27 +110,27 @@ export const claim = mutation({
 
     return {
       commandId,
-      type: "run_turn" as const,
-      turn: {
-        id: turn._id,
-        prompt: turn.prompt,
-        independentReview: !!turn.ritualId,
-        ritualId: turn.ritualId,
-      },
       participant: {
-        id: participant._id,
         harness: participant.harness,
+        id: participant._id,
         model: participant.model,
         reasoning: participant.reasoning,
         sessionId,
       },
       room: {
-        id: room._id,
         cwd: room.cwd,
-        name: room.name,
-        handbook: room.handbook,
         editsEnabled,
+        handbook: room.handbook,
+        id: room._id,
+        name: room.name,
       },
+      turn: {
+        id: turn._id,
+        independentReview: !!turn.ritualId,
+        prompt: turn.prompt,
+        ritualId: turn.ritualId,
+      },
+      type: "run_turn" as const,
     };
   },
 });
@@ -138,28 +139,30 @@ export const claim = mutation({
 // and start reached no running turn, so the runner applies this value.
 export const start = mutation({
   args: {
+    harnessVersion: v.string(),
     secret: v.string(),
     turnId: v.id("turns"),
-    harnessVersion: v.string(),
   },
   handler: async (ctx, { secret, turnId, harnessVersion }) => {
     requireRunnerSecret(secret);
     const turn = await ctx.db.get(turnId);
-    if (!turn || !isActiveTurnStatus(turn.status)) return null;
+    if (!turn || !isActiveTurnStatus(turn.status)) {
+      return null;
+    }
     const room = await ctx.db.get(turn.roomId);
     const editsEnabled = room?.editsEnabled === true;
     await ctx.db.patch(turnId, {
-      status: "running",
-      startedAt: Date.now(),
-      harnessVersion,
       editsEnabled,
+      harnessVersion,
+      startedAt: Date.now(),
+      status: "running",
     });
     await record(ctx, {
-      roomId: turn.roomId,
-      type: "turn.started",
       actorParticipantId: turn.participantId,
-      subjectId: turnId,
       harnessVersion,
+      roomId: turn.roomId,
+      subjectId: turnId,
+      type: "turn.started",
     });
     return { editsEnabled };
   },
@@ -168,34 +171,39 @@ export const start = mutation({
 // Throttled by the runner to about two calls a second. Also renews the lease.
 export const progress = mutation({
   args: {
-    secret: v.string(),
-    turnId: v.id("turns"),
     commandId: v.id("commands"),
     partialText: v.string(),
+    secret: v.string(),
+    turnId: v.id("turns"),
   },
   handler: async (ctx, { secret, turnId, commandId, partialText }) => {
     requireRunnerSecret(secret);
     const turn = await ctx.db.get(turnId);
-    if (!turn || turn.status !== "running") return false;
-    const command = await ctx.db.get(commandId);
-    if (!command || command.turnId !== turnId || command.status !== "claimed")
+    if (!turn || turn.status !== "running") {
       return false;
+    }
+    const command = await ctx.db.get(commandId);
+    if (!command || command.turnId !== turnId || command.status !== "claimed") {
+      return false;
+    }
     await setStreamedText(ctx, turnId, partialText);
     const now = Date.now();
-    if ((command.leaseExpiresAt ?? 0) < now + LEASE_MS - LEASE_RENEW_AFTER_MS)
+    if ((command.leaseExpiresAt ?? 0) < now + LEASE_MS - LEASE_RENEW_AFTER_MS) {
       await ctx.db.patch(commandId, { leaseExpiresAt: now + LEASE_MS });
+    }
     return true;
   },
 });
 
 export const finish = mutation({
   args: {
-    secret: v.string(),
-    turnId: v.id("turns"),
     commandId: v.id("commands"),
     finalText: v.string(),
-    sessionId: v.optional(v.string()),
     model: v.optional(v.string()),
+    secret: v.string(),
+    sessionId: v.optional(v.string()),
+    transcriptRef: v.string(),
+    turnId: v.id("turns"),
     usage: v.optional(
       v.object({
         inputTokens: v.number(),
@@ -203,30 +211,32 @@ export const finish = mutation({
         costUsd: v.optional(v.number()),
       })
     ),
-    transcriptRef: v.string(),
   },
   handler: async (ctx, args) => {
     requireRunnerSecret(args.secret);
     const turn = await ctx.db.get(args.turnId);
-    if (!turn || !isActiveTurnStatus(turn.status)) return;
+    if (!turn || !isActiveTurnStatus(turn.status)) {
+      return;
+    }
     const command = await ctx.db.get(args.commandId);
     if (
       !command ||
       command.turnId !== args.turnId ||
       command.status !== "claimed"
-    )
+    ) {
       throw new Error("Invalid turn command");
+    }
     // The streamed text stays on the turn, so the pane can keep showing it.
     await ctx.db.patch(args.turnId, {
-      status: "done",
-      finalText: args.finalText,
-      usage: args.usage,
-      transcriptRef: args.transcriptRef,
       endedAt: Date.now(),
+      finalText: args.finalText,
+      status: "done",
+      transcriptRef: args.transcriptRef,
+      usage: args.usage,
     });
     await ctx.db.patch(args.commandId, {
-      status: "done",
       leaseExpiresAt: undefined,
+      status: "done",
     });
     await closeOpenCards(
       ctx,
@@ -234,46 +244,49 @@ export const finish = mutation({
       "cancelled",
       "The turn ended before anyone answered"
     );
-    if (args.sessionId && !turn.ritualId)
+    if (args.sessionId && !turn.ritualId) {
       await saveSession(ctx, turn, args.sessionId);
+    }
 
     const messageId = await ctx.db.insert("messages", {
-      roomId: turn.roomId,
       authorParticipantId: turn.participantId,
       body: args.finalText,
-      turnId: args.turnId,
-      ritualId: turn.ritualId,
-      visibility: turn.ritualId ? "sealed" : "room",
       followUpRitualId: turn.followUp?.ritualId,
+      ritualId: turn.ritualId,
+      roomId: turn.roomId,
+      turnId: args.turnId,
+      visibility: turn.ritualId ? "sealed" : "room",
     });
     await reviewFinished(ctx, turn);
     const participant = await ctx.db.get(turn.participantId);
     await record(ctx, {
-      roomId: turn.roomId,
-      type: "turn.finished",
       actorParticipantId: turn.participantId,
-      subjectId: args.turnId,
-      provider: providerOf(participant?.harness),
-      model: args.model,
       harnessVersion: turn.harnessVersion,
+      model: args.model,
       payload: {
         messageId,
-        usage: args.usage,
         transcriptRef: args.transcriptRef,
+        usage: args.usage,
       },
+      provider: providerOf(participant?.harness),
+      roomId: turn.roomId,
+      subjectId: args.turnId,
+      type: "turn.finished",
     });
-    if (!turn.ritualId) await dispatchNext(ctx, turn.participantId);
+    if (!turn.ritualId) {
+      await dispatchNext(ctx, turn.participantId);
+    }
   },
 });
 
 export const fail = mutation({
   args: {
-    secret: v.string(),
-    turnId: v.id("turns"),
     commandId: v.id("commands"),
     error: v.string(),
     interrupted: v.optional(v.boolean()),
+    secret: v.string(),
     transcriptRef: v.optional(v.string()),
+    turnId: v.id("turns"),
   },
   handler: async (
     ctx,
@@ -293,7 +306,7 @@ export const fail = mutation({
 
 // On startup the runner marks its own unfinished work as interrupted.
 export const recover = mutation({
-  args: { secret: v.string(), runnerId: v.id("runners") },
+  args: { runnerId: v.id("runners"), secret: v.string() },
   handler: async (ctx, { secret, runnerId }) => {
     requireRunnerSecret(secret);
     const claimed = await ctx.db
@@ -316,11 +329,12 @@ export const recover = mutation({
     }
     for (const command of claimed.filter((c) => c.type !== "run_turn")) {
       const current = await ctx.db.get(command._id);
-      if (current?.status === "claimed")
+      if (current?.status === "claimed") {
         await ctx.db.patch(command._id, {
           status: "failed",
           error: "Runner restarted",
         });
+      }
     }
     return turns.length;
   },
@@ -341,14 +355,15 @@ export const reclaimExpiredLeases = internalMutation({
       )
       .collect();
     for (const command of expired) {
-      if (command.type !== "run_turn" || command.leaseExpiresAt === undefined)
+      if (command.type !== "run_turn" || command.leaseExpiresAt === undefined) {
         continue;
+      }
       const turn = await ctx.db.get(command.turnId);
       if (!turn || !isActiveTurnStatus(turn.status)) {
         await ctx.db.patch(command._id, {
-          status: "failed",
           error: "Lease expired",
           leaseExpiresAt: undefined,
+          status: "failed",
         });
         continue;
       }
@@ -369,23 +384,28 @@ export const reclaimExpiredLeases = internalMutation({
 
 export const commandHandled = mutation({
   args: {
-    secret: v.string(),
     commandId: v.id("commands"),
-    ok: v.boolean(),
     error: v.optional(v.string()),
+    ok: v.boolean(),
+    secret: v.string(),
   },
   handler: async (ctx, { secret, commandId, ok, error }) => {
     requireRunnerSecret(secret);
     const command = await ctx.db.get(commandId);
-    if (!command || command.type === "run_turn" || command.status !== "claimed")
+    if (
+      !command ||
+      command.type === "run_turn" ||
+      command.status !== "claimed"
+    ) {
       return;
+    }
     await ctx.db.patch(
       commandId,
       ok
         ? { status: "done" }
         : {
-            status: "failed",
             error: error ?? "Turn is not running on the runner",
+            status: "failed",
           }
     );
     if (!ok && command.type === "steer") {
@@ -393,7 +413,9 @@ export const commandHandled = mutation({
         | Id<"messages">
         | undefined;
       const message = messageId ? await ctx.db.get(messageId) : null;
-      if (message) await steerRejected(ctx, message);
+      if (message) {
+        await steerRejected(ctx, message);
+      }
     }
   },
 });
@@ -402,20 +424,24 @@ export const commandHandled = mutation({
 // rejected it. A rejected message returns to the queue.
 export const steerResult = mutation({
   args: {
-    secret: v.string(),
     messageId: v.id("messages"),
     outcome: v.union(v.literal("steered"), v.literal("rejected")),
+    secret: v.string(),
   },
   handler: async (ctx, { secret, messageId, outcome }) => {
     requireRunnerSecret(secret);
     const message = await ctx.db.get(messageId);
-    if (!message || message.delivery !== "steering" || !message.steering)
+    if (!message || message.delivery !== "steering" || !message.steering) {
       return;
-    if (outcome === "rejected") return await steerRejected(ctx, message);
-    const turnId = message.steering.turnId;
+    }
+    if (outcome === "rejected") {
+      await steerRejected(ctx, message);
+      return;
+    }
+    const { turnId } = message.steering;
     await ctx.db.patch(messageId, {
-      delivery: "steered",
       deliveredTurnId: turnId,
+      delivery: "steered",
       steering: undefined,
     });
     const turn = await ctx.db.get(turnId);
@@ -433,11 +459,11 @@ export const steerResult = mutation({
       });
     }
     await record(ctx, {
-      roomId: message.roomId,
-      type: "message.steered",
       actorParticipantId: message.authorParticipantId,
-      subjectId: messageId,
       payload: { turnId },
+      roomId: message.roomId,
+      subjectId: messageId,
+      type: "message.steered",
     });
   },
 });
@@ -447,11 +473,13 @@ export const steerResult = mutation({
 // as finish: reviews never save a session, and a follow-up in a shared room
 // saves to its review.
 export const sessionStarted = mutation({
-  args: { secret: v.string(), turnId: v.id("turns"), sessionId: v.string() },
+  args: { secret: v.string(), sessionId: v.string(), turnId: v.id("turns") },
   handler: async (ctx, { secret, turnId, sessionId }) => {
     requireRunnerSecret(secret);
     const turn = await ctx.db.get(turnId);
-    if (!turn || turn.ritualId || !isActiveTurnStatus(turn.status)) return;
+    if (!turn || turn.ritualId || !isActiveTurnStatus(turn.status)) {
+      return;
+    }
     await saveSession(ctx, turn, sessionId);
   },
 });
@@ -460,48 +488,54 @@ export const sessionStarted = mutation({
 // shows in the agent pane, and the turn stays running while it waits.
 export const raiseHand = mutation({
   args: {
+    questions: v.array(cardQuestion),
+    requestId: v.string(),
     secret: v.string(),
     turnId: v.id("turns"),
-    requestId: v.string(),
-    questions: v.array(cardQuestion),
   },
   handler: async (ctx, { secret, turnId, requestId, questions }) => {
     requireRunnerSecret(secret);
-    if (questions.length < 1 || questions.length > 4)
+    if (questions.length < 1 || questions.length > 4) {
       throw new Error("A card holds one to four questions");
-    if (new Set(questions.map((q) => q.id)).size !== questions.length)
+    }
+    if (new Set(questions.map((q) => q.id)).size !== questions.length) {
       throw new Error("Question ids must be unique on a card");
+    }
     const turn = await ctx.db.get(turnId);
-    if (!turn || turn.status !== "running")
+    if (!turn || turn.status !== "running") {
       throw new Error("Turn is not running");
+    }
     const handId = await ctx.db.insert("hands", {
-      roomId: turn.roomId,
-      turnId,
       participantId: turn.participantId,
-      requestId,
       questions,
-      status: "raised",
       raisedAt: Date.now(),
-    });
-    if (!turn.waitingOnHandId)
-      await ctx.db.patch(turnId, { waitingOnHandId: handId });
-    await record(ctx, {
+      requestId,
       roomId: turn.roomId,
-      type: "hand.raised",
+      status: "raised",
+      turnId,
+    });
+    if (!turn.waitingOnHandId) {
+      await ctx.db.patch(turnId, { waitingOnHandId: handId });
+    }
+    await record(ctx, {
       actorParticipantId: turn.participantId,
+      payload: { questionCount: questions.length, requestId, turnId },
+      roomId: turn.roomId,
       subjectId: handId,
-      payload: { turnId, requestId, questionCount: questions.length },
+      type: "hand.raised",
     });
     return handId;
   },
 });
 
 export const handTimedOut = mutation({
-  args: { secret: v.string(), handId: v.id("hands") },
+  args: { handId: v.id("hands"), secret: v.string() },
   handler: async (ctx, { secret, handId }) => {
     requireRunnerSecret(secret);
     const hand = await ctx.db.get(handId);
-    if (hand) await expireUnanswered(ctx, hand);
+    if (hand) {
+      await expireUnanswered(ctx, hand);
+    }
   },
 });
 
@@ -511,8 +545,6 @@ const SUMMARY_MAX = 200;
 // Each item is keyed by the harness's call id, so a result updates its call.
 export const recordTurnItems = mutation({
   args: {
-    secret: v.string(),
-    turnId: v.id("turns"),
     items: v.array(
       v.object({
         callId: v.string(),
@@ -522,11 +554,15 @@ export const recordTurnItems = mutation({
         ok: v.optional(v.boolean()),
       })
     ),
+    secret: v.string(),
+    turnId: v.id("turns"),
   },
   handler: async (ctx, { secret, turnId, items }) => {
     requireRunnerSecret(secret);
     // A turn stopped from the room still keeps the activity of its last moments.
-    if (!(await ctx.db.get(turnId))) return;
+    if (!(await ctx.db.get(turnId))) {
+      return;
+    }
     for (const item of items) {
       const row = { ...item, summary: item.summary.slice(0, SUMMARY_MAX) };
       const existing = await ctx.db
@@ -535,17 +571,20 @@ export const recordTurnItems = mutation({
           q.eq("turnId", turnId).eq("callId", item.callId)
         )
         .unique();
-      if (existing) await ctx.db.patch(existing._id, row);
-      else await ctx.db.insert("turnItems", { turnId, ...row });
+      if (existing) {
+        await ctx.db.patch(existing._id, row);
+      } else {
+        await ctx.db.insert("turnItems", { turnId, ...row });
+      }
     }
   },
 });
 
 export const reportCapabilities = mutation({
   args: {
-    secret: v.string(),
-    runnerId: v.id("runners"),
     harnesses: v.array(v.object({ id: harnessId, canRaiseCards: v.boolean() })),
+    runnerId: v.id("runners"),
+    secret: v.string(),
   },
   handler: async (ctx, { secret, runnerId, harnesses }) => {
     requireRunnerSecret(secret);
@@ -558,15 +597,16 @@ async function saveSession(
   turn: Doc<"turns">,
   sessionId: string
 ) {
-  if (turn.followUp?.separateSession)
+  if (turn.followUp?.separateSession) {
     await saveFollowUpSession(
       ctx,
       turn.followUp.ritualId,
       turn.participantId,
       sessionId
     );
-  else if (!(await sessionResetAfter(ctx, turn)))
+  } else if (!(await sessionResetAfter(ctx, turn))) {
     await ctx.db.patch(turn.participantId, { harnessSessionId: sessionId });
+  }
 }
 
 async function failTurn(
@@ -579,21 +619,25 @@ async function failTurn(
   { runnerLost = false }: { runnerLost?: boolean } = {}
 ) {
   const turn = await ctx.db.get(turnId);
-  if (!turn || !isActiveTurnStatus(turn.status)) return;
+  if (!turn || !isActiveTurnStatus(turn.status)) {
+    return;
+  }
   const command = await ctx.db.get(commandId);
   if (
     !command ||
     command.turnId !== turnId ||
     !["pending", "claimed"].includes(command.status)
-  )
+  ) {
     throw new Error("Invalid turn command");
+  }
   await ctx.db.patch(commandId, {
-    status: "failed",
     error,
     leaseExpiresAt: undefined,
+    status: "failed",
   });
-  if (runnerLost)
+  if (runnerLost) {
     await abandonControlCommands(ctx, turn, command.runnerId, error);
+  }
   // A runner that went away expires the turn's open cards; any other failure
   // stopped the turn, which cancels them. Neither records a decision.
   await closeOpenCards(
@@ -603,21 +647,23 @@ async function failTurn(
     error
   );
   await ctx.db.patch(turnId, {
-    status: interrupted && !turn.ritualId ? "interrupted" : "failed",
-    error,
-    transcriptRef,
     endedAt: Date.now(),
+    error,
+    status: interrupted && !turn.ritualId ? "interrupted" : "failed",
+    transcriptRef,
   });
   await reviewFinished(ctx, turn);
   await record(ctx, {
-    roomId: turn.roomId,
-    type: interrupted ? "turn.interrupted" : "turn.failed",
     actorParticipantId: turn.participantId,
-    subjectId: turnId,
     harnessVersion: turn.harnessVersion,
     payload: { error },
+    roomId: turn.roomId,
+    subjectId: turnId,
+    type: interrupted ? "turn.interrupted" : "turn.failed",
   });
-  if (!turn.ritualId) await dispatchNext(ctx, turn.participantId);
+  if (!turn.ritualId) {
+    await dispatchNext(ctx, turn.participantId);
+  }
 }
 
 // A runner that died or restarted will never answer the control commands it
@@ -637,8 +683,9 @@ async function abandonControlCommands(
       c.runnerId === runnerId &&
       (c.status === "pending" || c.status === "claimed") &&
       c.type !== "run_turn"
-    )
+    ) {
       await ctx.db.patch(c._id, { status: "failed", error });
+    }
   }
   const steering = await ctx.db
     .query("messages")
@@ -646,9 +693,10 @@ async function abandonControlCommands(
       q.eq("toParticipantId", turn.participantId).eq("delivery", "steering")
     )
     .collect();
-  for (const m of steering)
+  for (const m of steering) {
     if (m.steering?.turnId === turn._id)
       await ctx.db.patch(m._id, { delivery: "queued", steering: undefined });
+  }
 }
 
 function followUpSession(
@@ -666,7 +714,9 @@ async function saveFollowUpSession(
   sessionId: string
 ) {
   const ritual = await ctx.db.get(ritualId);
-  if (!ritual) return;
+  if (!ritual) {
+    return;
+  }
   const others = (ritual.followUpSessions ?? []).filter(
     (s) => s.participantId !== participantId
   );
@@ -676,25 +726,36 @@ async function saveFollowUpSession(
 }
 
 function providerOf(harness: Doc<"participants">["harness"]) {
-  if (harness === "claude") return "anthropic";
-  if (harness === "codex") return "openai";
+  if (harness === "claude") {
+    return "anthropic";
+  }
+  if (harness === "codex") {
+    return "openai";
+  }
   return harness;
 }
 
 export const prepareReview = mutation({
-  args: { secret: v.string(), ritualId: v.id("rituals"), snapshot: v.string() },
+  args: { ritualId: v.id("rituals"), secret: v.string(), snapshot: v.string() },
   handler: async (ctx, { secret, ritualId, snapshot }) => {
     requireRunnerSecret(secret);
     const ritual = await ctx.db.get(ritualId);
-    if (!ritual || ritual.status !== "collecting")
+    if (!ritual || ritual.status !== "collecting") {
       throw new Error("Review is no longer collecting");
+    }
     const existing = await ctx.db
       .query("reviewSnapshots")
       .withIndex("by_ritual", (q) => q.eq("ritualId", ritualId))
       .unique();
-    if (existing) return existing.text;
-    if (ritual.snapshot !== undefined) return ritual.snapshot; // Early development rituals.
-    if (snapshot.length > 400_000) throw new Error("Review snapshot too large");
+    if (existing) {
+      return existing.text;
+    }
+    if (ritual.snapshot !== undefined) {
+      return ritual.snapshot;
+    } // Early development rituals.
+    if (snapshot.length > 400_000) {
+      throw new Error("Review snapshot too large");
+    }
     await ctx.db.insert("reviewSnapshots", { ritualId, text: snapshot });
     return snapshot;
   },

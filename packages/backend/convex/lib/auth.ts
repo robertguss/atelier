@@ -10,13 +10,17 @@ export const NOTICE_VERSION = 1;
 // powers. Everyone else reaches only the rooms they were invited to.
 export async function getOwner(ctx: { auth: Auth }) {
   const identity = await ctx.auth.getUserIdentity();
-  if (!identity) return null;
+  if (!identity) {
+    return null;
+  }
   return isOwnerIdentity(identity) ? identity : null;
 }
 
 export async function requireOwner(ctx: { auth: Auth }) {
   const owner = await getOwner(ctx);
-  if (!owner) throw new Error("Not signed in as the Atelier owner");
+  if (!owner) {
+    throw new Error("Not signed in as the Atelier owner");
+  }
   return owner;
 }
 
@@ -32,7 +36,9 @@ function isOwnerIdentity(identity: UserIdentity) {
 
 export async function getUser(ctx: QueryCtx) {
   const identity = await ctx.auth.getUserIdentity();
-  if (!identity) return null;
+  if (!identity) {
+    return null;
+  }
   return await ctx.db
     .query("users")
     .withIndex("by_token", (q) =>
@@ -44,26 +50,33 @@ export async function getUser(ctx: QueryCtx) {
 // The caller's membership in a room, whether active or removed.
 export async function getMembership(ctx: QueryCtx, roomId: Id<"rooms">) {
   const user = await getUser(ctx);
-  if (!user) return null;
+  if (!user) {
+    return null;
+  }
   const member = await ctx.db
     .query("roomMembers")
     .withIndex("by_room_user", (q) =>
       q.eq("roomId", roomId).eq("userId", user._id)
     )
     .unique();
-  return member ? { user, member } : null;
+  return member ? { member, user } : null;
 }
 
 export async function requireMember(ctx: QueryCtx, roomId: Id<"rooms">) {
   const found = await getMembership(ctx, roomId);
-  if (!found) throw new Error("Not a member of this room");
-  if (found.member.removedAt !== undefined)
+  if (!found) {
+    throw new Error("Not a member of this room");
+  }
+  if (found.member.removedAt !== undefined) {
     throw new Error("You are no longer a member of this room");
+  }
   const participant = await ctx.db.get(found.member.participantId);
-  if (!participant) throw new Error("Member has no participant");
+  if (!participant) {
+    throw new Error("Member has no participant");
+  }
   const isOwner =
     found.member.role === "owner" && (await getOwner(ctx)) !== null;
-  return { user: found.user, member: found.member, participant, isOwner };
+  return { isOwner, member: found.member, participant, user: found.user };
 }
 
 // Upsert the caller's user row. For the owner, also link every room created
@@ -71,7 +84,9 @@ export async function requireMember(ctx: QueryCtx, roomId: Id<"rooms">) {
 // owner's, with an owner member row. Safe to run any number of times.
 export async function ensureUser(ctx: MutationCtx): Promise<Doc<"users">> {
   const identity = await ctx.auth.getUserIdentity();
-  if (!identity) throw new Error("Not signed in");
+  if (!identity) {
+    throw new Error("Not signed in");
+  }
   const fields = { email: identity.email?.toLowerCase(), name: identity.name };
   const existing = await ctx.db
     .query("users")
@@ -81,8 +96,9 @@ export async function ensureUser(ctx: MutationCtx): Promise<Doc<"users">> {
     .unique();
   let user: Doc<"users">;
   if (existing) {
-    if (existing.email !== fields.email || existing.name !== fields.name)
+    if (existing.email !== fields.email || existing.name !== fields.name) {
       await ctx.db.patch(existing._id, fields);
+    }
     user = { ...existing, ...fields };
   } else {
     const id = await ctx.db.insert("users", {
@@ -91,7 +107,9 @@ export async function ensureUser(ctx: MutationCtx): Promise<Doc<"users">> {
     });
     user = (await ctx.db.get(id))!;
   }
-  if (isOwnerIdentity(identity)) await backfillOwner(ctx, user._id);
+  if (isOwnerIdentity(identity)) {
+    await backfillOwner(ctx, user._id);
+  }
   return user;
 }
 
@@ -102,7 +120,9 @@ async function backfillOwner(ctx: MutationCtx, userId: Id<"users">) {
     .collect();
   const linked = new Set(memberships.map((m) => m.roomId));
   for (const room of await ctx.db.query("rooms").collect()) {
-    if (linked.has(room._id)) continue;
+    if (linked.has(room._id)) {
+      continue;
+    }
     const participants = await ctx.db
       .query("participants")
       .withIndex("by_room", (q) => q.eq("roomId", room._id))
@@ -111,13 +131,17 @@ async function backfillOwner(ctx: MutationCtx, userId: Id<"users">) {
       (p) =>
         p.kind === "human" && (p.userId === undefined || p.userId === userId)
     );
-    if (!human) continue;
-    if (human.userId === undefined) await ctx.db.patch(human._id, { userId });
+    if (!human) {
+      continue;
+    }
+    if (human.userId === undefined) {
+      await ctx.db.patch(human._id, { userId });
+    }
     await ctx.db.insert("roomMembers", {
+      participantId: human._id,
+      role: "owner",
       roomId: room._id,
       userId,
-      role: "owner",
-      participantId: human._id,
     });
   }
 }
@@ -131,9 +155,13 @@ export function requireRunnerSecret(secret: string) {
 }
 
 function timingSafeEqual(a: string, b: string) {
-  if (a.length !== b.length) return false;
+  if (a.length !== b.length) {
+    return false;
+  }
   let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
   return diff === 0;
 }
 

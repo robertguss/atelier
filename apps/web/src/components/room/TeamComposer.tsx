@@ -11,7 +11,7 @@ import { useComposer } from "./useComposer";
 export function TeamComposer({ roomId }: { roomId: Id<"rooms"> }) {
   const post = useMutation(api.team.post);
   const { draft, setDraft, busy, error, submit, onKeyDown } = useComposer(
-    (body) => post({ roomId, body })
+    async (body) => post({ body, roomId })
   );
 
   return (
@@ -21,7 +21,9 @@ export function TeamComposer({ roomId }: { roomId: Id<"rooms"> }) {
         placeholder="To team only. Agents never see this."
         rows={2}
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => {
+          setDraft(e.target.value);
+        }}
         onKeyDown={onKeyDown}
       />
       <div className="flex items-center justify-end gap-2">

@@ -19,7 +19,9 @@ export async function resetSoloFollowUpSessions(
     .withIndex("by_room", (q) => q.eq("roomId", roomId))
     .collect();
   for (const participant of participants) {
-    if (participant.kind !== "harness") continue;
+    if (participant.kind !== "harness") {
+      continue;
+    }
     const since =
       (await lastSessionReset(ctx, participant))?._creationTime ?? 0;
     const turns = await ctx.db
@@ -29,18 +31,19 @@ export async function resetSoloFollowUpSessions(
       )
       .filter((q) => q.gt(q.field("_creationTime"), since))
       .collect();
-    if (!turns.some((t) => t.followUp && t.followUp.separateSession !== true))
+    if (!turns.some((t) => t.followUp && t.followUp.separateSession !== true)) {
       continue;
+    }
     await ctx.db.patch(participant._id, { harnessSessionId: undefined });
     await record(ctx, {
-      roomId,
-      type: SESSION_RESET,
-      subjectId: participant._id,
       parentLedgerId,
       payload: {
         reason:
           "A teammate joined after follow-ups to an independent review ran on this session",
       },
+      roomId,
+      subjectId: participant._id,
+      type: SESSION_RESET,
     });
   }
 }

@@ -1,6 +1,7 @@
 // RpcClient expects a Node entry point. Forward stdio to the user's installed
 // Pi executable, including standalone binaries, without touching login data.
 import { spawn } from "node:child_process";
+
 const child = spawn(
   process.env.ATELIER_PI_PATH ?? "pi",
   process.argv.slice(2),

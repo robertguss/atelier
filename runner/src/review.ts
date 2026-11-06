@@ -40,7 +40,7 @@ export async function reviewSnapshot(cwd: string): Promise<string> {
         omitted.push(file);
         continue;
       }
-      const text = await readFile(path, "utf8");
+      const text = await readFile(path, "utf-8");
       if (text.includes("\0")) {
         omitted.push(file);
         continue;

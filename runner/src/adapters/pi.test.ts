@@ -8,9 +8,9 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, test } from "vitest";
 
 import type { HarnessEvent, TurnInput, TurnRequest } from "@atelier/shared";
+import { expect, test } from "vitest";
 
 import { turnInput } from "./events.ts";
 import { blockedEditReason } from "./pi-guard-extension.ts";
@@ -28,22 +28,25 @@ console.log(JSON.stringify({type:'response',id:command.id,command:command.type,s
 });`
   );
   try {
-    await expect((async () => {
-      for await (const event of piHarness({ cliPath, onRaw() {} }).runTurn(
-        {
-          turnId: "test",
-          cwd: dir,
-          prompt: "hello",
-          editsEnabled: false,
-          mcpServers: [],
-        },
-        new AbortController().signal,
-        turnInput()
-      ))
-        void event;
-    })()).rejects.toThrow(/Please log in/);
+    await expect(
+      (async () => {
+        for await (const event of piHarness({ cliPath, onRaw() {} }).runTurn(
+          {
+            cwd: dir,
+            editsEnabled: false,
+            mcpServers: [],
+            prompt: "hello",
+            turnId: "test",
+          },
+          new AbortController().signal,
+          turnInput()
+        )) {
+          void event;
+        }
+      })()
+    ).rejects.toThrow(/Please log in/);
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { force: true, recursive: true });
   }
 });
 
@@ -97,6 +100,9 @@ async function withFakePi(
   const harness = piHarness({ cliPath, onRaw() {} });
   try {
     await fn({
+      async argv() {
+        return JSON.parse(await readFile(join(dir, "argv.json"), "utf8"));
+      },
       dir,
       async run(req, input = turnInput(), onEvent) {
         const events: HarnessEvent[] = [];
@@ -117,9 +123,6 @@ async function withFakePi(
         }
         return events;
       },
-      async argv() {
-        return JSON.parse(await readFile(join(dir, "argv.json"), "utf8"));
-      },
       async stdin() {
         return (await readFile(join(dir, "stdin.jsonl"), "utf8"))
           .trim()
@@ -128,7 +131,7 @@ async function withFakePi(
       },
     });
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { force: true, recursive: true });
   }
 }
 
@@ -139,8 +142,9 @@ test("Pi steers a running turn, reports its tools, and rejects a steer once the 
       { prompt: "steer" },
       turnInput(),
       async (ev, input) => {
-        if (ev.type === "tool_call")
+        if (ev.type === "tool_call") {
           outcomes.push(await input.steer("Use the other file"));
+        }
       }
     );
     const input = turnInput();
@@ -148,26 +152,32 @@ test("Pi steers a running turn, reports its tools, and rejects a steer once the 
     outcomes.push(await input.steer("Too late"));
 
     expect(outcomes).toStrictEqual(["steered", "rejected"]);
-    expect((await fake.stdin()).some(
+    expect(
+      (await fake.stdin()).some(
         (c) => c.type === "steer" && c.message === "Use the other file"
-      )).toBeTruthy();
-    expect(!(await fake.stdin()).some(
+      )
+    ).toBeTruthy();
+    expect(
+      !(await fake.stdin()).some(
         (c) => c.type === "steer" && c.message === "Too late"
-      )).toBeTruthy();
-    expect(events.filter(
+      )
+    ).toBeTruthy();
+    expect(
+      events.filter(
         (ev) => ev.type === "tool_call" || ev.type === "tool_result"
-      )).toStrictEqual([
-        {
-          type: "tool_call",
-          id: "call-1",
-          name: "bash",
-          summary: "sleep 5 && echo one",
-        },
-        { type: "tool_result", id: "call-1", ok: true },
-      ]);
+      )
+    ).toStrictEqual([
+      {
+        id: "call-1",
+        name: "bash",
+        summary: "sleep 5 && echo one",
+        type: "tool_call",
+      },
+      { id: "call-1", ok: true, type: "tool_result" },
+    ]);
     expect(events.at(-1)).toStrictEqual({
-      type: "final",
       text: "steered by Use the other file",
+      type: "final",
     });
   });
 });
@@ -176,10 +186,10 @@ test("Pi with edits on adds edit and write plus the guard extension; with edits 
   await withFakePi(async (fake) => {
     await fake.run({
       editsEnabled: false,
-      resumeSessionId: "/tmp/s.jsonl",
       model: "openai/gpt-6-astra",
+      resumeSessionId: "/tmp/s.jsonl",
     });
-    expect(await fake.argv()).toStrictEqual([
+    await expect(fake.argv()).resolves.toStrictEqual([
       "--mode",
       "rpc",
       "--model",
@@ -192,8 +202,8 @@ test("Pi with edits on adds edit and write plus the guard extension; with edits 
 
     await fake.run({
       editsEnabled: true,
-      resumeSessionId: "/tmp/s.jsonl",
       model: "openai/gpt-6-astra",
+      resumeSessionId: "/tmp/s.jsonl",
     });
     const argv = await fake.argv();
     expect(argv.slice(0, 6)).toStrictEqual([
@@ -213,8 +223,14 @@ test("Pi with edits on adds edit and write plus the guard extension; with edits 
 test("Pi cancels an extension UI request so the turn completes", async () => {
   await withFakePi(async (fake) => {
     const events = await fake.run({ prompt: "ui" });
-    expect(events.at(-1)).toStrictEqual({ type: "final", text: "ui answered" });
-    expect((await fake.stdin()).find((c) => c.type === "extension_ui_response")).toStrictEqual({ type: "extension_ui_response", id: "ui-1", cancelled: true });
+    expect(events.at(-1)).toStrictEqual({ text: "ui answered", type: "final" });
+    expect(
+      (await fake.stdin()).find((c) => c.type === "extension_ui_response")
+    ).toStrictEqual({
+      cancelled: true,
+      id: "ui-1",
+      type: "extension_ui_response",
+    });
   });
 });
 
@@ -235,7 +251,7 @@ test("Pi edit guard allows in-folder files and blocks outside, control folders a
       join(cwd, "docs/new.md"),
       "@docs/at.md",
     ]) {
-      expect(blockedEditReason(cwd, path), path).toBe(undefined);
+      expect(blockedEditReason(cwd, path), path).toBeUndefined();
     }
     for (const path of [
       "/tmp/outside",
@@ -261,10 +277,12 @@ test("Pi edit guard allows in-folder files and blocks outside, control folders a
     expect(blockedEditReason(cwd, undefined)).toBeTruthy();
     // The room folder itself may be reached through a symlink.
     await symlink(cwd, join(dir, "roomlink"));
-    expect(blockedEditReason(join(dir, "roomlink"), "notes.md")).toBe(undefined);
+    expect(
+      blockedEditReason(join(dir, "roomlink"), "notes.md")
+    ).toBeUndefined();
     expect(blockedEditReason(join(dir, "roomlink"), ".git/HEAD")).toBeTruthy();
   } finally {
-    await rm(dir, { recursive: true, force: true });
-    await rm(outside, { recursive: true, force: true });
+    await rm(dir, { force: true, recursive: true });
+    await rm(outside, { force: true, recursive: true });
   }
 });

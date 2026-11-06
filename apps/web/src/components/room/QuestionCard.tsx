@@ -10,8 +10,8 @@ import {
   buildCardAnswers,
   describeCardAnswer,
   toPendingQuestion,
-  type CardDrafts,
 } from "~/lib/cardAnswers";
+import type { CardDrafts } from "~/lib/cardAnswers";
 import {
   isPendingUserInputOptionSelected,
   setPendingUserInputCustomAnswer,
@@ -46,13 +46,15 @@ function OpenCard({ card, agentName, offline }: QuestionCardProps) {
   const answers = buildCardAnswers(card.questions, drafts);
 
   const submit = async () => {
-    if (!answers) return;
+    if (!answers) {
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      await answer({ handId: card.id, answers });
-    } catch (e) {
-      setError(errorText(e));
+      await answer({ answers, handId: card.id });
+    } catch (error_) {
+      setError(errorText(error_));
     }
     setBusy(false);
   };
@@ -99,7 +101,7 @@ function OpenCard({ card, agentName, offline }: QuestionCardProps) {
                       type="button"
                       aria-pressed={selected}
                       disabled={busy}
-                      onClick={() =>
+                      onClick={() => {
                         setDrafts((d) => ({
                           ...d,
                           [question.id]: togglePendingUserInputOptionSelection(
@@ -107,8 +109,8 @@ function OpenCard({ card, agentName, offline }: QuestionCardProps) {
                             d[question.id],
                             option.label
                           ),
-                        }))
-                      }
+                        }));
+                      }}
                       className="bg-background hover:bg-accent aria-pressed:border-primary aria-pressed:bg-primary/6 flex items-start gap-2 rounded-lg border px-2.5 py-1.5 text-left"
                     >
                       <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border">
@@ -134,7 +136,7 @@ function OpenCard({ card, agentName, offline }: QuestionCardProps) {
                   placeholder="Or write your own answer"
                   value={draft?.customAnswer ?? ""}
                   disabled={busy}
-                  onChange={(e) =>
+                  onChange={(e) => {
                     setDrafts((d) => ({
                       ...d,
                       [question.id]: setPendingUserInputCustomAnswer(
@@ -142,8 +144,8 @@ function OpenCard({ card, agentName, offline }: QuestionCardProps) {
                         d[question.id],
                         e.target.value
                       ),
-                    }))
-                  }
+                    }));
+                  }}
                 />
               ) : null}
             </fieldset>
@@ -251,7 +253,9 @@ function LateAnswer({
         className="mt-2"
         size="xs"
         variant="outline"
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setOpen(true);
+        }}
       >
         Send a late answer as a message
       </Button>
@@ -260,15 +264,17 @@ function LateAnswer({
 
   const submit = async () => {
     const body = text.trim();
-    if (!body) return;
+    if (!body) {
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      await send({ roomId, body, toParticipantId: agentId });
+      await send({ body, roomId, toParticipantId: agentId });
       setText("");
       setOpen(false);
-    } catch (e) {
-      setError(errorText(e));
+    } catch (error_) {
+      setError(errorText(error_));
     }
     setBusy(false);
   };
@@ -282,7 +288,9 @@ function LateAnswer({
         placeholder={`Your answer goes to ${agentName} as a message`}
         value={text}
         disabled={busy}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => {
+          setText(e.target.value);
+        }}
       />
       <div className="flex gap-2">
         <Button
@@ -292,7 +300,13 @@ function LateAnswer({
         >
           Send late answer
         </Button>
-        <Button size="xs" variant="ghost" onClick={() => setOpen(false)}>
+        <Button
+          size="xs"
+          variant="ghost"
+          onClick={() => {
+            setOpen(false);
+          }}
+        >
           Cancel
         </Button>
       </div>

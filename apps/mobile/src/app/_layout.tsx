@@ -34,7 +34,7 @@ export default function RootLayout() {
             <Stack.Screen name="index" options={{ title: "Atelier" }} />
             <Stack.Screen
               name="room/[id]"
-              options={{ title: "", headerLargeTitle: false }}
+              options={{ headerLargeTitle: false, title: "" }}
             />
           </Stack>
         </ThemeProvider>

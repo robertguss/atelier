@@ -13,26 +13,35 @@ export function PushRouting() {
       !isAuthenticated ||
       Platform.OS === "web" ||
       Constants.appOwnership === "expo"
-    )
+    ) {
       return;
+    }
     let disposed = false;
     let remove: (() => void) | undefined;
     let lastId: string | undefined;
     void import("expo-notifications")
       .then(async (notifications) => {
-        if (disposed) return;
+        if (disposed) {
+          return;
+        }
         const open = (
           response: import("expo-notifications").NotificationResponse | null
         ) => {
-          if (disposed) return;
+          if (disposed) {
+            return;
+          }
           const id = notificationRitualId(response, lastId);
-          if (!id || !response) return;
+          if (!id || !response) {
+            return;
+          }
           lastId = response.notification.request.identifier;
-          router.push({ pathname: "/ritual/[id]", params: { id } });
+          router.push({ params: { id }, pathname: "/ritual/[id]" });
         };
         const subscription =
           notifications.addNotificationResponseReceivedListener(open);
-        remove = () => subscription.remove();
+        remove = () => {
+          subscription.remove();
+        };
         open(await notifications.getLastNotificationResponseAsync());
       })
       .catch(() => {

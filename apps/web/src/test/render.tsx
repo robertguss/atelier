@@ -10,8 +10,8 @@ import { routeTree } from "~/routeTree.gen";
 // Renders the real route tree at `path`, so route params and navigation are exercised.
 export function renderAt(path: string) {
   const router = createRouter({
-    routeTree,
     history: createMemoryHistory({ initialEntries: [path] }),
+    routeTree,
   });
   return { router, ...render(<RouterProvider router={router} />) };
 }

@@ -2,7 +2,8 @@ import { api } from "@atelier/backend/api";
 import type { Id } from "@atelier/backend/dataModel";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { Component, useState, type ReactNode } from "react";
+import { Component, useState } from "react";
+import type { ReactNode } from "react";
 
 import { MessagePage, PageSpinner, SignedInOnly } from "~/components/page";
 import { RoomView } from "~/components/room/RoomView";
@@ -29,7 +30,9 @@ function RoomGate({ roomId }: { roomId: string }) {
     access === "member" ? { roomId: id } : "skip"
   );
 
-  if (access === undefined) return <PageSpinner />;
+  if (access === undefined) {
+    return <PageSpinner />;
+  }
   if (access === "none") {
     return (
       <NoAccess
@@ -47,7 +50,9 @@ function RoomGate({ roomId }: { roomId: string }) {
     );
   }
   if (access === "member") {
-    if (notice === undefined) return <PageSpinner />;
+    if (notice === undefined) {
+      return <PageSpinner />;
+    }
     if (notice.acceptedVersion !== notice.currentVersion) {
       return (
         <JoinNotice
@@ -99,8 +104,8 @@ function JoinNotice({
     setError(null);
     try {
       await acceptNotice({ roomId, version });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+    } catch (error_) {
+      setError(error_ instanceof Error ? error_.message : String(error_));
       setPending(false);
     }
   };
@@ -155,7 +160,9 @@ class RoomErrorBoundary extends Component<
     return { error };
   }
   render() {
-    if (this.state.error === null) return this.props.children;
+    if (this.state.error === null) {
+      return this.props.children;
+    }
     return (
       <NoAccess
         title="This room couldn't load"

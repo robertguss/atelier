@@ -17,7 +17,8 @@ import {
 } from "@clerk/react";
 import { ConvexReactClient, useConvexAuth, useMutation } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 
 import { Spinner } from "~/components/ui/spinner";
 
@@ -29,18 +30,18 @@ const appearance = {
   cssLayerName: "clerk",
   variables: {
     borderRadius: "0.5rem",
+    colorBackground: "var(--card)",
+    colorDanger: "var(--error)",
+    colorForeground: "var(--contrast-foreground)",
+    colorInput: "var(--secondary)",
+    colorInputForeground: "var(--contrast-foreground)",
+    colorMutedForeground: "var(--contrast-muted-foreground)",
+    colorNeutral: "var(--contrast-foreground)",
     colorPrimary: "var(--primary)",
     colorPrimaryForeground: "var(--primary-foreground)",
-    colorDanger: "var(--error)",
+    colorRing: "var(--ring)",
     colorSuccess: "var(--success)",
     colorWarning: "var(--warning)",
-    colorNeutral: "var(--contrast-foreground)",
-    colorForeground: "var(--contrast-foreground)",
-    colorMutedForeground: "var(--contrast-muted-foreground)",
-    colorBackground: "var(--card)",
-    colorInputForeground: "var(--contrast-foreground)",
-    colorInput: "var(--secondary)",
-    colorRing: "var(--ring)",
   },
 };
 
@@ -76,14 +77,22 @@ function EnsureUser({ children }: { children: ReactNode }) {
       setEnsured(false);
       return;
     }
-    if (started.current) return;
+    if (started.current) {
+      return;
+    }
     started.current = true;
     ensure()
-      .catch((error: unknown) => console.error("users.ensure failed", error))
-      .finally(() => setEnsured(true));
+      .catch((error: unknown) => {
+        console.error("users.ensure failed", error);
+      })
+      .finally(() => {
+        setEnsured(true);
+      });
   }, [isAuthenticated, ensure]);
 
-  if (isAuthenticated && !ensured) return <FullPageSpinner />;
+  if (isAuthenticated && !ensured) {
+    return <FullPageSpinner />;
+  }
   return <>{children}</>;
 }
 
@@ -102,7 +111,7 @@ export function useSignedInEmail(): string | null {
 
 export function useSignOut(): () => Promise<void> {
   const clerk = useClerk();
-  return () => clerk.signOut({ redirectUrl: window.location.pathname });
+  return async () => clerk.signOut({ redirectUrl: window.location.pathname });
 }
 
 // Clerk's own sign-in or sign-up form, embedded in the page with hash routing

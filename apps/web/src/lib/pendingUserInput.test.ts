@@ -1,33 +1,30 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  buildCardAnswers,
-  describeCardAnswer,
-  type CardQuestion,
-} from "./cardAnswers";
+import { buildCardAnswers, describeCardAnswer } from "./cardAnswers";
+import type { CardQuestion } from "./cardAnswers";
 import {
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
 } from "./pendingUserInput";
 
 const single: CardQuestion = {
-  id: "scope",
-  header: "Scope",
-  text: "How big should the plan be?",
-  options: [{ label: "Small" }, { label: "Large" }],
-  multiSelect: false,
   allowFreeText: true,
+  header: "Scope",
+  id: "scope",
+  multiSelect: false,
+  options: [{ label: "Small" }, { label: "Large" }],
+  text: "How big should the plan be?",
 };
 const multi: CardQuestion = {
-  id: "areas",
-  header: "Areas",
-  text: "Which areas?",
-  options: [{ label: "Billing" }, { label: "Search" }, { label: "Auth" }],
-  multiSelect: true,
   allowFreeText: true,
+  header: "Areas",
+  id: "areas",
+  multiSelect: true,
+  options: [{ label: "Billing" }, { label: "Search" }, { label: "Auth" }],
+  text: "Which areas?",
 };
 
-describe("buildCardAnswers", () => {
+describe(buildCardAnswers, () => {
   it("answers a single-select question with the chosen label", () => {
     const draft = togglePendingUserInputOptionSelection(
       single,
@@ -35,7 +32,7 @@ describe("buildCardAnswers", () => {
       "Large"
     );
     expect(buildCardAnswers([single], { scope: draft })).toEqual([
-      { questionId: "scope", labels: ["Large"] },
+      { labels: ["Large"], questionId: "scope" },
     ]);
   });
 
@@ -48,7 +45,7 @@ describe("buildCardAnswers", () => {
     draft = togglePendingUserInputOptionSelection(multi, draft, "Billing");
     const answers = buildCardAnswers([multi], { areas: draft });
     expect(answers).toEqual([
-      { questionId: "areas", labels: ["Search", "Billing"] },
+      { labels: ["Search", "Billing"], questionId: "areas" },
     ]);
     expect(describeCardAnswer(answers![0]!)).toBe("Search, Billing");
   });
@@ -65,14 +62,14 @@ describe("buildCardAnswers", () => {
       "  Medium, but phased "
     );
     expect(buildCardAnswers([single], { scope: draft })).toEqual([
-      { questionId: "scope", labels: [], freeText: "Medium, but phased" },
+      { freeText: "Medium, but phased", labels: [], questionId: "scope" },
     ]);
   });
 
   it("treats free text that matches an option label as free text", () => {
     const draft = setPendingUserInputCustomAnswer(single, undefined, "Small");
     expect(buildCardAnswers([single], { scope: draft })).toEqual([
-      { questionId: "scope", labels: [], freeText: "Small" },
+      { freeText: "Small", labels: [], questionId: "scope" },
     ]);
   });
 
@@ -96,19 +93,19 @@ describe("buildCardAnswers", () => {
   });
 });
 
-describe("describeCardAnswer", () => {
+describe(describeCardAnswer, () => {
   it("shows labels joined with a comma, then any free text", () => {
-    expect(describeCardAnswer({ questionId: "q", labels: ["A", "B"] })).toBe(
+    expect(describeCardAnswer({ labels: ["A", "B"], questionId: "q" })).toBe(
       "A, B"
     );
     expect(
-      describeCardAnswer({ questionId: "q", labels: [], freeText: "go with B" })
+      describeCardAnswer({ freeText: "go with B", labels: [], questionId: "q" })
     ).toBe("go with B");
     expect(
       describeCardAnswer({
-        questionId: "q",
-        labels: ["A"],
         freeText: "and keep it short",
+        labels: ["A"],
+        questionId: "q",
       })
     ).toBe("A, and keep it short");
   });

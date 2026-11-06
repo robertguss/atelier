@@ -1,10 +1,10 @@
 import type { api } from "@atelier/backend/api";
 import type { FunctionArgs } from "convex/server";
 
-import {
-  buildPendingUserInputAnswers,
-  type PendingUserInputDraftAnswer,
-  type PendingUserInputQuestion,
+import { buildPendingUserInputAnswers } from "./pendingUserInput";
+import type {
+  PendingUserInputDraftAnswer,
+  PendingUserInputQuestion,
 } from "./pendingUserInput";
 import type { PaneCard } from "./room";
 
@@ -19,10 +19,10 @@ export function toPendingQuestion(
   question: CardQuestion
 ): PendingUserInputQuestion {
   return {
-    id: question.id,
-    options: question.options.map((o) => ({ label: o.label })),
-    multiSelect: question.multiSelect,
     allowCustomAnswer: question.allowFreeText,
+    id: question.id,
+    multiSelect: question.multiSelect,
+    options: question.options.map((o) => ({ label: o.label })),
   };
 }
 
@@ -39,17 +39,20 @@ export function buildCardAnswers(
     questions.map(toPendingQuestion),
     drafts
   );
-  if (resolved === null) return null;
+  if (resolved === null) {
+    return null;
+  }
   return questions.map((question) => {
     const answer = resolved[question.id]!;
-    if (typeof answer !== "string")
+    if (typeof answer !== "string") {
       return { questionId: question.id, labels: [...answer] };
+    }
     const typed =
       question.allowFreeText &&
       (drafts[question.id]?.customAnswer ?? "").trim().length > 0;
     return typed
-      ? { questionId: question.id, labels: [], freeText: answer }
-      : { questionId: question.id, labels: [answer] };
+      ? { freeText: answer, labels: [], questionId: question.id }
+      : { labels: [answer], questionId: question.id };
   });
 }
 

@@ -12,10 +12,10 @@ import { vi } from "vitest";
 type QueryHandler = (args: Record<string, unknown>) => unknown;
 
 export const backend = {
-  signedIn: true,
-  queries: {} as Record<string, QueryHandler>,
-  mutations: {} as Record<string, ReturnType<typeof vi.fn>>,
   actions: {} as Record<string, ReturnType<typeof vi.fn>>,
+  mutations: {} as Record<string, ReturnType<typeof vi.fn>>,
+  queries: {} as Record<string, QueryHandler>,
+  signedIn: true,
 };
 
 export const signOut = vi.fn(async () => {});
@@ -29,7 +29,9 @@ const subscribe = (listener: () => void) => {
 
 export function pushBackend() {
   version++;
-  for (const listener of listeners) listener();
+  for (const listener of listeners) {
+    listener();
+  }
 }
 
 export function resetBackend() {
@@ -41,15 +43,17 @@ export function resetBackend() {
 }
 
 function runQuery(ref: never, args?: Record<string, unknown> | "skip") {
-  if (args === "skip") return undefined;
+  if (args === "skip") {
+    return undefined;
+  }
   const handler = backend.queries[getFunctionName(ref)];
   return handler ? handler(args ?? {}) : undefined;
 }
 
 export const convexMock = {
   useConvexAuth: () => ({
-    isLoading: false,
     isAuthenticated: backend.signedIn,
+    isLoading: false,
   }),
   // Like Convex, a skipped query returns undefined and never runs; a query
   // the test did not set up stays loading. A handler that throws behaves like
@@ -76,6 +80,6 @@ export const convexMock = {
 
 export const authMock = {
   SignInPanel: () => <div>Clerk sign-in form</div>,
-  useSignedInEmail: () => (backend.signedIn ? "sam@other.example" : null),
   useSignOut: () => signOut,
+  useSignedInEmail: () => (backend.signedIn ? "sam@other.example" : null),
 };

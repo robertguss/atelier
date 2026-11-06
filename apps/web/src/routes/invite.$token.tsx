@@ -12,11 +12,11 @@ export const Route = createFileRoute("/invite/$token")({
 });
 
 const ACCEPT_FAILURES: Record<string, string> = {
-  not_found: "This invite link isn't valid.",
-  expired: "This invite has expired.",
-  revoked: "This invite was revoked.",
   accepted: "This invite has already been used by another account.",
   email_mismatch: "This invite is for a different email address.",
+  expired: "This invite has expired.",
+  not_found: "This invite link isn't valid.",
+  revoked: "This invite was revoked.",
 };
 
 function InvitePage() {
@@ -25,7 +25,9 @@ function InvitePage() {
   // Wait for auth so the email match is computed for the signed-in person.
   const invite = useQuery(api.invites.lookup, isLoading ? "skip" : { token });
 
-  if (isLoading || invite === undefined) return <PageSpinner />;
+  if (isLoading || invite === undefined) {
+    return <PageSpinner />;
+  }
   if (invite === null) {
     return (
       <MessagePage
@@ -67,7 +69,9 @@ function InvitePage() {
       />
     );
   }
-  if (!invite.matches) return <WrongAccount invitedEmail={invite.email} />;
+  if (!invite.matches) {
+    return <WrongAccount invitedEmail={invite.email} />;
+  }
   return <AcceptInvite token={token} roomName={invite.roomName} />;
 }
 
@@ -115,17 +119,17 @@ function AcceptInvite({
       const result = await accept({ token });
       if (result.ok) {
         await navigate({
-          to: "/rooms/$roomId",
           params: { roomId: result.roomId },
           replace: true,
+          to: "/rooms/$roomId",
         });
         return;
       }
       setError(
         ACCEPT_FAILURES[result.reason] ?? "This invite cannot be accepted."
       );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+    } catch (error_) {
+      setError(error_ instanceof Error ? error_.message : String(error_));
     }
     setPending(false);
   };

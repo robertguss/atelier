@@ -8,7 +8,7 @@ import { join } from "node:path";
 const dir =
   process.env.ATELIER_TRANSCRIPTS_DIR ??
   join(homedir(), ".atelier", "transcripts");
-mkdirSync(dir, { recursive: true, mode: 0o700 });
+mkdirSync(dir, { mode: 0o700, recursive: true });
 
 export function transcriptPath(turnId: string) {
   return join(dir, `${turnId}.ndjson`);
@@ -17,7 +17,7 @@ export function transcriptPath(turnId: string) {
 export function appendTranscript(turnId: string, record: unknown) {
   appendFileSync(
     transcriptPath(turnId),
-    JSON.stringify({ at: Date.now(), record }) + "\n",
+    `${JSON.stringify({ at: Date.now(), record })}\n`,
     { mode: 0o600 }
   );
 }

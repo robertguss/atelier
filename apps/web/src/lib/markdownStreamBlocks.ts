@@ -13,7 +13,9 @@ const CONTINUATION_PATTERN = /^(?:[ \t]|(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$))/;
  * would inside the whole text. Returns null when the text uses syntax that spans blocks.
  */
 export function splitMarkdownBlocks(text: string): string[] | null {
-  if (text.includes("\r") || DOCUMENT_WIDE_SYNTAX.test(text)) return null;
+  if (text.includes("\r") || DOCUMENT_WIDE_SYNTAX.test(text)) {
+    return null;
+  }
   const blocks: string[] = [];
   let blockStart = 0;
   let lineStart = 0;
@@ -24,7 +26,9 @@ export function splitMarkdownBlocks(text: string): string[] | null {
     const opener = FENCE_PATTERN.exec(line)?.[1];
     if (fence !== null) {
       // A line left of an indented fence may end the list item holding it, which isn't tracked.
-      if (/\S/.test(line.slice(0, fenceIndent))) break;
+      if (/\S/.test(line.slice(0, fenceIndent))) {
+        break;
+      }
       if (
         opener &&
         opener[0] === fence[0] &&
@@ -46,7 +50,9 @@ export function splitMarkdownBlocks(text: string): string[] | null {
       }
       afterBlankLine = false;
       fence = opener ?? null;
-      if (opener) fenceIndent = line.indexOf(opener);
+      if (opener) {
+        fenceIndent = line.indexOf(opener);
+      }
     }
     lineStart += line.length + 1;
   }

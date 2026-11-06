@@ -25,24 +25,26 @@ export const list = query({
 });
 
 export const post = mutation({
-  args: { roomId: v.id("rooms"), body: v.string() },
+  args: { body: v.string(), roomId: v.id("rooms") },
   handler: async (ctx, { roomId, body }) => {
     const { user, participant } = await requireMember(ctx, roomId);
     const text = body.trim();
-    if (!text) throw new Error("Empty message");
+    if (!text) {
+      throw new Error("Empty message");
+    }
     const messageId = await ctx.db.insert("teamMessages", {
-      roomId,
-      authorUserId: user._id,
       authorParticipantId: participant._id,
+      authorUserId: user._id,
       body: text,
+      roomId,
     });
     // The ledger holds the id only, so ledger readers never see the text.
     await record(ctx, {
-      roomId,
-      type: "team_message.posted",
       actorParticipantId: participant._id,
-      subjectId: messageId,
       payload: { messageId },
+      roomId,
+      subjectId: messageId,
+      type: "team_message.posted",
     });
     return messageId;
   },

@@ -32,24 +32,26 @@ export default function Ritual() {
     try {
       await action();
       setError("");
-    } catch (e) {
-      setError(String(e));
+    } catch (error_) {
+      setError(String(error_));
     } finally {
       setBusy(false);
     }
   }
-  if (review === undefined)
+  if (review === undefined) {
     return (
       <Centered>
         <ActivityIndicator />
       </Centered>
     );
-  if (!review)
+  }
+  if (!review) {
     return (
       <Centered>
         <Body>Review not found.</Body>
       </Centered>
     );
+  }
   const finished = review.turns.filter(
     (t) => !["queued", "running"].includes(t.status)
   ).length;
@@ -58,13 +60,13 @@ export default function Ritual() {
       ref={container}
       style={{ flex: 1 }}
       onLayout={() =>
-        container.current?.measureInWindow((_x: number, y: number) =>
-          setOffset(y)
-        )
+        container.current?.measureInWindow((_x: number, y: number) => {
+          setOffset(y);
+        })
       }
     >
       <Stack.Screen
-        options={{ title: "Independent review", headerLargeTitle: false }}
+        options={{ headerLargeTitle: false, title: "Independent review" }}
       />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
@@ -75,7 +77,7 @@ export default function Ritual() {
           contentInsetAdjustmentBehavior="automatic"
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ padding: 16, paddingBottom: 40, gap: 20 }}
+          contentContainerStyle={{ gap: 20, padding: 16, paddingBottom: 40 }}
         >
           <Body>{review.request}</Body>
           <Body>
@@ -97,7 +99,7 @@ export default function Ritual() {
                   disabled={busy || !takeaway.trim()}
                   onPress={() =>
                     void save(async () => {
-                      await saveTakeaway({ ritualId: id, body: takeaway });
+                      await saveTakeaway({ body: takeaway, ritualId: id });
                       setTakeaway("");
                       setAddingTakeaway(false);
                     })
@@ -106,14 +108,18 @@ export default function Ritual() {
                 <Button
                   label="Cancel"
                   kind="secondary"
-                  onPress={() => setAddingTakeaway(false)}
+                  onPress={() => {
+                    setAddingTakeaway(false);
+                  }}
                 />
               </Section>
             ) : (
               <Button
                 label="Save a takeaway (optional)"
                 kind="secondary"
-                onPress={() => setAddingTakeaway(true)}
+                onPress={() => {
+                  setAddingTakeaway(true);
+                }}
               />
             ))}
           {review.status === "collecting" ? (
@@ -121,17 +127,17 @@ export default function Ritual() {
               <View
                 accessibilityRole="progressbar"
                 accessibilityValue={{
-                  min: 0,
                   max: review.turns.length,
+                  min: 0,
                   now: finished,
                 }}
-                style={{ height: 6, backgroundColor: colors.border }}
+                style={{ backgroundColor: colors.border, height: 6 }}
               >
                 <View
                   style={{
+                    backgroundColor: colors.primary,
                     height: 6,
                     width: `${(100 * finished) / Math.max(1, review.turns.length)}%`,
-                    backgroundColor: colors.primary,
                   }}
                 />
               </View>
@@ -149,7 +155,9 @@ export default function Ritual() {
                       label={`Cancel ${t.name}`}
                       kind="secondary"
                       disabled={busy}
-                      onPress={() => void save(() => cancel({ turnId: t._id }))}
+                      onPress={() =>
+                        void save(async () => cancel({ turnId: t._id }))
+                      }
                     />
                   )}
                 </View>
@@ -167,10 +175,10 @@ export default function Ritual() {
                   <View
                     key={t._id}
                     style={{
-                      width: width - 32,
-                      padding: 12,
-                      gap: 12,
                       backgroundColor: colors.card,
+                      gap: 12,
+                      padding: 12,
+                      width: width - 32,
                     }}
                   >
                     <Body style={{ fontWeight: "700" }}>
@@ -178,16 +186,16 @@ export default function Ritual() {
                     </Body>
                     <Button
                       label={`Follow up with ${t.name}`}
-                      onPress={() =>
+                      onPress={() => {
                         router.push({
-                          pathname: "/room/[id]",
                           params: {
                             id: review.roomId,
                             participantId: t.participantId,
                             reviewTurnId: t._id,
                           },
-                        })
-                      }
+                          pathname: "/room/[id]",
+                        });
+                      }}
                     />
                     <Body selectable>
                       {t.answer ?? t.error ?? "No answer returned."}
@@ -211,12 +219,12 @@ export default function Ritual() {
               <Muted>{d.rationale}</Muted>
               <Button
                 label="Continue in the room"
-                onPress={() =>
+                onPress={() => {
                   router.push({
+                    params: { decisionId: d._id, id: review.roomId },
                     pathname: "/room/[id]",
-                    params: { id: review.roomId, decisionId: d._id },
-                  })
-                }
+                  });
+                }}
               />
             </Section>
           ))}

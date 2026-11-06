@@ -9,24 +9,24 @@ export default defineConfig({
   plugins: [
     // Test files sit next to the routes they cover; keep them out of the route tree.
     tanstackRouter({
-      target: "react",
       autoCodeSplitting: true,
       routeFileIgnorePattern: "\\.test\\.",
+      target: "react",
     }),
     react(),
     tailwindcss(),
   ],
   resolve: {
-    alias: { "~": fileURLToPath(new URL("./src", import.meta.url)) },
+    alias: { "~": fileURLToPath(new URL("src", import.meta.url)) },
   },
   test: {
-    environment: "jsdom",
-    setupFiles: ["./src/test/setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}"],
     coverage: {
-      provider: "v8",
-      include: ["src/**/*.{ts,tsx}"],
       exclude: ["src/routeTree.gen.ts"],
+      include: ["src/**/*.{ts,tsx}"],
+      provider: "v8",
     },
+    environment: "jsdom",
+    include: ["src/**/*.test.{ts,tsx}"],
+    setupFiles: ["./src/test/setup.ts"],
   },
 });

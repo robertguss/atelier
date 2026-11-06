@@ -42,7 +42,9 @@ export async function waitingCard(
   participantId: Id<"participants">
 ) {
   const turn = await activeOrdinaryTurn(ctx, participantId);
-  if (!turn || turn.status !== "running" || !turn.waitingOnHandId) return null;
+  if (!turn || turn.status !== "running" || !turn.waitingOnHandId) {
+    return null;
+  }
   const hand = await ctx.db.get(turn.waitingOnHandId);
   return hand?.status === "raised" ? hand : null;
 }
@@ -55,7 +57,9 @@ export async function answerCard(
   via: "card" | "chat",
   messageId?: Id<"messages">
 ) {
-  if (hand.status !== "raised") throw await closedCardError(ctx, hand);
+  if (hand.status !== "raised") {
+    throw await closedCardError(ctx, hand);
+  }
   const byQuestion = new Map(answers.map((a) => [a.questionId, a]));
   const complete =
     answers.length === hand.questions.length &&
@@ -63,9 +67,13 @@ export async function answerCard(
       const a = byQuestion.get(q.id);
       return !!a && (a.labels.length > 0 || !!a.freeText?.trim());
     });
-  if (!complete) throw new Error("Answer every question on the card");
+  if (!complete) {
+    throw new Error("Answer every question on the card");
+  }
   const room = await ctx.db.get(hand.roomId);
-  if (!room) throw new Error("Unknown room");
+  if (!room) {
+    throw new Error("Unknown room");
+  }
 
   const now = Date.now();
   const teamMessageIds = (
@@ -79,19 +87,19 @@ export async function answerCard(
 
   const ordered = hand.questions.map((q) => byQuestion.get(q.id)!);
   await ctx.db.patch(hand._id, {
-    status: "answered",
-    answers: ordered,
-    answeredByParticipantId: answerer._id,
     answeredAt: now,
+    answeredByParticipantId: answerer._id,
+    answers: ordered,
+    status: "answered",
     via,
   });
   const answeredLedgerId = await record(ctx, {
-    roomId: hand.roomId,
-    type: "hand.answered",
     actorParticipantId: answerer._id,
-    subjectId: hand._id,
     parentLedgerId: await raisedLedgerId(ctx, hand),
-    payload: { via, messageId },
+    payload: { messageId, via },
+    roomId: hand.roomId,
+    subjectId: hand._id,
+    type: "hand.answered",
   });
   // A chat answer has no question id: the decision covers the whole card.
   const decided =
@@ -103,37 +111,37 @@ export async function answerCard(
         }));
   for (const { choice, questionId } of decided) {
     const decisionId = await ctx.db.insert("decisions", {
-      roomId: hand.roomId,
+      answeredByParticipantId: answerer._id,
       choice,
       handId: hand._id,
       questionId,
-      answeredByParticipantId: answerer._id,
+      roomId: hand.roomId,
     });
     await record(ctx, {
-      roomId: hand.roomId,
-      type: "decision.recorded",
       actorParticipantId: answerer._id,
-      subjectId: decisionId,
       parentLedgerId: answeredLedgerId,
       payload: { handId: hand._id, questionId, teamMessageIds },
+      roomId: hand.roomId,
+      subjectId: decisionId,
+      type: "decision.recorded",
     });
   }
 
   await ctx.db.insert("commands", {
-    runnerId: room.runnerId,
-    type: "answer",
-    turnId: hand.turnId,
-    status: "pending",
     payload: {
-      handId: hand._id,
-      requestId: hand.requestId,
       answeredBy: agentName(answerer.displayName),
-      via,
       answers: ordered.map((a) => ({
         ...a,
         question: hand.questions.find((q) => q.id === a.questionId)!.text,
       })),
+      handId: hand._id,
+      requestId: hand.requestId,
+      via,
     },
+    runnerId: room.runnerId,
+    status: "pending",
+    turnId: hand.turnId,
+    type: "answer",
   });
   await releaseTurn(ctx, hand);
 }
@@ -141,21 +149,23 @@ export async function answerCard(
 // The card's ceiling passed: it closes with no decision, and the agent is told
 // so through the same answer channel, so its turn can go on.
 export async function expireUnanswered(ctx: MutationCtx, hand: Doc<"hands">) {
-  if (hand.status !== "raised") return;
+  if (hand.status !== "raised") {
+    return;
+  }
   const room = await ctx.db.get(hand.roomId);
   await close(ctx, hand, "expired", "No answer within 2 hours");
   if (room) {
     await ctx.db.insert("commands", {
-      runnerId: room.runnerId,
-      type: "answer",
-      turnId: hand.turnId,
-      status: "pending",
       payload: {
         handId: hand._id,
-        requestId: hand.requestId,
-        noDecision: true,
         message: NO_DECISION_MESSAGE,
+        noDecision: true,
+        requestId: hand.requestId,
       },
+      runnerId: room.runnerId,
+      status: "pending",
+      turnId: hand.turnId,
+      type: "answer",
     });
   }
 }
@@ -173,8 +183,9 @@ export async function closeOpenCards(
     .query("hands")
     .withIndex("by_turn", (q) => q.eq("turnId", turnId))
     .collect();
-  for (const hand of hands)
+  for (const hand of hands) {
     if (hand.status === "raised") await close(ctx, hand, status, reason);
+  }
 }
 
 async function close(
@@ -184,17 +195,17 @@ async function close(
   reason: string
 ) {
   await ctx.db.patch(hand._id, {
-    status,
-    closedAt: Date.now(),
     closeReason: reason,
+    closedAt: Date.now(),
+    status,
   });
   await record(ctx, {
-    roomId: hand.roomId,
-    type: `hand.${status}`,
     actorParticipantId: hand.participantId,
-    subjectId: hand._id,
     parentLedgerId: await raisedLedgerId(ctx, hand),
     payload: { reason },
+    roomId: hand.roomId,
+    subjectId: hand._id,
+    type: `hand.${status}`,
   });
   await releaseTurn(ctx, hand);
 }
@@ -202,7 +213,9 @@ async function close(
 // The turn now waits on its next open card, if it raised another, or on none.
 async function releaseTurn(ctx: MutationCtx, hand: Doc<"hands">) {
   const turn = await ctx.db.get(hand.turnId);
-  if (!turn || turn.waitingOnHandId !== hand._id) return;
+  if (!turn || turn.waitingOnHandId !== hand._id) {
+    return;
+  }
   const next = (
     await ctx.db
       .query("hands")
@@ -219,6 +232,8 @@ async function raisedLedgerId(ctx: QueryCtx, hand: Doc<"hands">) {
 function choiceText(answer: CardAnswer) {
   const parts = [...answer.labels];
   const free = answer.freeText?.trim();
-  if (free) parts.push(free);
+  if (free) {
+    parts.push(free);
+  }
   return parts.join("; ");
 }

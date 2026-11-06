@@ -9,14 +9,19 @@ import { cardAnswer } from "./schema";
 // Answer an agent's question card. Any member can; the first answer wins and
 // a later one is told who answered. Each question becomes a decision.
 export const answer = mutation({
-  args: { handId: v.id("hands"), answers: v.array(cardAnswer) },
+  args: { answers: v.array(cardAnswer), handId: v.id("hands") },
   handler: async (ctx, { handId, answers }) => {
     const hand = await ctx.db.get(handId);
-    if (!hand) throw new Error("Unknown question");
+    if (!hand) {
+      throw new Error("Unknown question");
+    }
     const { participant, isOwner } = await requireMember(ctx, hand.roomId);
-    if (!isOwner && (await ownerOnlyCard(ctx, hand)))
+    if (!isOwner && (await ownerOnlyCard(ctx, hand))) {
       throw new Error("Only the owner can answer this question");
-    if (hand.status !== "raised") throw await closedCardError(ctx, hand);
+    }
+    if (hand.status !== "raised") {
+      throw await closedCardError(ctx, hand);
+    }
     // An answer the runner cannot deliver would record a decision the agent never saw.
     await requireRunnerOnline(ctx, await ctx.db.get(hand.roomId));
     await answerCard(ctx, hand, participant, answers, "card");

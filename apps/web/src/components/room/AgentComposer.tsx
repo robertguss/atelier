@@ -33,12 +33,14 @@ export function AgentComposer({
   const send = useMutation(api.messages.send);
   const { draft, setDraft, busy, error, submit, onKeyDown } = useComposer(
     async (body, steerNow) => {
-      if (!target) return;
+      if (!target) {
+        return;
+      }
       const to = target.participantId;
       await send(
         steerNow
-          ? { roomId, body, toParticipantId: to, steer: true }
-          : { roomId, body, toParticipantId: to }
+          ? { body, roomId, steer: true, toParticipantId: to }
+          : { body, roomId, toParticipantId: to }
       );
       onSent(to);
     },
@@ -73,7 +75,9 @@ export function AgentComposer({
                   : "ghost"
               }
               aria-pressed={agent.participantId === target.participantId}
-              onClick={() => onPickTarget(agent.participantId)}
+              onClick={() => {
+                onPickTarget(agent.participantId);
+              }}
             >
               {agent.displayName}
             </Button>
@@ -93,7 +97,9 @@ export function AgentComposer({
         value={draft}
         onChange={(e) => {
           // Starting a draft pins the target, so a card raised mid-typing can't redirect it.
-          if (!draft && e.target.value) onPickTarget(target.participantId);
+          if (!draft && e.target.value) {
+            onPickTarget(target.participantId);
+          }
           setDraft(e.target.value);
         }}
         onKeyDown={onKeyDown}

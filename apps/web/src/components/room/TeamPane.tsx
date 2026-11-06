@@ -4,7 +4,8 @@ import { useQuery } from "convex/react";
 import { UsersIcon } from "lucide-react";
 
 import { Spinner } from "~/components/ui/spinner";
-import { formatTime, useStickToBottom, type Names } from "~/lib/room";
+import { formatTime, useStickToBottom } from "~/lib/room";
+import type { Names } from "~/lib/room";
 
 import { TeamComposer } from "./TeamComposer";
 

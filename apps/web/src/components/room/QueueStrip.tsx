@@ -3,7 +3,8 @@ import { useMutation } from "convex/react";
 import { useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";
-import { isWaiting, type Names, type Pane } from "~/lib/room";
+import { isWaiting } from "~/lib/room";
+import type { Names, Pane } from "~/lib/room";
 
 import { errorText } from "./errors";
 
@@ -26,16 +27,19 @@ export function QueueStrip({
   // Messages this tab has seen being steered. One that is queued again was rejected.
   const seenSteering = useRef(new Set<string>());
   const waiting = pane.messages.filter(isWaiting).sort((a, b) => a.at - b.at);
-  for (const m of waiting)
+  for (const m of waiting) {
     if (m.delivery === "steering") seenSteering.current.add(m.id);
-  if (waiting.length === 0) return null;
+  }
+  if (waiting.length === 0) {
+    return null;
+  }
 
   const steerNow = async (messageId: (typeof waiting)[number]["id"]) => {
     setErrors(({ [messageId]: _, ...rest }) => rest);
     try {
       await steer({ messageId });
-    } catch (e) {
-      setErrors((all) => ({ ...all, [messageId]: errorText(e) }));
+    } catch (error) {
+      setErrors((all) => ({ ...all, [messageId]: errorText(error) }));
     }
   };
 

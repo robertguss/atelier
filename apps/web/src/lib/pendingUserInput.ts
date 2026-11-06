@@ -4,26 +4,28 @@
 /** The question fields answer handling reads. Web and mobile question types both fit it. */
 export interface PendingUserInputQuestion {
   readonly id: string;
-  readonly options: ReadonlyArray<{
+  readonly options: readonly {
     readonly label: string;
     readonly value?: string | undefined;
-  }>;
+  }[];
   readonly multiSelect?: boolean | undefined;
   readonly allowCustomAnswer?: boolean | undefined;
   readonly initialAnswer?: string | undefined;
 }
 
 export interface PendingUserInputDraftAnswer {
-  readonly selectedOptionValues?: ReadonlyArray<string>;
+  readonly selectedOptionValues?: readonly string[];
   readonly customAnswer?: string;
   readonly attachmentCount?: number;
   readonly attachmentsBlocked?: boolean;
 }
 
-export type PendingUserInputAnswer = string | ReadonlyArray<string>;
+export type PendingUserInputAnswer = string | readonly string[];
 
 function normalizeDraftAnswer(value: string | undefined): string | null {
-  if (typeof value !== "string") return null;
+  if (typeof value !== "string") {
+    return null;
+  }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 }
@@ -49,19 +51,19 @@ function resolvePendingUserInputOptionValue(
 /** The draft's selections that name an offered option, deduplicated, in selection order. */
 export function normalizeSelectedOptionValues(
   question: PendingUserInputQuestion,
-  value: ReadonlyArray<string> | undefined
-): ReadonlyArray<string> {
+  value: readonly string[] | undefined
+): readonly string[] {
   if (!Array.isArray(value)) {
     return [];
   }
 
-  return Array.from(
-    new Set(
+  return [
+    ...new Set(
       value
         .map((entry) => resolvePendingUserInputOptionValue(question, entry))
         .filter((entry): entry is string => entry !== null)
-    )
-  );
+    ),
+  ];
 }
 
 /** The answer to submit for one question, or null while it is unanswered. */
@@ -69,13 +71,15 @@ export function resolvePendingUserInputAnswer(
   question: PendingUserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined
 ): PendingUserInputAnswer | null {
-  if (draft?.attachmentsBlocked) return null;
+  if (draft?.attachmentsBlocked) {
+    return null;
+  }
   const customAnswer =
     question.allowCustomAnswer === false
       ? null
-      : question.initialAnswer !== undefined
-        ? (draft?.customAnswer ?? null)
-        : normalizeDraftAnswer(draft?.customAnswer);
+      : question.initialAnswer === undefined
+        ? normalizeDraftAnswer(draft?.customAnswer)
+        : (draft?.customAnswer ?? null);
   if (customAnswer !== null && customAnswer.length > 0) {
     return customAnswer;
   }
@@ -189,7 +193,7 @@ export function togglePendingUserInputOptionSelection(
 
 /** Every question's answer keyed by question id, or null while any is unanswered. */
 export function buildPendingUserInputAnswers(
-  questions: ReadonlyArray<PendingUserInputQuestion>,
+  questions: readonly PendingUserInputQuestion[],
   draftAnswers: Record<string, PendingUserInputDraftAnswer>
 ): Record<string, PendingUserInputAnswer> | null {
   const answers: Record<string, PendingUserInputAnswer> = {};

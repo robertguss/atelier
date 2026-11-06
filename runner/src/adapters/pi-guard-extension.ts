@@ -16,7 +16,14 @@ import {
 } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PROTECTED = [".claude", ".mcp.json", ".codex", ".pi", ".agents", ".git"];
+const PROTECTED = new Set([
+  ".claude",
+  ".mcp.json",
+  ".codex",
+  ".pi",
+  ".agents",
+  ".git",
+]);
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
 // Resolves a tool's path argument the way Pi's edit and write tools do.
@@ -61,8 +68,10 @@ export function blockedEditReason(
   const rel = relative(room, target);
   if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel))
     return `Edits outside the room folder ${room} are blocked`;
-  const name = rel.split(sep).find((part) => PROTECTED.includes(part));
-  if (name) return `Edits to ${name} are blocked in Atelier rooms`;
+  const name = rel.split(sep).find((part) => PROTECTED.has(part));
+  if (name) {
+    return `Edits to ${name} are blocked in Atelier rooms`;
+  }
   return undefined;
 }
 
@@ -82,8 +91,9 @@ interface ExtensionApi {
 
 export default function atelierEditGuard(pi: ExtensionApi) {
   pi.on("tool_call", async (event, ctx) => {
-    if (event.toolName !== "edit" && event.toolName !== "write")
+    if (event.toolName !== "edit" && event.toolName !== "write") {
       return undefined;
+    }
     const reason = blockedEditReason(
       ctx.cwd ?? process.cwd(),
       event.input.path

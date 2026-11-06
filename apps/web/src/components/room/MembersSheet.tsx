@@ -3,7 +3,8 @@ import type { Id } from "@atelier/backend/dataModel";
 import { useAction, useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { CopyIcon } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
+import type { FormEvent } from "react";
 
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -132,15 +133,17 @@ function InviteForm({
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     const address = email.trim();
-    if (!address) return;
+    if (!address) {
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      const result = await create({ roomId, email: address });
-      onSent({ email: address, url: result.url, emailed: result.emailed });
+      const result = await create({ email: address, roomId });
+      onSent({ email: address, emailed: result.emailed, url: result.url });
       setEmail("");
-    } catch (err) {
-      setError(errorText(err));
+    } catch (error_) {
+      setError(errorText(error_));
     }
     setBusy(false);
   };
@@ -154,7 +157,9 @@ function InviteForm({
           type="email"
           placeholder="name@example.com"
           value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          onChange={(e) => {
+            setEmail(e.target.value);
+          }}
         />
         <Button type="submit" size="sm" disabled={!email.trim() || busy}>
           Invite
@@ -214,10 +219,10 @@ function MemberRow({ member }: { member: MembersList["members"][number] }) {
           <Button
             size="xs"
             variant="destructive"
-            onClick={() =>
-              remove({ memberId: member._id }).catch((e: unknown) =>
-                setError(errorText(e))
-              )
+            onClick={async () =>
+              remove({ memberId: member._id }).catch((error_: unknown) => {
+                setError(errorText(error_));
+              })
             }
           >
             Remove {label}
@@ -225,13 +230,21 @@ function MemberRow({ member }: { member: MembersList["members"][number] }) {
           <Button
             size="xs"
             variant="ghost"
-            onClick={() => setConfirming(false)}
+            onClick={() => {
+              setConfirming(false);
+            }}
           >
             Keep
           </Button>
         </>
       ) : (
-        <Button size="xs" variant="outline" onClick={() => setConfirming(true)}>
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={() => {
+            setConfirming(true);
+          }}
+        >
           Remove
         </Button>
       )}
@@ -264,8 +277,12 @@ function InviteRow({ invite }: { invite: MembersList["invites"][number] }) {
           setBusy(true);
           setError(null);
           revoke({ inviteId: invite._id })
-            .catch((e: unknown) => setError(errorText(e)))
-            .finally(() => setBusy(false));
+            .catch((error_: unknown) => {
+              setError(errorText(error_));
+            })
+            .finally(() => {
+              setBusy(false);
+            });
         }}
       >
         Revoke
@@ -304,8 +321,10 @@ function AgentsSection({
               variant="outline"
               onClick={() => {
                 setError(null);
-                addParticipant({ roomId, harness: h.id }).catch((e: unknown) =>
-                  setError(errorText(e))
+                addParticipant({ harness: h.id, roomId }).catch(
+                  (error_: unknown) => {
+                    setError(errorText(error_));
+                  }
                 );
               }}
             >

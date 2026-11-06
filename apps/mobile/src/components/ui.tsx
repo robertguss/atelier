@@ -1,13 +1,6 @@
 import { useTheme } from "expo-router";
-import {
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-  type TextInputProps,
-  type TextStyle,
-} from "react-native";
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import type { TextInputProps, TextStyle } from "react-native";
 
 export function Centered({ children }: { children: React.ReactNode }) {
   return <View style={styles.centered}>{children}</View>;
@@ -112,9 +105,9 @@ export function Field(props: TextInputProps) {
       style={[
         styles.field,
         {
-          color: colors.text,
           backgroundColor: colors.card,
           borderColor: colors.border,
+          color: colors.text,
         },
         props.style,
       ]}
@@ -123,34 +116,34 @@ export function Field(props: TextInputProps) {
 }
 
 export const styles = StyleSheet.create({
-  centered: {
-    flex: 1,
+  body: { fontSize: 16, lineHeight: 22 },
+  button: {
     alignItems: "center",
-    justifyContent: "center",
+    borderRadius: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 13,
+  },
+  buttonLabel: { fontSize: 16, fontWeight: "600" },
+  centered: {
+    alignItems: "center",
+    flex: 1,
     gap: 16,
+    justifyContent: "center",
     padding: 24,
   },
-  title: { fontSize: 34, fontWeight: "700" },
-  body: { fontSize: 16, lineHeight: 22 },
+  field: {
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    fontSize: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
   section: { gap: 8 },
   sectionTitle: {
     fontSize: 13,
     fontWeight: "600",
-    textTransform: "uppercase",
     opacity: 0.6,
+    textTransform: "uppercase",
   },
-  button: {
-    paddingHorizontal: 20,
-    paddingVertical: 13,
-    borderRadius: 12,
-    alignItems: "center",
-  },
-  buttonLabel: { fontSize: 16, fontWeight: "600" },
-  field: {
-    fontSize: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
+  title: { fontSize: 34, fontWeight: "700" },
 });

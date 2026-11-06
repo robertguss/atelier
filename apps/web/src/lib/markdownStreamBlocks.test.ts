@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { splitMarkdownBlocks } from "./markdownStreamBlocks";
 
-describe("splitMarkdownBlocks", () => {
+describe(splitMarkdownBlocks, () => {
   it("cuts finished blocks at blank lines", () => {
     expect(splitMarkdownBlocks("# Plan\n\nFirst paragraph.\n\nSecond")).toEqual(
       ["# Plan\n\n", "First paragraph.\n\n", "Second"]

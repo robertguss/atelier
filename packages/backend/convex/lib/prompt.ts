@@ -12,33 +12,33 @@ export const PRIVATE_CHANNEL_SENTENCE =
 const RECENT_DECISIONS = 10;
 
 export type MemberRole = "owner" | "teammate";
-export type AgentDecision = {
+export interface AgentDecision {
   question: string;
   choice: string;
   answeredBy: string;
   at: number;
-};
-export type RoomContext = {
+}
+export interface RoomContext {
   roomName: string;
   handbook: string;
   members: { name: string; role: MemberRole }[];
   editsEnabled: boolean;
   decisions: AgentDecision[];
-};
-export type Envelope = {
+}
+export interface Envelope {
   author: string;
   role: MemberRole;
   sentAt: number;
   delivery: "queued" | "steered";
   body: string;
-};
+}
 
 // Tags that delimit agent-facing structure. A body or name that contains one
 // is escaped so nobody can forge another author's message or the room block.
 const STRUCTURE_TAG = /<(\/?)(message|room_context)\b/gi;
 
 function neutralize(text: string) {
-  return text.replace(
+  return text.replaceAll(
     STRUCTURE_TAG,
     (_m, slash: string, name: string) => `&lt;${slash}${name}`
   );
@@ -54,20 +54,20 @@ export function agentName(
   name: string | null | undefined,
   fallback = "Teammate"
 ) {
-  const oneLine = (name ?? "").replace(/[\s\p{Cc}]+/gu, " ").trim();
-  return Array.from(oneLine).slice(0, NAME_LIMIT).join("").trim() || fallback;
+  const oneLine = (name ?? "").replaceAll(/[\s\p{Cc}]+/gu, " ").trim();
+  return [...oneLine].slice(0, NAME_LIMIT).join("").trim() || fallback;
 }
 
 function attr(value: string) {
   return value
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function formatTime(ms: number) {
-  return new Date(ms).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+  return `${new Date(ms).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
 // One person's message, as typed, inside a plain attribution tag.
@@ -83,10 +83,13 @@ export function contextBlock(c: RoomContext) {
     ...c.members.map((m) => `- ${neutralize(agentName(m.name))} (${m.role})`),
     `File edits: ${c.editsEnabled ? "on" : "off"}`,
   ];
-  if (c.handbook.trim())
+  if (c.handbook.trim()) {
     lines.push("Room handbook:", neutralize(c.handbook.trim()));
+  }
   lines.push("Recent decisions:");
-  if (c.decisions.length === 0) lines.push("- none yet");
+  if (c.decisions.length === 0) {
+    lines.push("- none yet");
+  }
   for (const d of c.decisions) {
     const question = d.question ? `${neutralize(d.question)} → ` : "";
     lines.push(
@@ -120,23 +123,26 @@ export async function renderMessage(
   const author = await ctx.db.get(message.authorParticipantId);
   const text = envelope({
     author: author?.displayName ?? "Someone",
+    body: message.body,
+    delivery,
     role: roleIn(
       members ?? (await roomMembers(ctx, message.roomId)),
       message.authorParticipantId
     ),
     sentAt: message._creationTime,
-    delivery,
-    body: message.body,
   });
   let followUp = "";
   if (message.followUpDecisionId) {
     const decision = await ctx.db.get(message.followUpDecisionId);
-    if (decision) followUp = decisionFollowUpContext(decision);
+    if (decision) {
+      followUp = decisionFollowUpContext(decision);
+    }
   } else if (message.followUpReviewTurnId) {
     const source = await ctx.db.get(message.followUpReviewTurnId);
     const ritual = source?.ritualId ? await ctx.db.get(source.ritualId) : null;
-    if (source && ritual)
+    if (source && ritual) {
       followUp = reviewFollowUpContext(ritual.request, source.finalText);
+    }
   }
   return followUp ? `${text}\n\n${followUp}` : text;
 }
@@ -176,21 +182,22 @@ export async function loadRoomContext(
   rows?: Doc<"roomMembers">[]
 ): Promise<RoomContext> {
   rows ??= await roomMembers(ctx, room._id);
-  const members = [];
+  const members: RoomContext["members"] = [];
   for (const m of rows.filter((m) => m.removedAt === undefined)) {
     const participant = await ctx.db.get(m.participantId);
-    if (participant)
+    if (participant) {
       members.push({
         name: participant.displayName,
-        role: (m.role === "owner" ? "owner" : "teammate") as MemberRole,
+        role: m.role === "owner" ? "owner" : "teammate",
       });
+    }
   }
   return {
-    roomName: room.name,
+    decisions: await agentDecisions(ctx, room._id),
+    editsEnabled: room.editsEnabled === true,
     handbook: room.handbook,
     members,
-    editsEnabled: room.editsEnabled === true,
-    decisions: await agentDecisions(ctx, room._id),
+    roomName: room.name,
   };
 }
 
@@ -207,12 +214,18 @@ export async function agentDecisions(
     .query("decisions")
     .withIndex("by_room", (q) => q.eq("roomId", roomId))
     .order("desc")) {
-    if (shown.length === RECENT_DECISIONS) break;
-    if (d.ritualId !== undefined) continue;
+    if (shown.length === RECENT_DECISIONS) {
+      break;
+    }
+    if (d.ritualId !== undefined) {
+      continue;
+    }
     const hand = d.handId ? await ctx.db.get(d.handId) : null;
     if (hand) {
       const turn = await ctx.db.get(hand.turnId);
-      if (!turn || turn.ritualId || turn.followUp) continue;
+      if (!turn || turn.ritualId || turn.followUp) {
+        continue;
+      }
     }
     shown.push({ decision: d, hand });
   }
@@ -228,10 +241,10 @@ export async function agentDecisions(
         ?.actorParticipantId;
     const answerer = answererId ? await ctx.db.get(answererId) : null;
     out.push({
-      question: question ?? "",
-      choice: d.choice,
       answeredBy: answerer?.displayName ?? "someone",
       at: d._creationTime,
+      choice: d.choice,
+      question: question ?? "",
     });
   }
   return out;
@@ -239,8 +252,9 @@ export async function agentDecisions(
 
 // A decision without a question id answers the whole card, from chat.
 function cardQuestionText(hand: Doc<"hands">, questionId: string | undefined) {
-  if (questionId !== undefined)
+  if (questionId !== undefined) {
     return hand.questions.find((q) => q.id === questionId)?.text;
+  }
   const [first, ...rest] = hand.questions;
   return (
     first &&

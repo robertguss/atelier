@@ -46,11 +46,11 @@ export const timeline = query({
           visibleMessage(m, isOwner, { ownerSeesReviewAnswers: true })
         )
         .map((m) => ({
-          kind: "message" as const,
-          id: m._id,
           at: m._creationTime,
           authorParticipantId: m.authorParticipantId,
           body: m.body,
+          id: m._id,
+          kind: "message" as const,
         })),
       ...(await Promise.all(
         turns
@@ -82,24 +82,29 @@ export const timeline = query({
 // agent.steer does; a follow-up never steers.
 export const send = mutation({
   args: {
-    roomId: v.id("rooms"),
     body: v.string(),
-    toParticipantId: v.optional(v.id("participants")),
     decisionId: v.optional(v.id("decisions")),
     reviewTurnId: v.optional(v.id("turns")),
+    roomId: v.id("rooms"),
     steer: v.optional(v.boolean()),
+    toParticipantId: v.optional(v.id("participants")),
   },
   handler: async (
     ctx,
     { roomId, body, toParticipantId, decisionId, reviewTurnId, steer }
   ): Promise<Id<"turns"> | null> => {
     const { participant: human, isOwner } = await requireMember(ctx, roomId);
-    if ((decisionId || reviewTurnId) && !isOwner)
+    if ((decisionId || reviewTurnId) && !isOwner) {
       throw new Error("Only the owner can follow up a review");
+    }
     const text = body.trim();
-    if (!text) throw new Error("Empty message");
+    if (!text) {
+      throw new Error("Empty message");
+    }
     const room = await ctx.db.get(roomId);
-    if (!room) throw new Error("Unknown room");
+    if (!room) {
+      throw new Error("Unknown room");
+    }
     await requireRunnerOnline(ctx, room);
 
     const participants = await ctx.db
@@ -109,8 +114,9 @@ export const send = mutation({
     const target = toParticipantId
       ? participants.find((p) => p._id === toParticipantId)
       : participants.find((p) => p.harness === "claude");
-    if (!target || target.kind !== "harness")
+    if (!target || target.kind !== "harness") {
       throw new Error("Room has no one to reply");
+    }
 
     const card =
       decisionId || reviewTurnId ? null : await waitingCard(ctx, target._id);
@@ -118,26 +124,26 @@ export const send = mutation({
       // An answer to a follow-up's card is as owner-only as the follow-up.
       const cardTurn = await ctx.db.get(card.turnId);
       const messageId = await ctx.db.insert("messages", {
-        roomId,
         authorParticipantId: human._id,
         body: text,
-        visibility: "room",
-        followUpRitualId: cardTurn?.followUp?.ritualId,
-        toParticipantId: target._id,
-        delivery: "answeredCard",
         deliveredTurnId: card.turnId,
+        delivery: "answeredCard",
+        followUpRitualId: cardTurn?.followUp?.ritualId,
+        roomId,
+        toParticipantId: target._id,
+        visibility: "room",
       });
       await record(ctx, {
-        roomId,
-        type: "message.posted",
         actorParticipantId: human._id,
+        payload: { handId: card._id, to: target._id },
+        roomId,
         subjectId: messageId,
-        payload: { to: target._id, handId: card._id },
+        type: "message.posted",
       });
       const answers = card.questions.map((q) => ({
-        questionId: q.id,
-        labels: [],
         freeText: text,
+        labels: [],
+        questionId: q.id,
       }));
       await answerCard(ctx, card, human, answers, "chat", messageId);
       return null;
@@ -147,16 +153,21 @@ export const send = mutation({
     let followUpRitualId: Id<"rituals"> | undefined;
     if (decisionId) {
       const decision = await ctx.db.get(decisionId);
-      if (!decision || decision.roomId !== roomId)
+      if (!decision || decision.roomId !== roomId) {
         throw new Error("Invalid decision");
+      }
       followUpRitualId = decision.ritualId;
       parentLedgerId = (
         await findLedger(ctx, roomId, "decision.recorded", decisionId)
       )?._id;
-      if (!parentLedgerId) throw new Error("Decision has no ledger entry");
+      if (!parentLedgerId) {
+        throw new Error("Decision has no ledger entry");
+      }
     }
     if (reviewTurnId) {
-      if (decisionId) throw new Error("Choose one follow-up source");
+      if (decisionId) {
+        throw new Error("Choose one follow-up source");
+      }
       const source = await ctx.db.get(reviewTurnId);
       const ritual = source?.ritualId
         ? await ctx.db.get(source.ritualId)
@@ -166,33 +177,35 @@ export const send = mutation({
         source.roomId !== roomId ||
         !ritual ||
         ritual.status === "collecting"
-      )
+      ) {
         throw new Error("Review is not available for follow-up");
-      if (source.participantId !== target._id)
+      }
+      if (source.participantId !== target._id) {
         throw new Error("Choose the participant who wrote this answer");
+      }
       followUpRitualId = ritual._id;
       parentLedgerId = (
         await findLedger(ctx, roomId, "ritual.revealed", ritual._id)
       )?._id;
     }
     const messageId = await ctx.db.insert("messages", {
-      roomId,
       authorParticipantId: human._id,
       body: text,
-      visibility: "room",
-      followUpRitualId,
+      delivery: "queued",
       followUpDecisionId: decisionId,
       followUpReviewTurnId: reviewTurnId,
+      followUpRitualId,
+      roomId,
       toParticipantId: target._id,
-      delivery: "queued",
+      visibility: "room",
     });
     await record(ctx, {
-      roomId,
-      type: "message.posted",
-      parentLedgerId,
       actorParticipantId: human._id,
-      subjectId: messageId,
+      parentLedgerId,
       payload: { to: target._id },
+      roomId,
+      subjectId: messageId,
+      type: "message.posted",
     });
     if (steer && !followUpRitualId) {
       const active = await activeOrdinaryTurn(ctx, target._id);
@@ -216,18 +229,23 @@ export const cancel = mutation({
   args: { turnId: v.id("turns") },
   handler: async (ctx, { turnId }) => {
     const turn = await ctx.db.get(turnId);
-    if (!turn) throw new Error("Unknown turn");
+    if (!turn) {
+      throw new Error("Unknown turn");
+    }
     const { participant, isOwner } = await requireMember(ctx, turn.roomId);
-    if (turn.ritualId && !isOwner)
+    if (turn.ritualId && !isOwner) {
       throw new Error("Only the owner can stop a review");
-    if (!isActiveTurnStatus(turn.status)) return;
+    }
+    if (!isActiveTurnStatus(turn.status)) {
+      return;
+    }
     const reason = isOwner
       ? "Cancelled by owner"
       : `Cancelled by ${participant.displayName}`;
     await ctx.db.patch(turnId, {
-      status: turn.ritualId ? "failed" : "interrupted",
-      error: isOwner ? "Cancelled by you" : reason,
       endedAt: Date.now(),
+      error: isOwner ? "Cancelled by you" : reason,
+      status: turn.ritualId ? "failed" : "interrupted",
       stoppedByParticipantId: participant._id,
     });
     await closeOpenCards(ctx, turnId, "cancelled", reason);
@@ -236,20 +254,23 @@ export const cancel = mutation({
       .query("commands")
       .withIndex("by_turn", (q) => q.eq("turnId", turnId))
       .collect()) {
-      if (command.status === "pending" || command.status === "claimed")
+      if (command.status === "pending" || command.status === "claimed") {
         await ctx.db.patch(command._id, {
           status: "failed",
           error: reason,
           leaseExpiresAt: undefined,
         });
+      }
     }
     await record(ctx, {
-      roomId: turn.roomId,
-      type: "turn.interrupted",
       actorParticipantId: participant._id,
-      subjectId: turnId,
       payload: { error: reason },
+      roomId: turn.roomId,
+      subjectId: turnId,
+      type: "turn.interrupted",
     });
-    if (!turn.ritualId) await dispatchNext(ctx, turn.participantId);
+    if (!turn.ritualId) {
+      await dispatchNext(ctx, turn.participantId);
+    }
   },
 });

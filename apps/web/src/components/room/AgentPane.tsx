@@ -14,11 +14,8 @@ import {
   toolItemsFor,
   useStickToBottom,
   writeLastTarget,
-  type Names,
-  type Pane,
-  type PaneAgent,
-  type PaneMessage,
 } from "~/lib/room";
+import type { Names, Pane, PaneAgent, PaneMessage } from "~/lib/room";
 
 import { AgentComposer } from "./AgentComposer";
 import { QuestionCard } from "./QuestionCard";
@@ -50,8 +47,8 @@ export function AgentPane({
   const openCards = pane.cards.filter((c) => c.status === "raised");
   const defaultTarget = composerTarget({
     agents: pane.agents,
-    openCardAgentIds: openCards.map((c) => c.participantId),
     lastTarget,
+    openCardAgentIds: openCards.map((c) => c.participantId),
   });
   const targetId =
     picked && pane.agents.some((a) => a.participantId === picked)
@@ -66,14 +63,17 @@ export function AgentPane({
   const firstKey = timeline[0]?.key;
   useLayoutEffect(() => {
     const scroller = scrollRef.current;
-    if (fromBottom.current === null || !scroller) return;
+    if (fromBottom.current === null || !scroller) {
+      return;
+    }
     scroller.scrollTop = scroller.scrollHeight - fromBottom.current;
     fromBottom.current = null;
   }, [firstKey, scrollRef]);
   const showEarlier = () => {
     const scroller = scrollRef.current;
-    if (scroller)
+    if (scroller) {
       fromBottom.current = scroller.scrollHeight - scroller.scrollTop;
+    }
     onShowEarlier();
   };
 
@@ -158,8 +158,8 @@ export function AgentPane({
 
 const STATUS_TEXT: Record<PaneAgent["status"], string> = {
   idle: "Idle",
-  starting: "Starting",
   running: "Working",
+  starting: "Starting",
   waiting: "Waiting on you",
 };
 
@@ -221,17 +221,21 @@ function MessageRow({
 
 function DeliveryNote({ message }: { message: PaneMessage }) {
   switch (message.delivery) {
-    case "steered":
+    case "steered": {
       return <span>Steered into the running turn</span>;
-    case "answeredCard":
+    }
+    case "answeredCard": {
       return <span>Answered the question card</span>;
-    case "cancelled":
+    }
+    case "cancelled": {
       return (
         <span className="text-warning-foreground">
           Not delivered: {cancelReasonText(message.cancelReason)}
         </span>
       );
-    default:
+    }
+    default: {
       return null;
+    }
   }
 }

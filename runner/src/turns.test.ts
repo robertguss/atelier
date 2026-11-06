@@ -1,5 +1,3 @@
-import { afterEach, expect, test, vi } from "vitest";
-
 import type {
   Harness,
   HarnessEvent,
@@ -8,9 +6,11 @@ import type {
   TurnRequest,
 } from "@atelier/shared";
 import { getFunctionName } from "convex/server";
+import { afterEach, expect, test, vi } from "vitest";
 
 import { eventQueue } from "./adapters/events.ts";
-import { createTurns, type TurnsClient } from "./turns.ts";
+import { createTurns } from "./turns.ts";
+import type { TurnsClient } from "./turns.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -23,20 +23,20 @@ function fakeConvex(jobs: Record<string, unknown>) {
   const calls: { name: string; args: any }[] = [];
   const replies: Record<string, (args: any) => unknown> = {
     "runner:claim": (args) => jobs[args.commandId] ?? null,
-    "runner:start": () => ({ editsEnabled: false }),
     "runner:progress": () => true,
     "runner:raiseHand": () => "hand-1",
+    "runner:start": () => ({ editsEnabled: false }),
   };
   const client = {
     async mutation(ref: any, args: any) {
       const name = getFunctionName(ref);
-      calls.push({ name, args });
+      calls.push({ args, name });
       return replies[name]?.(args);
     },
   };
   const named = (name: string) =>
     calls.filter((c) => c.name === name).map((c) => c.args);
-  return { client: client as unknown as TurnsClient, calls, replies, named };
+  return { calls, client: client as unknown as TurnsClient, named, replies };
 }
 
 interface FakeRun {
@@ -52,11 +52,8 @@ interface FakeRun {
 function fakeHarness() {
   const runs: FakeRun[] = [];
   const harness: Harness = {
-    id: "claude",
     capabilities: { canRaiseCards: true },
-    async version() {
-      return "fake 1.0";
-    },
+    id: "claude",
     async *runTurn(req, signal, input) {
       const events = eventQueue();
       const run: FakeRun = {
@@ -85,6 +82,9 @@ function fakeHarness() {
       runs.push(run);
       yield* events;
     },
+    async version() {
+      return "fake 1.0";
+    },
   };
   return { harness, runs };
 }
@@ -92,16 +92,16 @@ function fakeHarness() {
 function runJob(turnId: string) {
   return {
     commandId: "c-run",
-    type: "run_turn",
-    turn: { id: turnId, prompt: "Plan the launch", independentReview: false },
-    participant: { id: "p-claude", harness: "claude", sessionId: undefined },
+    participant: { harness: "claude", id: "p-claude", sessionId: undefined },
     room: {
-      id: "r1",
       cwd: "/tmp/room",
-      name: "Room",
-      handbook: "",
       editsEnabled: false,
+      handbook: "",
+      id: "r1",
+      name: "Room",
     },
+    turn: { id: turnId, independentReview: false, prompt: "Plan the launch" },
+    type: "run_turn",
   };
 }
 
@@ -109,10 +109,10 @@ function setup(extraJobs: Record<string, unknown> = {}) {
   const convex = fakeConvex({ "c-run": runJob("t1"), ...extraJobs });
   const { harness, runs } = fakeHarness();
   const turns = createTurns({
-    client: convex.client,
-    secret: "s3cret",
-    harnesses: { claude: harness },
     appendTranscript() {},
+    client: convex.client,
+    harnesses: { claude: harness },
+    secret: "s3cret",
     transcriptPath: (turnId) => `/tmp/${turnId}.ndjson`,
   });
   return { ...convex, runs, turns };
@@ -120,7 +120,9 @@ function setup(extraJobs: Record<string, unknown> = {}) {
 
 async function until(condition: () => unknown) {
   for (let i = 0; i < 2000; i++) {
-    if (condition()) return;
+    if (condition()) {
+      return;
+    }
     await new Promise((resolve) => setImmediate(resolve));
   }
   throw new Error("condition never held");
@@ -128,12 +130,12 @@ async function until(condition: () => unknown) {
 
 // Lets the runner consume what the test just pushed.
 async function idle() {
-  for (let i = 0; i < 20; i++)
+  for (let i = 0; i < 20; i++) {
     await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 const card: QuestionCard = {
-  requestId: "req-1",
   questions: [
     {
       id: "scope",
@@ -144,29 +146,32 @@ const card: QuestionCard = {
       allowFreeText: true,
     },
   ],
+  requestId: "req-1",
 };
 
 function end(run: FakeRun, ...events: HarnessEvent[]) {
-  for (const event of events) run.events.push(event);
+  for (const event of events) {
+    run.events.push(event);
+  }
   run.events.end();
 }
 
 test("a question raises a card, and an answer command resolves the harness with the payload", async () => {
   const payload = {
-    handId: "hand-1",
-    requestId: "req-1",
     answeredBy: "Dana",
-    via: "card",
     answers: [
       { questionId: "scope", question: "Which scope?", labels: ["Small"] },
     ],
+    handId: "hand-1",
+    requestId: "req-1",
+    via: "card",
   };
   const s = setup({
     "c-answer": {
       commandId: "c-answer",
-      type: "answer",
-      turn: { id: "t1" },
       payload,
+      turn: { id: "t1" },
+      type: "answer",
     },
   });
   const turn = s.turns.handle("c-run");
@@ -177,49 +182,49 @@ test("a question raises a card, and an answer command resolves the harness with 
   await until(() => s.named("runner:raiseHand").length);
   expect(s.named("runner:raiseHand")).toStrictEqual([
     {
+      questions: card.questions,
+      requestId: "req-1",
       secret: "s3cret",
       turnId: "t1",
-      requestId: "req-1",
-      questions: card.questions,
     },
   ]);
 
   await s.turns.handle("c-answer");
-  expect(await answer).toStrictEqual(payload);
+  await expect(answer).resolves.toStrictEqual(payload);
   expect(s.named("runner:commandHandled")).toStrictEqual([
-    { secret: "s3cret", commandId: "c-answer", ok: true },
+    { commandId: "c-answer", ok: true, secret: "s3cret" },
   ]);
 
-  end(run, { type: "final", text: "Small it is" });
+  end(run, { text: "Small it is", type: "final" });
   await turn;
-  expect(s.named("runner:finish").length).toBe(1);
+  expect(s.named("runner:finish")).toHaveLength(1);
 });
 
 test("a steer for a turn not running here is rejected without reaching a harness", async () => {
   const s = setup({
     "c-steer": {
       commandId: "c-steer",
-      type: "steer",
-      turn: { id: "t-elsewhere" },
       payload: { messageId: "m1", text: "Use Postgres" },
+      turn: { id: "t-elsewhere" },
+      type: "steer",
     },
   });
   await s.turns.handle("c-steer");
   expect(s.named("runner:steerResult")).toStrictEqual([
-    { secret: "s3cret", messageId: "m1", outcome: "rejected" },
+    { messageId: "m1", outcome: "rejected", secret: "s3cret" },
   ]);
-  expect(s.named("runner:commandHandled").length).toBe(1);
+  expect(s.named("runner:commandHandled")).toHaveLength(1);
   expect(s.named("runner:commandHandled")[0].ok).toBe(false);
-  expect(s.runs.length).toBe(0);
+  expect(s.runs).toHaveLength(0);
 });
 
 test("a steer for a running turn goes to the harness and its outcome is reported", async () => {
   const s = setup({
     "c-steer": {
       commandId: "c-steer",
-      type: "steer",
-      turn: { id: "t1" },
       payload: { messageId: "m1", text: "Use Postgres" },
+      turn: { id: "t1" },
+      type: "steer",
     },
   });
   const turn = s.turns.handle("c-run");
@@ -227,12 +232,12 @@ test("a steer for a running turn goes to the harness and its outcome is reported
   await s.turns.handle("c-steer");
   expect(s.runs[0]!.steers).toStrictEqual(["Use Postgres"]);
   expect(s.named("runner:steerResult")).toStrictEqual([
-    { secret: "s3cret", messageId: "m1", outcome: "steered" },
+    { messageId: "m1", outcome: "steered", secret: "s3cret" },
   ]);
   expect(s.named("runner:commandHandled")).toStrictEqual([
-    { secret: "s3cret", commandId: "c-steer", ok: true },
+    { commandId: "c-steer", ok: true, secret: "s3cret" },
   ]);
-  end(s.runs[0]!, { type: "final", text: "done" });
+  end(s.runs[0]!, { text: "done", type: "final" });
   await turn;
 });
 
@@ -240,9 +245,9 @@ test("start applies the current edit switch, and a settings command changes it l
   const s = setup({
     "c-settings": {
       commandId: "c-settings",
-      type: "settings",
-      turn: { id: "t1" },
       payload: { editsEnabled: false },
+      turn: { id: "t1" },
+      type: "settings",
     },
   });
   s.replies["runner:start"] = () => ({ editsEnabled: true });
@@ -252,9 +257,9 @@ test("start applies the current edit switch, and a settings command changes it l
   await s.turns.handle("c-settings");
   expect(s.runs[0]!.edits).toStrictEqual([false]);
   expect(s.named("runner:commandHandled")).toStrictEqual([
-    { secret: "s3cret", commandId: "c-settings", ok: true },
+    { commandId: "c-settings", ok: true, secret: "s3cret" },
   ]);
-  end(s.runs[0]!, { type: "final", text: "done" });
+  end(s.runs[0]!, { text: "done", type: "final" });
   await turn;
 });
 
@@ -262,9 +267,9 @@ test("an interrupt command aborts the running turn, which ends interrupted", asy
   const s = setup({
     "c-stop": {
       commandId: "c-stop",
-      type: "interrupt",
-      turn: { id: "t1" },
       payload: { reason: "File edits were turned off" },
+      turn: { id: "t1" },
+      type: "interrupt",
     },
   });
   const turn = s.turns.handle("c-run");
@@ -275,26 +280,35 @@ test("an interrupt command aborts the running turn, which ends interrupted", asy
   const [failed] = s.named("runner:fail");
   expect(failed.interrupted).toBe(true);
   expect(failed.error).toBe("File edits were turned off");
-  expect(s.named("runner:finish").length).toBe(0);
+  expect(s.named("runner:finish")).toHaveLength(0);
   expect(s.named("runner:commandHandled")).toStrictEqual([
-    { secret: "s3cret", commandId: "c-stop", ok: true },
+    { commandId: "c-stop", ok: true, secret: "s3cret" },
   ]);
 });
 
 test("an open question pauses the 30-minute deadline, and the card expires at 2 hours", async () => {
-  vi.useFakeTimers({ now: 0, toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+  vi.useFakeTimers({
+    now: 0,
+    toFake: [
+      "setTimeout",
+      "clearTimeout",
+      "setInterval",
+      "clearInterval",
+      "Date",
+    ],
+  });
   const noDecision = {
     handId: "hand-1",
-    requestId: "req-1",
-    noDecision: true,
     message: "No one answered",
+    noDecision: true,
+    requestId: "req-1",
   };
   const s = setup({
     "c-expired": {
       commandId: "c-expired",
-      type: "answer",
-      turn: { id: "t1" },
       payload: noDecision,
+      turn: { id: "t1" },
+      type: "answer",
     },
   });
   const turn = s.turns.handle("c-run");
@@ -306,22 +320,25 @@ test("an open question pauses the 30-minute deadline, and the card expires at 2 
   await until(() => s.named("runner:raiseHand").length);
 
   vi.advanceTimersByTime(31 * MINUTE);
-  expect(run.signal.aborted, "the deadline is paused while the card is open").toBe(false);
+  expect(
+    run.signal.aborted,
+    "the deadline is paused while the card is open"
+  ).toBe(false);
   // The lease is still renewed while the turn waits.
   const renewals = s.named("runner:progress").length;
   vi.advanceTimersByTime(MINUTE);
   expect(s.named("runner:progress").length > renewals).toBeTruthy();
-  expect(s.named("runner:handTimedOut").length).toBe(0);
+  expect(s.named("runner:handTimedOut")).toHaveLength(0);
 
   vi.advanceTimersByTime(2 * 60 * MINUTE - 32 * MINUTE);
   await until(() => s.named("runner:handTimedOut").length);
   expect(s.named("runner:handTimedOut")).toStrictEqual([
-    { secret: "s3cret", handId: "hand-1" },
+    { handId: "hand-1", secret: "s3cret" },
   ]);
 
   // Convex closes the card and tells the agent no decision was made.
   await s.turns.handle("c-expired");
-  expect(await answer).toStrictEqual(noDecision);
+  await expect(answer).resolves.toStrictEqual(noDecision);
 
   // The deadline resumes with the 20 minutes the turn had left.
   vi.advanceTimersByTime(19 * MINUTE);
@@ -333,49 +350,58 @@ test("an open question pauses the 30-minute deadline, and the card expires at 2 
 });
 
 test("tool activity reaches Convex as items with one-line summaries, not raw output", async () => {
-  vi.useFakeTimers({ now: 0, toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+  vi.useFakeTimers({
+    now: 0,
+    toFake: [
+      "setTimeout",
+      "clearTimeout",
+      "setInterval",
+      "clearInterval",
+      "Date",
+    ],
+  });
   const s = setup();
   const turn = s.turns.handle("c-run");
   await until(() => s.runs[0]);
   const run = s.runs[0]!;
 
   run.events.push({
-    type: "tool_call",
     id: "call-1",
     name: "Read",
     summary: "src/plan.md",
+    type: "tool_call",
   });
   await idle();
-  expect(s.named("runner:recordTurnItems").length, "items wait for the next flush").toBe(0);
+  expect(s.named("runner:recordTurnItems")).toHaveLength(0);
   vi.advanceTimersByTime(500);
   await until(() => s.named("runner:recordTurnItems").length);
   expect(s.named("runner:recordTurnItems")[0]).toStrictEqual({
+    items: [{ callId: "call-1", seq: 0, name: "Read", summary: "src/plan.md" }],
     secret: "s3cret",
     turnId: "t1",
-    items: [{ callId: "call-1", seq: 0, name: "Read", summary: "src/plan.md" }],
   });
 
   // Whatever else an adapter attaches to a result stays on the runner.
   run.events.push({
-    type: "tool_result",
     id: "call-1",
     ok: true,
     output: "RAW FILE CONTENTS",
-  } as HarnessEvent);
+    type: "tool_result",
+  });
   await idle();
   vi.advanceTimersByTime(500);
   await until(() => s.named("runner:recordTurnItems").length === 2);
   expect(s.named("runner:recordTurnItems")[1].items).toStrictEqual([
     {
       callId: "call-1",
-      seq: 0,
       name: "Read",
-      summary: "src/plan.md",
       ok: true,
+      seq: 0,
+      summary: "src/plan.md",
     },
   ]);
 
-  end(run, { type: "final", text: "done" });
+  end(run, { text: "done", type: "final" });
   await turn;
   expect(!JSON.stringify(s.calls).includes("RAW FILE CONTENTS")).toBeTruthy();
 });
@@ -386,13 +412,15 @@ test("the session id is saved as soon as it arrives, before the turn finishes", 
   await until(() => s.runs[0]);
   end(
     s.runs[0]!,
-    { type: "session", sessionId: "sess-1" },
-    { type: "final", text: "done" }
+    { sessionId: "sess-1", type: "session" },
+    { text: "done", type: "final" }
   );
   await turn;
   const names = s.calls.map((c) => c.name);
   expect(s.named("runner:sessionStarted")).toStrictEqual([
-    { secret: "s3cret", turnId: "t1", sessionId: "sess-1" },
+    { secret: "s3cret", sessionId: "sess-1", turnId: "t1" },
   ]);
-  expect(names.indexOf("runner:sessionStarted") < names.indexOf("runner:finish")).toBeTruthy();
+  expect(
+    names.indexOf("runner:sessionStarted") < names.indexOf("runner:finish")
+  ).toBeTruthy();
 });

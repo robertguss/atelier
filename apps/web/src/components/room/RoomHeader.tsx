@@ -104,9 +104,9 @@ function EditSwitch({
         disabled={!isOwner}
         onCheckedChange={(next) => {
           setError(null);
-          setEditsEnabled({ roomId, on: next }).catch((e: unknown) =>
-            setError(errorText(e))
-          );
+          setEditsEnabled({ on: next, roomId }).catch((error_: unknown) => {
+            setError(errorText(error_));
+          });
         }}
       />
       <span>
