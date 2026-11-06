@@ -1,0 +1,191 @@
+import { v } from 'convex/values';
+import type { Id } from './_generated/dataModel';
+import { mutation, query, type MutationCtx } from './_generated/server';
+import { requireRunnerSecret } from './lib/auth';
+import { record } from './lib/ledger';
+
+// Functions the runner calls. Each takes the runner secret instead of a Clerk
+// session. See docs/v0-spec.md, "Runner ↔ Convex protocol".
+
+const LEASE_MS = 5 * 60_000;
+
+export const pendingCommands = query({
+  args: { secret: v.string(), runnerId: v.id('runners') },
+  handler: async (ctx, { secret, runnerId }) => {
+    requireRunnerSecret(secret);
+    return await ctx.db
+      .query('commands')
+      .withIndex('by_runner_status', (q) => q.eq('runnerId', runnerId).eq('status', 'pending'))
+      .collect();
+  },
+});
+
+// Claim a pending command. Returns everything the runner needs for the turn,
+// or null if another claim got there first.
+export const claim = mutation({
+  args: { secret: v.string(), commandId: v.id('commands') },
+  handler: async (ctx, { secret, commandId }) => {
+    requireRunnerSecret(secret);
+    const command = await ctx.db.get(commandId);
+    if (!command || command.status !== 'pending') return null;
+    await ctx.db.patch(commandId, { status: 'claimed', leaseExpiresAt: Date.now() + LEASE_MS });
+
+    const turn = await ctx.db.get(command.turnId);
+    if (!turn) return null;
+    const participant = await ctx.db.get(turn.participantId);
+    const room = await ctx.db.get(turn.roomId);
+    if (!participant || !room || !participant.harness) return null;
+
+    return {
+      commandId,
+      type: command.type,
+      turn: { id: turn._id, prompt: turn.prompt },
+      participant: {
+        id: participant._id,
+        harness: participant.harness,
+        model: participant.model,
+        reasoning: participant.reasoning,
+        sessionId: participant.harnessSessionId,
+      },
+      room: { id: room._id, cwd: room.cwd, name: room.name, handbook: room.handbook },
+    };
+  },
+});
+
+export const start = mutation({
+  args: { secret: v.string(), turnId: v.id('turns'), harnessVersion: v.string() },
+  handler: async (ctx, { secret, turnId, harnessVersion }) => {
+    requireRunnerSecret(secret);
+    const turn = await ctx.db.get(turnId);
+    if (!turn) return;
+    await ctx.db.patch(turnId, { status: 'running', startedAt: Date.now(), harnessVersion });
+    await record(ctx, {
+      roomId: turn.roomId,
+      type: 'turn.started',
+      actorParticipantId: turn.participantId,
+      subjectId: turnId,
+      harnessVersion,
+    });
+  },
+});
+
+// Throttled by the runner to about two writes a second. Also renews the lease.
+export const progress = mutation({
+  args: { secret: v.string(), turnId: v.id('turns'), commandId: v.id('commands'), partialText: v.string() },
+  handler: async (ctx, { secret, turnId, commandId, partialText }) => {
+    requireRunnerSecret(secret);
+    await ctx.db.patch(turnId, { partialText });
+    await ctx.db.patch(commandId, { leaseExpiresAt: Date.now() + LEASE_MS });
+  },
+});
+
+export const finish = mutation({
+  args: {
+    secret: v.string(),
+    turnId: v.id('turns'),
+    commandId: v.id('commands'),
+    finalText: v.string(),
+    sessionId: v.optional(v.string()),
+    model: v.optional(v.string()),
+    usage: v.optional(v.object({ inputTokens: v.number(), outputTokens: v.number(), costUsd: v.optional(v.number()) })),
+    transcriptRef: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireRunnerSecret(args.secret);
+    const turn = await ctx.db.get(args.turnId);
+    if (!turn) return;
+    await ctx.db.patch(args.turnId, {
+      status: 'done',
+      finalText: args.finalText,
+      partialText: undefined,
+      usage: args.usage,
+      transcriptRef: args.transcriptRef,
+      endedAt: Date.now(),
+    });
+    await ctx.db.patch(args.commandId, { status: 'done', leaseExpiresAt: undefined });
+    if (args.sessionId) await ctx.db.patch(turn.participantId, { harnessSessionId: args.sessionId });
+
+    const messageId = await ctx.db.insert('messages', {
+      roomId: turn.roomId,
+      authorParticipantId: turn.participantId,
+      body: args.finalText,
+      turnId: args.turnId,
+      visibility: 'room',
+    });
+    const participant = await ctx.db.get(turn.participantId);
+    await record(ctx, {
+      roomId: turn.roomId,
+      type: 'turn.finished',
+      actorParticipantId: turn.participantId,
+      subjectId: args.turnId,
+      provider: providerOf(participant?.harness),
+      model: args.model,
+      harnessVersion: turn.harnessVersion,
+      payload: { messageId, usage: args.usage, transcriptRef: args.transcriptRef },
+    });
+  },
+});
+
+export const fail = mutation({
+  args: {
+    secret: v.string(),
+    turnId: v.id('turns'),
+    commandId: v.id('commands'),
+    error: v.string(),
+    interrupted: v.optional(v.boolean()),
+    transcriptRef: v.optional(v.string()),
+  },
+  handler: async (ctx, { secret, turnId, commandId, error, interrupted, transcriptRef }) => {
+    requireRunnerSecret(secret);
+    await failTurn(ctx, turnId, commandId, error, interrupted ?? false, transcriptRef);
+  },
+});
+
+// On startup the runner marks its own unfinished work as interrupted.
+export const recover = mutation({
+  args: { secret: v.string(), runnerId: v.id('runners') },
+  handler: async (ctx, { secret, runnerId }) => {
+    requireRunnerSecret(secret);
+    const claimed = await ctx.db
+      .query('commands')
+      .withIndex('by_runner_status', (q) => q.eq('runnerId', runnerId).eq('status', 'claimed'))
+      .collect();
+    for (const command of claimed) {
+      await failTurn(ctx, command.turnId, command._id, 'Runner restarted during this turn', true);
+    }
+    return claimed.length;
+  },
+});
+
+async function failTurn(
+  ctx: MutationCtx,
+  turnId: Id<'turns'>,
+  commandId: Id<'commands'>,
+  error: string,
+  interrupted: boolean,
+  transcriptRef?: string,
+) {
+  const turn = await ctx.db.get(turnId);
+  await ctx.db.patch(commandId, { status: 'failed', error, leaseExpiresAt: undefined });
+  if (!turn) return;
+  await ctx.db.patch(turnId, {
+    status: interrupted ? 'interrupted' : 'failed',
+    error,
+    transcriptRef,
+    endedAt: Date.now(),
+  });
+  await record(ctx, {
+    roomId: turn.roomId,
+    type: interrupted ? 'turn.interrupted' : 'turn.failed',
+    actorParticipantId: turn.participantId,
+    subjectId: turnId,
+    harnessVersion: turn.harnessVersion,
+    payload: { error },
+  });
+}
+
+function providerOf(harness: string | undefined) {
+  if (harness === 'claude') return 'anthropic';
+  if (harness === 'codex') return 'openai';
+  return harness;
+}

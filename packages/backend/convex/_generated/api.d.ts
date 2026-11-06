@@ -9,7 +9,11 @@
  */
 
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_ledger from "../lib/ledger.js";
 import type * as me from "../me.js";
+import type * as messages from "../messages.js";
+import type * as rooms from "../rooms.js";
+import type * as runner from "../runner.js";
 import type * as runners from "../runners.js";
 
 import type {
@@ -20,7 +24,11 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   "lib/auth": typeof lib_auth;
+  "lib/ledger": typeof lib_ledger;
   me: typeof me;
+  messages: typeof messages;
+  rooms: typeof rooms;
+  runner: typeof runner;
   runners: typeof runners;
 }>;
 

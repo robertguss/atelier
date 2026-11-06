@@ -145,8 +145,9 @@ The ledger is append-only and never edited.
 `parentLedgerId` (what caused this) and `harnessVersion` look optional now and
 are painful to add later. Include them from the first migration.
 
-Ledger types in v0: `room.created`, `participant.joined`, `message.posted`,
-`turn.started`, `turn.finished`, `ritual.started`, `ritual.revealed`,
+Ledger types in v0: `runner.registered`, `room.created`, `participant.joined`,
+`message.posted`, `turn.queued`, `turn.started`, `turn.finished`, `turn.failed`,
+`turn.interrupted`, `ritual.started`, `ritual.revealed`,
 `crux.recorded`, `decision.recorded`, `hand.raised`, `hand.answered`,
 `outcome.recorded` (merged, reverted, abandoned; entered by hand in v0).
 
@@ -199,6 +200,9 @@ normalized `HarnessEvent`s.
   three harnesses are isolated child processes. Skills are native; MCP needs an
   extension such as `pi-mcp-adapter`. Logins come from Pi's `/login`.
   Read-only: restrict the tool set.
+- Until the approval UI exists, ordinary room turns run Claude in `dontAsk`
+  mode: tools that aren't pre-approved in the user's settings are denied, so a
+  phone message can read and search but can't edit files or run commands.
 - Every harness runs on the user's own login. The runner never reads or copies
   login tokens.
 
