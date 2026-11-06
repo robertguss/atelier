@@ -7,6 +7,28 @@ import { v } from 'convex/values';
 
 export const harnessId = v.union(v.literal('claude'), v.literal('codex'), v.literal('pi'));
 
+// queued: waiting for the agent's current turn to end.
+// steering: sent into the running turn, waiting for the harness to accept it.
+// steered: the harness took it mid-turn. delivered: carried by a new turn.
+// answeredCard: it answered the agent's open question card.
+// cancelled: never delivered; see cancelReason.
+export const deliveryState = v.union(
+  v.literal('queued'),
+  v.literal('steering'),
+  v.literal('steered'),
+  v.literal('delivered'),
+  v.literal('answeredCard'),
+  v.literal('cancelled'),
+);
+
+export const commandType = v.union(
+  v.literal('run_turn'),
+  v.literal('interrupt'),
+  v.literal('steer'),
+  v.literal('answer'),
+  v.literal('settings'),
+);
+
 export default defineSchema({
   runners: defineTable({
     name: v.string(),
@@ -60,6 +82,8 @@ export default defineSchema({
     cwd: v.string(),
     handbook: v.string(),
     archivedAt: v.optional(v.number()),
+    // Whether agents may edit files in the room's folder. Missing means off.
+    editsEnabled: v.optional(v.boolean()),
   }),
 
   participants: defineTable({
@@ -84,9 +108,23 @@ export default defineSchema({
     // Set on a follow-up to an independent review or its decision, and on the
     // agent's reply. Only the owner sees these.
     followUpRitualId: v.optional(v.id('rituals')),
+    // What a follow-up refers to, so its context can be built when it is
+    // dispatched rather than when it is sent.
+    followUpDecisionId: v.optional(v.id('decisions')),
+    followUpReviewTurnId: v.optional(v.id('turns')),
+    // A person's message to an agent waits in that agent's queue. Agent
+    // replies and older messages have no delivery state.
+    toParticipantId: v.optional(v.id('participants')),
+    delivery: v.optional(deliveryState),
+    // The turn that carried the message to the agent.
+    deliveredTurnId: v.optional(v.id('turns')),
+    // Set while a steer is in flight to a running turn.
+    steering: v.optional(v.object({ turnId: v.id('turns'), commandId: v.id('commands') })),
+    cancelReason: v.optional(v.string()),
   })
     .index('by_room', ['roomId'])
-    .index('by_ritual', ['ritualId']),
+    .index('by_ritual', ['ritualId'])
+    .index('by_to_delivery', ['toParticipantId', 'delivery']),
 
   // Humans-only chat. A separate table so nothing that reads agent messages
   // or builds prompts can reach it. Posts cannot be edited or deleted.
@@ -134,9 +172,18 @@ export default defineSchema({
         separateSession: v.optional(v.boolean()),
       }),
     ),
+    // The people whose queued messages this turn carries.
+    requestedByParticipantIds: v.optional(v.array(v.id('participants'))),
+    // The room's edit switch when the turn was dispatched.
+    editsEnabled: v.optional(v.boolean()),
+    // Set while the agent waits on an open question card. The turn stays running.
+    waitingOnHandId: v.optional(v.id('hands')),
+    // The person who stopped the turn, so the agent's next prompt can say so.
+    stoppedByParticipantId: v.optional(v.id('participants')),
   })
     .index('by_room', ['roomId'])
-    .index('by_ritual', ['ritualId']),
+    .index('by_ritual', ['ritualId'])
+    .index('by_participant', ['participantId']),
 
   rituals: defineTable({
     roomId: v.id('rooms'),
@@ -193,8 +240,11 @@ export default defineSchema({
 
   commands: defineTable({
     runnerId: v.id('runners'),
-    type: v.union(v.literal('run_turn'), v.literal('interrupt')),
+    // run_turn starts a turn. The others are control commands for a turn that
+    // is already running, and carry what the runner needs in `payload`.
+    type: commandType,
     turnId: v.id('turns'),
+    payload: v.optional(v.any()),
     status: v.union(
       v.literal('pending'),
       v.literal('claimed'),
@@ -216,7 +266,9 @@ export default defineSchema({
     harnessVersion: v.optional(v.string()),
     payload: v.optional(v.any()),
     at: v.number(),
-  }).index('by_room', ['roomId']),
+  })
+    .index('by_room', ['roomId'])
+    .index('by_room_type', ['roomId', 'type', 'subjectId']),
 
   pushTokens: defineTable({
     userSubject: v.string(),

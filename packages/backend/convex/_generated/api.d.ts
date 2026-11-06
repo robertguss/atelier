@@ -8,9 +8,13 @@
  * @module
  */
 
+import type * as agent from "../agent.js";
+import type * as crons from "../crons.js";
 import type * as invites from "../invites.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_dispatch from "../lib/dispatch.js";
 import type * as lib_ledger from "../lib/ledger.js";
+import type * as lib_prompt from "../lib/prompt.js";
 import type * as lib_review from "../lib/review.js";
 import type * as me from "../me.js";
 import type * as members from "../members.js";
@@ -30,9 +34,13 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  agent: typeof agent;
+  crons: typeof crons;
   invites: typeof invites;
   "lib/auth": typeof lib_auth;
+  "lib/dispatch": typeof lib_dispatch;
   "lib/ledger": typeof lib_ledger;
+  "lib/prompt": typeof lib_prompt;
   "lib/review": typeof lib_review;
   me: typeof me;
   members: typeof members;

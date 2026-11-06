@@ -1,6 +1,7 @@
 import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 import { NOTICE_VERSION, requireMember, requireOwner } from './lib/auth';
+import { cancelMessage } from './lib/dispatch';
 import { record } from './lib/ledger';
 
 // The owner's view of who is in a room and who has been invited.
@@ -59,8 +60,10 @@ export const remove = mutation({
     if (member.role === 'owner') throw new Error('The owner cannot be removed');
     if (member.removedAt !== undefined) return;
     await ctx.db.patch(memberId, { removedAt: Date.now() });
-    // The removed person's queued agent messages are cancelled here once
-    // messages have delivery states.
+    // Whatever the removed person left waiting for an agent is never delivered.
+    const waiting = (await ctx.db.query('messages').withIndex('by_room', (q) => q.eq('roomId', member.roomId)).collect())
+      .filter((m) => m.authorParticipantId === member.participantId && m.delivery === 'queued');
+    for (const m of waiting) await cancelMessage(ctx, m, 'removed', owner._id);
     await record(ctx, {
       roomId: member.roomId,
       type: 'member.removed',

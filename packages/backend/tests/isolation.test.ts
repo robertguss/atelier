@@ -55,6 +55,8 @@ async function revealedReview(t: T, owner: Caller, roomId: Id<'rooms'>, runnerId
   await t.mutation(api.runner.finish, { secret: SECRET, turnId: claudeCommand.turnId, commandId: claudeCommand._id, finalText: 'REVIEW-ANSWER', sessionId: 'review-session', transcriptRef: '/review' });
   await t.mutation(api.runner.fail, { secret: SECRET, turnId: piCommand.turnId, commandId: piCommand._id, error: 'REVIEW-FAILURE' });
   await t.finishAllScheduledFunctions(() => vi.runAllTimers());
+  // Draining the workflow advances the fake clock; a live runner keeps beating.
+  await t.mutation(api.runners.heartbeat, { secret: SECRET, name: 'test', machine: 'test', harnesses: [{ id: 'claude', version: 'test' }, { id: 'pi', version: 'test' }] });
   return { ritualId, reviewTurnId: claudeCommand.turnId };
 }
 
@@ -141,18 +143,27 @@ test('in a shared room a follow-up runs on a session stored on its review, never
 test('a follow-up queued behind a teammate message runs as its own turn', async () => {
   const { t, owner, dana, runnerId, roomId, claude, pi } = await setup({ withMember: true });
   const { ritualId, reviewTurnId } = await revealedReview(t, owner, roomId, runnerId, claude._id, pi._id);
-  const teammateTurn = await dana.mutation(api.messages.send, { roomId, body: 'TEAMMATE-ASK', toParticipantId: claude._id });
-  const followUpTurn = await owner.mutation(api.messages.send, { roomId, body: 'Expand on it', toParticipantId: claude._id, reviewTurnId });
-  expect(followUpTurn).not.toBe(teammateTurn);
-  const pending = await t.query(api.runner.pendingCommands, { secret: SECRET, runnerId });
-  expect(pending.map(c => c.turnId).sort()).toEqual([teammateTurn, followUpTurn].sort());
+  const teammateTurn = (await dana.mutation(api.messages.send, { roomId, body: 'TEAMMATE-ASK', toParticipantId: claude._id }))!;
+  expect(await owner.mutation(api.messages.send, { roomId, body: 'Expand on it', toParticipantId: claude._id, reviewTurnId })).toBeNull();
+  expect(await dana.mutation(api.messages.send, { roomId, body: 'TEAMMATE-LATER', toParticipantId: claude._id })).toBeNull();
+  const ordinaryTurns = async () => (await t.run(ctx => ctx.db.query('turns').collect())).filter(x => !x.ritualId && x.participantId === claude._id);
+
+  await runTurn(t, runnerId, teammateTurn, 'answer', 'ordinary-2');
+  const followUpTurn = (await ordinaryTurns())[1]!;
+  expect(followUpTurn.followUp).toMatchObject({ ritualId });
+  expect(followUpTurn.prompt).toContain('Expand on it');
+  expect(followUpTurn.prompt).not.toContain('TEAMMATE');
+
+  await runTurn(t, runnerId, followUpTurn._id, 'expanded', 'followup-1');
+  const later = (await ordinaryTurns())[2]!;
+  expect(later.followUp).toBeUndefined();
+  expect(later.prompt).toContain('TEAMMATE-LATER');
+  expect(later.prompt).not.toContain('Expand on it');
+  expect(later.prompt).not.toContain('REVIEW-ANSWER');
   await t.run(async ctx => {
     const teammate = (await ctx.db.get(teammateTurn))!;
-    const followUp = (await ctx.db.get(followUpTurn))!;
     expect(teammate.followUp).toBeUndefined();
     expect(teammate.prompt).not.toContain('REVIEW-ANSWER');
-    expect(followUp.followUp).toMatchObject({ ritualId });
-    expect(followUp.prompt).not.toContain('TEAMMATE-ASK');
   });
 });
 

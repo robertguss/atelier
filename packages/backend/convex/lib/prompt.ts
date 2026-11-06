@@ -1,0 +1,149 @@
+import type { Doc, Id } from '../_generated/dataModel';
+import type { QueryCtx } from '../_generated/server';
+
+// Every piece of text an agent reads about the room or its people is built
+// here. Nothing in this module reads team chat: the team channel stays
+// invisible to agents by construction.
+
+export const PRIVATE_CHANNEL_SENTENCE = 'The people in this room also have a private team channel that you cannot see.';
+
+const RECENT_DECISIONS = 10;
+
+export type MemberRole = 'owner' | 'teammate';
+export type AgentDecision = { question: string; choice: string; answeredBy: string; at: number };
+export type RoomContext = {
+  roomName: string;
+  handbook: string;
+  members: { name: string; role: MemberRole }[];
+  editsEnabled: boolean;
+  decisions: AgentDecision[];
+};
+export type Envelope = {
+  author: string;
+  role: MemberRole;
+  sentAt: number;
+  delivery: 'queued' | 'steered';
+  body: string;
+};
+
+// Tags that delimit agent-facing structure. A body or name that contains one
+// is escaped so nobody can forge another author's message or the room block.
+const STRUCTURE_TAG = /<(\/?)(message|room_context)\b/gi;
+
+function neutralize(text: string) {
+  return text.replace(STRUCTURE_TAG, (_m, slash: string, name: string) => `&lt;${slash}${name}`);
+}
+
+function attr(value: string) {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function formatTime(ms: number) {
+  return new Date(ms).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+}
+
+// One person's message, as typed, inside a plain attribution tag.
+export function envelope(e: Envelope) {
+  return `<message from="${attr(e.author)}" role="${e.role}" sent="${formatTime(e.sentAt)}" delivery="${e.delivery}">\n${neutralize(e.body)}\n</message>`;
+}
+
+export function contextBlock(c: RoomContext) {
+  const lines = [
+    '<room_context>',
+    `You are working in the Atelier room "${neutralize(c.roomName)}". More than one person can message you; each message is wrapped in a <message> tag naming its author.`,
+    'People in this room:',
+    ...c.members.map((m) => `- ${neutralize(m.name)} (${m.role})`),
+    `File edits: ${c.editsEnabled ? 'on' : 'off'}`,
+  ];
+  if (c.handbook.trim()) lines.push('Room handbook:', neutralize(c.handbook.trim()));
+  lines.push('Recent decisions:');
+  if (c.decisions.length === 0) lines.push('- none yet');
+  for (const d of c.decisions) {
+    const question = d.question ? `${neutralize(d.question)} → ` : '';
+    lines.push(`- ${question}${neutralize(d.choice)} (decided by ${neutralize(d.answeredBy)}, ${formatTime(d.at)})`);
+  }
+  lines.push(PRIVATE_CHANNEL_SENTENCE, '</room_context>');
+  return lines.join('\n');
+}
+
+export function stoppedNote(stoppedBy: string) {
+  return `Your previous turn was stopped by ${neutralize(stoppedBy)} before it finished.`;
+}
+
+function decisionFollowUpContext(decision: Doc<'decisions'>) {
+  return `Follow-up to the owner's decision: ${decision.choice}\nRationale: ${decision.rationale ?? ''}`;
+}
+
+function reviewFollowUpContext(request: string, answer: string | undefined) {
+  return `Follow-up to your independent review. Original request: ${request}\nYour answer: ${answer ?? 'The review turn failed; no answer was returned.'}`;
+}
+
+// A queued message in its envelope. The owner's follow-up to a decision or a
+// review also carries what it follows up, read at delivery time.
+export async function renderMessage(ctx: QueryCtx, message: Doc<'messages'>, delivery: Envelope['delivery']) {
+  const author = await ctx.db.get(message.authorParticipantId);
+  const text = envelope({
+    author: author?.displayName ?? 'Someone',
+    role: await roleOf(ctx, message.roomId, message.authorParticipantId),
+    sentAt: message._creationTime,
+    delivery,
+    body: message.body,
+  });
+  let followUp = '';
+  if (message.followUpDecisionId) {
+    const decision = await ctx.db.get(message.followUpDecisionId);
+    if (decision) followUp = decisionFollowUpContext(decision);
+  } else if (message.followUpReviewTurnId) {
+    const source = await ctx.db.get(message.followUpReviewTurnId);
+    const ritual = source?.ritualId ? await ctx.db.get(source.ritualId) : null;
+    if (source && ritual) followUp = reviewFollowUpContext(ritual.request, source.finalText);
+  }
+  return followUp ? `${text}\n\n${followUp}` : text;
+}
+
+// A turn's whole prompt: the room context, a note if a person stopped the
+// previous turn, then each message in send order.
+export function turnPrompt(p: { context: string; stoppedBy?: string; messages: string[] }) {
+  return [p.context, ...(p.stoppedBy ? [stoppedNote(p.stoppedBy)] : []), ...p.messages].join('\n\n');
+}
+
+export async function roleOf(ctx: QueryCtx, roomId: Id<'rooms'>, participantId: Id<'participants'>): Promise<MemberRole> {
+  const members = await ctx.db.query('roomMembers').withIndex('by_room', (q) => q.eq('roomId', roomId)).collect();
+  return members.find((m) => m.participantId === participantId)?.role === 'owner' ? 'owner' : 'teammate';
+}
+
+export async function loadRoomContext(ctx: QueryCtx, room: Doc<'rooms'>): Promise<RoomContext> {
+  const rows = await ctx.db.query('roomMembers').withIndex('by_room', (q) => q.eq('roomId', room._id)).collect();
+  const members = [];
+  for (const m of rows.filter((m) => m.removedAt === undefined)) {
+    const participant = await ctx.db.get(m.participantId);
+    if (participant) members.push({ name: participant.displayName, role: (m.role === 'owner' ? 'owner' : 'teammate') as MemberRole });
+  }
+  return {
+    roomName: room.name,
+    handbook: room.handbook,
+    members,
+    editsEnabled: room.editsEnabled === true,
+    decisions: await agentDecisions(ctx, room._id),
+  };
+}
+
+// The only view of decisions an agent gets: question, choice, who answered
+// and when. Never the rationale or linked team messages, and never a decision
+// made on an independent review, which stays the owner's.
+export async function agentDecisions(ctx: QueryCtx, roomId: Id<'rooms'>): Promise<AgentDecision[]> {
+  const recent = (await ctx.db.query('decisions').withIndex('by_room', (q) => q.eq('roomId', roomId)).collect())
+    .filter((d) => d.ritualId === undefined)
+    .slice(-RECENT_DECISIONS);
+  const out: AgentDecision[] = [];
+  for (const d of recent) {
+    const crux = d.cruxId ? await ctx.db.get(d.cruxId) : null;
+    const recorded = await ctx.db
+      .query('ledger')
+      .withIndex('by_room_type', (q) => q.eq('roomId', roomId).eq('type', 'decision.recorded').eq('subjectId', d._id))
+      .first();
+    const answerer = recorded?.actorParticipantId ? await ctx.db.get(recorded.actorParticipantId) : null;
+    out.push({ question: crux?.statement ?? '', choice: d.choice, answeredBy: answerer?.displayName ?? 'someone', at: d._creationTime });
+  }
+  return out;
+}
