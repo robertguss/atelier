@@ -4,6 +4,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server';
 import type { cardAnswer } from '../schema';
 import { activeOrdinaryTurn } from './dispatch';
 import { findLedger, record } from './ledger';
+import { agentName } from './prompt';
 
 // Question cards. A card is answered whole, once: the first answer wins,
 // whether it comes from the card or from a chat message to the waiting agent.
@@ -99,7 +100,7 @@ export async function answerCard(
     payload: {
       handId: hand._id,
       requestId: hand.requestId,
-      answeredBy: answerer.displayName,
+      answeredBy: agentName(answerer.displayName),
       via,
       answers: ordered.map((a) => ({ ...a, question: hand.questions.find((q) => q.id === a.questionId)!.text })),
     },

@@ -18,6 +18,7 @@ import type * as lib_dispatch from "../lib/dispatch.js";
 import type * as lib_ledger from "../lib/ledger.js";
 import type * as lib_prompt from "../lib/prompt.js";
 import type * as lib_review from "../lib/review.js";
+import type * as lib_visibility from "../lib/visibility.js";
 import type * as me from "../me.js";
 import type * as members from "../members.js";
 import type * as messages from "../messages.js";
@@ -46,6 +47,7 @@ declare const fullApi: ApiFromModules<{
   "lib/ledger": typeof lib_ledger;
   "lib/prompt": typeof lib_prompt;
   "lib/review": typeof lib_review;
+  "lib/visibility": typeof lib_visibility;
   me: typeof me;
   members: typeof members;
   messages: typeof messages;

@@ -2,6 +2,7 @@ import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 import { ensureUser, getMembership, getOwner, getUser, requireMember, requireOwner } from './lib/auth';
 import { record } from './lib/ledger';
+import { agentName } from './lib/prompt';
 
 export const list = query({
   args: {},
@@ -73,7 +74,7 @@ export const create = mutation({
     const humanId = await ctx.db.insert('participants', {
       roomId,
       kind: 'human',
-      displayName: owner.name ?? owner.email ?? 'You',
+      displayName: agentName(owner.name || owner.email, 'You'),
       userId: user._id,
     });
     await ctx.db.insert('roomMembers', { roomId, userId: user._id, role: 'owner', participantId: humanId });
@@ -117,7 +118,8 @@ export const addParticipant = mutation({
 
 // The owner's "agents may edit files in this folder" switch. Running turns
 // get the new value as a settings command. Codex and Pi fix their
-// permissions when a turn starts, so turning edits off also interrupts them.
+// permissions when a turn starts, so turning edits off also interrupts those
+// that started with edits on; one that started with edits off never had them.
 export const setEditsEnabled = mutation({
   args: { roomId: v.id('rooms'), on: v.boolean() },
   handler: async (ctx, { roomId, on }) => {
@@ -134,7 +136,7 @@ export const setEditsEnabled = mutation({
     for (const turn of running) {
       await ctx.db.insert('commands', { runnerId: room.runnerId, type: 'settings', turnId: turn._id, status: 'pending', payload: { editsEnabled: on } });
       const agent = await ctx.db.get(turn.participantId);
-      if (!on && (agent?.harness === 'codex' || agent?.harness === 'pi')) {
+      if (!on && turn.editsEnabled === true && (agent?.harness === 'codex' || agent?.harness === 'pi')) {
         await ctx.db.insert('commands', { runnerId: room.runnerId, type: 'interrupt', turnId: turn._id, status: 'pending', payload: { reason: 'File edits were turned off' } });
       }
     }

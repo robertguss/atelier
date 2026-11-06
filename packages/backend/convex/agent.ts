@@ -3,6 +3,7 @@ import type { Id } from './_generated/dataModel';
 import { mutation, query } from './_generated/server';
 import { requireMember } from './lib/auth';
 import { activeOrdinaryTurn, dispatchNext, OFFLINE_AFTER_MS, requireRunnerOnline, steerMessage, takesSteer } from './lib/dispatch';
+import { visibleMessage, visibleTurn } from './lib/visibility';
 
 // "Steer now": put a queued message into the agent's running turn instead of
 // waiting for it to end. With no turn running, the message is dispatched as
@@ -38,9 +39,9 @@ export const pane = query({
     const runner = await ctx.db.get(room.runnerId);
     const participants = await ctx.db.query('participants').withIndex('by_room', (q) => q.eq('roomId', roomId)).collect();
     const messages = (await ctx.db.query('messages').withIndex('by_room', (q) => q.eq('roomId', roomId)).collect())
-      .filter((m) => m.visibility === 'room' && !m.ritualId && (isOwner || !m.followUpRitualId));
+      .filter((m) => visibleMessage(m, isOwner, { ownerSeesReviewAnswers: false }));
     const turns = (await ctx.db.query('turns').withIndex('by_room', (q) => q.eq('roomId', roomId)).collect())
-      .filter((t) => !t.ritualId && (isOwner || !t.followUp));
+      .filter((t) => visibleTurn(t, isOwner));
 
     const agents = [];
     for (const p of participants.filter((p) => p.kind === 'harness')) {
@@ -51,7 +52,7 @@ export const pane = query({
         displayName: p.displayName,
         harness: p.harness ?? null,
         status,
-        activeTurnId: active && (isOwner || !active.followUp) ? active._id : null,
+        activeTurnId: active && visibleTurn(active, isOwner) ? active._id : null,
         queued: messages.filter((m) => m.toParticipantId === p._id && (m.delivery === 'queued' || m.delivery === 'steering')).length,
         // Null until the runner reports it. An agent that cannot raise cards asks in plain text.
         canRaiseCards: runner?.harnessCapabilities?.find((c) => c.id === p.harness)?.canRaiseCards ?? null,

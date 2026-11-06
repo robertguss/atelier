@@ -6,6 +6,7 @@ import { answerCard, closeOpenCards, ownerOnlyCard, waitingCard } from './lib/ca
 import { activeOrdinaryTurn, dispatchNext, isActiveTurnStatus, requireRunnerOnline, steerMessage, takesSteer } from './lib/dispatch';
 import { findLedger, record } from './lib/ledger';
 import { reviewFinished } from './lib/review';
+import { visibleMessage, visibleTurn } from './lib/visibility';
 
 // The room timeline: visible messages plus every turn that hasn't produced a
 // message yet (queued, running, failed, interrupted), so the phone can show
@@ -26,7 +27,7 @@ export const timeline = query({
 
     const items = [
       ...messages
-        .filter((m) => m.visibility === 'room' && (isOwner || (!m.ritualId && !m.followUpRitualId)))
+        .filter((m) => visibleMessage(m, isOwner, { ownerSeesReviewAnswers: true }))
         .map((m) => ({
           kind: 'message' as const,
           id: m._id,
@@ -35,7 +36,7 @@ export const timeline = query({
           body: m.body,
         })),
       ...turns
-        .filter((t) => !t.ritualId && t.status !== 'done' && (isOwner || !t.followUp))
+        .filter((t) => visibleTurn(t, isOwner) && t.status !== 'done')
         .map((t) => ({
           kind: 'turn' as const,
           id: t._id,
@@ -79,11 +80,14 @@ export const send = mutation({
 
     const card = decisionId || reviewTurnId ? null : await waitingCard(ctx, target._id);
     if (card && (isOwner || !(await ownerOnlyCard(ctx, card)))) {
+      // An answer to a follow-up's card is as owner-only as the follow-up.
+      const cardTurn = await ctx.db.get(card.turnId);
       const messageId = await ctx.db.insert('messages', {
         roomId,
         authorParticipantId: human._id,
         body: text,
         visibility: 'room',
+        followUpRitualId: cardTurn?.followUp?.ritualId,
         toParticipantId: target._id,
         delivery: 'answeredCard',
         deliveredTurnId: card.turnId,

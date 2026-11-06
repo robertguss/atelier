@@ -35,6 +35,17 @@ function neutralize(text: string) {
   return text.replace(STRUCTURE_TAG, (_m, slash: string, name: string) => `&lt;${slash}${name}`);
 }
 
+const NAME_LIMIT = 60;
+
+// A person's name as an agent reads it: whitespace and control characters,
+// line breaks included, collapse to single spaces, and the result is capped
+// and never empty. A display name can then add no line to the room block, a
+// decision or a message header.
+export function agentName(name: string | null | undefined, fallback = 'Teammate') {
+  const oneLine = (name ?? '').replace(/[\s\p{Cc}]+/gu, ' ').trim();
+  return Array.from(oneLine).slice(0, NAME_LIMIT).join('').trim() || fallback;
+}
+
 function attr(value: string) {
   return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -45,7 +56,7 @@ function formatTime(ms: number) {
 
 // One person's message, as typed, inside a plain attribution tag.
 export function envelope(e: Envelope) {
-  return `<message from="${attr(e.author)}" role="${e.role}" sent="${formatTime(e.sentAt)}" delivery="${e.delivery}">\n${neutralize(e.body)}\n</message>`;
+  return `<message from="${attr(agentName(e.author))}" role="${e.role}" sent="${formatTime(e.sentAt)}" delivery="${e.delivery}">\n${neutralize(e.body)}\n</message>`;
 }
 
 export function contextBlock(c: RoomContext) {
@@ -53,7 +64,7 @@ export function contextBlock(c: RoomContext) {
     '<room_context>',
     `You are working in the Atelier room "${neutralize(c.roomName)}". More than one person can message you; each message is wrapped in a <message> tag naming its author.`,
     'People in this room:',
-    ...c.members.map((m) => `- ${neutralize(m.name)} (${m.role})`),
+    ...c.members.map((m) => `- ${neutralize(agentName(m.name))} (${m.role})`),
     `File edits: ${c.editsEnabled ? 'on' : 'off'}`,
   ];
   if (c.handbook.trim()) lines.push('Room handbook:', neutralize(c.handbook.trim()));
@@ -61,14 +72,14 @@ export function contextBlock(c: RoomContext) {
   if (c.decisions.length === 0) lines.push('- none yet');
   for (const d of c.decisions) {
     const question = d.question ? `${neutralize(d.question)} → ` : '';
-    lines.push(`- ${question}${neutralize(d.choice)} (decided by ${neutralize(d.answeredBy)}, ${formatTime(d.at)})`);
+    lines.push(`- ${question}${neutralize(d.choice)} (decided by ${neutralize(agentName(d.answeredBy))}, ${formatTime(d.at)})`);
   }
   lines.push(PRIVATE_CHANNEL_SENTENCE, '</room_context>');
   return lines.join('\n');
 }
 
 export function stoppedNote(stoppedBy: string) {
-  return `Your previous turn was stopped by ${neutralize(stoppedBy)} before it finished.`;
+  return `Your previous turn was stopped by ${neutralize(agentName(stoppedBy))} before it finished.`;
 }
 
 function decisionFollowUpContext(decision: Doc<'decisions'>) {

@@ -111,6 +111,24 @@ test('a member never sees review answers or follow-ups, while the owner still do
   expect(Object.keys((await dana.query(api.rooms.list, {}))[0]!)).not.toContain('readyReviews');
 });
 
+test('the owner answering a follow-up card by chat stays hidden from a member', async () => {
+  const { t, owner, dana, runnerId, roomId, claude, pi } = await setup({ withMember: true });
+  const { reviewTurnId } = await revealedReview(t, owner, roomId, runnerId, claude._id, pi._id);
+  const followUpId = await owner.mutation(api.messages.send, { roomId, body: 'Expand on it', toParticipantId: claude._id, reviewTurnId });
+  const command = await commandFor(t, runnerId, followUpId);
+  await t.mutation(api.runner.claim, { secret: SECRET, commandId: command._id });
+  await t.mutation(api.runner.start, { secret: SECRET, turnId: followUpId, harnessVersion: 'test' });
+  await t.mutation(api.runner.raiseHand, {
+    secret: SECRET, turnId: followUpId, requestId: 'req-1',
+    questions: [{ id: 'q', header: 'Q', text: 'Which?', options: [{ label: 'A', description: 'a' }], multiSelect: false, allowFreeText: true }],
+  });
+  expect(await owner.mutation(api.messages.send, { roomId, body: 'CARD-CHAT-ANSWER', toParticipantId: claude._id })).toBeNull();
+
+  expect(JSON.stringify(await owner.query(api.agent.pane, { roomId }))).toContain('CARD-CHAT-ANSWER');
+  expect(JSON.stringify(await dana.query(api.agent.pane, { roomId }))).not.toContain('CARD-CHAT-ANSWER');
+  expect(JSON.stringify(await dana.query(api.messages.timeline, { roomId }))).not.toContain('CARD-CHAT-ANSWER');
+});
+
 test('a member never receives turn prompts', async () => {
   const { dana, roomId, claude } = await setup({ withMember: true });
   await dana.mutation(api.messages.send, { roomId, body: 'hello', toParticipantId: claude._id });

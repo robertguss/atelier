@@ -414,6 +414,39 @@ test('removing a member cancels their queued messages', async () => {
   expect(prompt).not.toContain('FROM-REMOVED');
 });
 
+test('removing a member mid-steer cancels the steered message, and a late rejection never delivers it', async () => {
+  const { t, owner, dana, roomId, claude } = await setup();
+  const first = (await owner.mutation(api.messages.send, { roomId, body: 'Start', toParticipantId: claude._id }))!;
+  const { commandId } = await startTurn(t, first);
+  await dana.mutation(api.messages.send, { roomId, body: 'STEER-THEN-REMOVED', toParticipantId: claude._id, steer: true });
+  const messageId = (await messageWithBody(t, 'STEER-THEN-REMOVED'))._id;
+  const steer = (await allCommands(t)).find(c => c.type === 'steer')!;
+  await t.mutation(api.runner.claim, { secret: SECRET, commandId: steer._id });
+
+  const { members } = await owner.query(api.members.list, { roomId });
+  await owner.mutation(api.members.remove, { memberId: members.find(m => m.role === 'member')!._id });
+  expect(await messageWithBody(t, 'STEER-THEN-REMOVED')).toMatchObject({ delivery: 'cancelled', cancelReason: 'removed' });
+
+  await t.mutation(api.runner.commandHandled, { secret: SECRET, commandId: steer._id, ok: false, error: 'no' });
+  await t.mutation(api.runner.steerResult, { secret: SECRET, messageId, outcome: 'rejected' });
+  expect((await messageWithBody(t, 'STEER-THEN-REMOVED')).delivery).toBe('cancelled');
+  await finishTurn(t, first, commandId);
+  expect(await ordinaryTurns(t, claude._id)).toHaveLength(1);
+  expect((await messageWithBody(t, 'STEER-THEN-REMOVED')).delivery).toBe('cancelled');
+});
+
+test('removing a member before the runner claims their steer fails the steer command', async () => {
+  const { t, owner, dana, roomId, claude } = await setup();
+  const first = (await owner.mutation(api.messages.send, { roomId, body: 'Start', toParticipantId: claude._id }))!;
+  await startTurn(t, first);
+  await dana.mutation(api.messages.send, { roomId, body: 'UNCLAIMED-STEER', toParticipantId: claude._id, steer: true });
+  const steer = (await allCommands(t)).find(c => c.type === 'steer')!;
+  const { members } = await owner.query(api.members.list, { roomId });
+  await owner.mutation(api.members.remove, { memberId: members.find(m => m.role === 'member')!._id });
+  expect(await t.mutation(api.runner.claim, { secret: SECRET, commandId: steer._id })).toBeNull();
+  expect((await messageWithBody(t, 'UNCLAIMED-STEER')).delivery).toBe('cancelled');
+});
+
 test('the agent pane shows members delivery states and kept stream text, but never prompts', async () => {
   const { t, owner, dana, roomId, claude } = await setup();
   const first = (await owner.mutation(api.messages.send, { roomId, body: 'Stream it', toParticipantId: claude._id }))!;

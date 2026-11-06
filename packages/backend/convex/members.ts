@@ -58,10 +58,17 @@ export const remove = mutation({
     if (member.role === 'owner') throw new Error('The owner cannot be removed');
     if (member.removedAt !== undefined) return;
     await ctx.db.patch(memberId, { removedAt: Date.now() });
-    // Whatever the removed person left waiting for an agent is never delivered.
+    // Whatever the removed person left waiting for an agent is never delivered,
+    // including a steer the runner has not yet answered: a late rejection would
+    // otherwise put it back in the queue.
     const waiting = (await ctx.db.query('messages').withIndex('by_room', (q) => q.eq('roomId', member.roomId)).collect())
-      .filter((m) => m.authorParticipantId === member.participantId && m.delivery === 'queued');
-    for (const m of waiting) await cancelMessage(ctx, m, 'removed', owner._id);
+      .filter((m) => m.authorParticipantId === member.participantId && (m.delivery === 'queued' || m.delivery === 'steering'));
+    for (const m of waiting) {
+      // A steer the runner has not picked up yet must not reach the agent.
+      const command = m.steering ? await ctx.db.get(m.steering.commandId) : null;
+      if (command?.status === 'pending') await ctx.db.patch(command._id, { status: 'failed', error: 'The author was removed from the room' });
+      await cancelMessage(ctx, m, 'removed', owner._id);
+    }
     await record(ctx, {
       roomId: member.roomId,
       type: 'member.removed',

@@ -4,6 +4,7 @@ import type { Id } from './_generated/dataModel';
 import { action, internalMutation, internalQuery, mutation, query, type QueryCtx } from './_generated/server';
 import { ensureUser, requireOwner } from './lib/auth';
 import { record } from './lib/ledger';
+import { agentName } from './lib/prompt';
 
 // Room invites. A Convex row per room and email decides access; a Clerk
 // invitation is sent only when the email has no Clerk account yet, so the
@@ -59,24 +60,40 @@ export const insert = internalMutation({
   },
 });
 
+// The row is revoked first, so the invite stops working at once. The Clerk
+// invitation id is cleared only after Clerk confirms its revoke, so a revoke
+// whose Clerk call failed can be run again.
 export const revoke = action({
   args: { inviteId: v.id('roomInvites') },
   handler: async (ctx, { inviteId }) => {
     await requireOwner(ctx);
     const clerkInvitationId: string | null = await ctx.runMutation(internal.invites.markRevoked, { inviteId });
-    if (clerkInvitationId) await clerk('POST', `/invitations/${encodeURIComponent(clerkInvitationId)}/revoke`);
+    if (!clerkInvitationId) return;
+    await clerk('POST', `/invitations/${encodeURIComponent(clerkInvitationId)}/revoke`);
+    await ctx.runMutation(internal.invites.clearClerkInvitation, { inviteId, clerkInvitationId });
   },
 });
 
+// Returns the Clerk invitation still to revoke, if any. An invite already
+// revoked whose Clerk invitation is still live returns it again.
 export const markRevoked = internalMutation({
   args: { inviteId: v.id('roomInvites') },
   handler: async (ctx, { inviteId }) => {
     const invite = await ctx.db.get(inviteId);
     if (!invite) throw new Error('Unknown invite');
+    if (invite.status === 'revoked' && invite.clerkInvitationId) return invite.clerkInvitationId;
     if (invite.status !== 'pending') throw new Error(`This invite is already ${invite.status}`);
     await ctx.db.patch(inviteId, { status: 'revoked', revokedAt: Date.now() });
     await record(ctx, { roomId: invite.roomId, type: 'invite.revoked', subjectId: inviteId });
     return invite.clerkInvitationId ?? null;
+  },
+});
+
+export const clearClerkInvitation = internalMutation({
+  args: { inviteId: v.id('roomInvites'), clerkInvitationId: v.string() },
+  handler: async (ctx, { inviteId, clerkInvitationId }) => {
+    const invite = await ctx.db.get(inviteId);
+    if (invite?.clerkInvitationId === clerkInvitationId) await ctx.db.patch(inviteId, { clerkInvitationId: undefined });
   },
 });
 
@@ -134,7 +151,7 @@ export const accept = mutation({
       participantId = await ctx.db.insert('participants', {
         roomId,
         kind: 'human',
-        displayName: identity.name ?? identity.email ?? 'Teammate',
+        displayName: agentName(identity.name || identity.email),
         userId: user._id,
       });
       memberId = await ctx.db.insert('roomMembers', { roomId, userId: user._id, role: 'member', participantId });

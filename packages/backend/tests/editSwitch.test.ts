@@ -119,3 +119,15 @@ test("a new turn's edit snapshot matches the room when it is dispatched and clai
   expect(await s.t.mutation(api.runner.start, { secret: SECRET, turnId: second, harnessVersion: 'test' })).toEqual({ editsEnabled: false });
   expect((await s.t.run(ctx => ctx.db.get(second)))!.editsEnabled).toBe(false);
 });
+
+test('a Codex turn that started with edits off is not interrupted when edits go on then off', async () => {
+  const s = await setup();
+  const codexTurn = await runningTurn(s, s.codex._id);
+  expect((await s.t.run(ctx => ctx.db.get(codexTurn)))!.editsEnabled).toBe(false);
+  await s.owner.mutation(api.rooms.setEditsEnabled, { roomId: s.roomId, on: true });
+  await s.owner.mutation(api.rooms.setEditsEnabled, { roomId: s.roomId, on: false });
+  expect((await controlCommands(s.t, codexTurn)).map(c => [c.type, c.payload])).toEqual([
+    ['settings', { editsEnabled: true }],
+    ['settings', { editsEnabled: false }],
+  ]);
+});

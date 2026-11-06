@@ -203,6 +203,57 @@ test('removing a member ends access at once and keeps their messages', async () 
   await expect(owner.mutation(api.members.remove, { memberId: ownerMember._id })).rejects.toThrow();
 });
 
+test('a removed teammate rejoins through a new invite, and a repeat accept only lets her back in', async () => {
+  const { t, owner, dana, roomId } = await setup();
+  mockClerk();
+  const first = await owner.action(api.invites.create, { roomId, email: 'dana@example.com' });
+  await dana.mutation(api.invites.accept, { token: tokenOf(first.url) });
+  const member = (await owner.query(api.members.list, { roomId })).members.find(m => m.role === 'member')!;
+  await owner.mutation(api.members.remove, { memberId: member._id });
+  await owner.mutation(api.members.remove, { memberId: member._id });
+  await t.run(async ctx => {
+    expect((await ctx.db.query('ledger').collect()).filter(e => e.type === 'member.removed')).toHaveLength(1);
+  });
+
+  const second = await owner.action(api.invites.create, { roomId, email: 'dana@example.com' });
+  expect(await dana.mutation(api.invites.accept, { token: tokenOf(second.url) })).toEqual({ ok: true, roomId });
+  expect(await dana.query(api.rooms.access, { roomId })).toBe('member');
+  await t.run(async ctx => {
+    const rows = (await ctx.db.query('roomMembers').withIndex('by_room', q => q.eq('roomId', roomId)).collect()).filter(m => m.role === 'member');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.removedAt).toBeUndefined();
+    const joined = (await ctx.db.query('ledger').collect()).filter(e => e.type === 'member.joined' && e.payload?.inviteId === second.inviteId);
+    expect(joined).toHaveLength(1);
+    expect(joined[0]!.subjectId).toBe(member._id);
+  });
+
+  expect(await dana.mutation(api.invites.accept, { token: tokenOf(second.url) })).toEqual({ ok: true, roomId });
+  const otherDana = t.withIdentity({ email: 'dana@example.com', subject: 'dana-2', name: 'Other Dana' });
+  expect(await otherDana.mutation(api.invites.accept, { token: tokenOf(second.url) })).toEqual({ ok: false, reason: 'accepted' });
+  expect(await otherDana.query(api.rooms.access, { roomId })).toBe('none');
+});
+
+test('a revoke whose Clerk call failed can be retried until Clerk revokes the invitation', async () => {
+  const { t, owner, roomId } = await setup();
+  const calls = mockClerk();
+  const clerkFetch = globalThis.fetch;
+  const invite = await owner.action(api.invites.create, { roomId, email: 'dana@example.com' });
+  const clerkInvitationId = (await t.run(ctx => ctx.db.get(invite.inviteId)))!.clerkInvitationId!;
+  expect(clerkInvitationId).toBeTruthy();
+
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('down', { status: 503 })));
+  await expect(owner.action(api.invites.revoke, { inviteId: invite.inviteId })).rejects.toThrow(/503/);
+  expect(await t.run(ctx => ctx.db.get(invite.inviteId))).toMatchObject({ status: 'revoked', clerkInvitationId });
+
+  vi.stubGlobal('fetch', clerkFetch);
+  await owner.action(api.invites.revoke, { inviteId: invite.inviteId });
+  expect(calls.filter(c => c.url === `https://api.clerk.com/v1/invitations/${clerkInvitationId}/revoke`)).toHaveLength(1);
+  expect((await t.run(ctx => ctx.db.get(invite.inviteId)))!.clerkInvitationId).toBeUndefined();
+  await t.run(async ctx => {
+    expect((await ctx.db.query('ledger').collect()).filter(e => e.type === 'invite.revoked')).toHaveLength(1);
+  });
+});
+
 test('the owner backfill links existing rooms once, however often it runs', async () => {
   const t = convexTest(schema, modules); workflow.register(t);
   const owner = t.withIdentity({ email: 'owner@example.com', subject: 'owner', name: 'Robert' });
