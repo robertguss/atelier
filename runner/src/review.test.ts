@@ -1,9 +1,8 @@
-import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, writeFile, symlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { expect, test } from "vitest";
 import { promisify } from "node:util";
 
 import { reviewSnapshot } from "./review.ts";
@@ -24,9 +23,9 @@ test("review snapshot includes tracked text, excludes secrets, untracked transcr
       { cwd: dir }
     );
     const snapshot = await reviewSnapshot(dir);
-    assert.match(snapshot, /export const visible/);
-    assert.doesNotMatch(snapshot, /SECRET_ENV|SECRET_ANSWER|x{100}/);
-    assert.match(snapshot, /Omitted files:.*outside/);
+    expect(snapshot).toMatch(/export const visible/);
+    expect(snapshot).not.toMatch(/SECRET_ENV|SECRET_ANSWER|x{100}/);
+    expect(snapshot).toMatch(/Omitted files:.*outside/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import {
   mkdtemp,
   mkdir,
@@ -9,7 +8,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { expect, test } from "vitest";
 
 import type { HarnessEvent, TurnRequest } from "@atelier/shared";
 
@@ -141,20 +140,18 @@ test("Codex review starts fresh with denied tools, disabled MCP, and never logs 
     )
   );
   const calls = await fake.calls();
-  assert.equal(calls.find((c) => c.id === 2).method, "config/read");
+  expect(calls.find((c) => c.id === 2).method).toBe("config/read");
   const start = calls.find((c) => c.method === "thread/start");
-  assert.equal(start.params.threadId, undefined);
-  assert.equal(start.params.ephemeral, true);
-  assert.equal(start.params.config["mcp_servers.fixture.enabled"], false);
-  assert.equal(start.params.config["features.shell_tool"], false);
-  assert.equal(start.params.config["features.goals"], false);
-  assert.equal(start.params.config["features.multi_agent"], false);
-  assert.equal(start.params.config["features.hooks"], false);
-  assert.equal(start.params.sandbox, "read-only");
-  assert.doesNotMatch(JSON.stringify(raw), /CONFIG_SECRET/);
-  assert.ok(
-    results.some((e) => e.type === "final" && e.text === "Independent answer")
-  );
+  expect(start.params.threadId).toBe(undefined);
+  expect(start.params.ephemeral).toBe(true);
+  expect(start.params.config["mcp_servers.fixture.enabled"]).toBe(false);
+  expect(start.params.config["features.shell_tool"]).toBe(false);
+  expect(start.params.config["features.goals"]).toBe(false);
+  expect(start.params.config["features.multi_agent"]).toBe(false);
+  expect(start.params.config["features.hooks"]).toBe(false);
+  expect(start.params.sandbox).toBe("read-only");
+  expect(JSON.stringify(raw)).not.toMatch(/CONFIG_SECRET/);
+  expect(results.some((e) => e.type === "final" && e.text === "Independent answer")).toBeTruthy();
 });
 
 test("Codex initialize opts into the experimental API", async () => {
@@ -167,7 +164,7 @@ test("Codex initialize opts into the experimental API", async () => {
     )
   );
   const init = (await fake.calls()).find((c) => c.method === "initialize");
-  assert.deepEqual(init.params.capabilities, {
+  expect(init.params.capabilities).toStrictEqual({
     experimentalApi: true,
     requestAttestation: false,
   });
@@ -201,14 +198,14 @@ test("Codex steers into the running turn by its id, and a refused steer resolves
       input
     )
   );
-  assert.equal(await input.steer("Use the second option"), "steered");
-  assert.equal(await input.steer("Too late"), "rejected");
+  expect(await input.steer("Use the second option")).toBe("steered");
+  expect(await input.steer("Too late")).toBe("rejected");
   await running;
-  assert.equal(await input.steer("After the turn"), "rejected");
+  expect(await input.steer("After the turn")).toBe("rejected");
 
   const steers = (await fake.calls()).filter((c) => c.method === "turn/steer");
-  assert.equal(steers.length, 2);
-  assert.deepEqual(steers[0].params, {
+  expect(steers.length).toBe(2);
+  expect(steers[0].params).toStrictEqual({
     threadId: "thread-1",
     input: [{ type: "text", text: "Use the second option", text_elements: [] }],
     expectedTurnId: "turn-1",
@@ -253,12 +250,12 @@ test("Codex stop interrupts the turn before the process is killed", async () => 
   const interrupt = (await fake.calls()).find(
     (c) => c.method === "turn/interrupt"
   );
-  assert.deepEqual(interrupt.params, {
+  expect(interrupt.params).toStrictEqual({
     threadId: "thread-1",
     turnId: "turn-1",
   });
-  assert.ok(results.some((e) => e.type === "error"));
-  assert.ok(!results.some((e) => e.type === "final"));
+  expect(results.some((e) => e.type === "error")).toBeTruthy();
+  expect(!results.some((e) => e.type === "final")).toBeTruthy();
 });
 
 test("Codex with edits off keeps the read-only sandbox, never asks, and raises no cards", async () => {
@@ -279,7 +276,7 @@ test("Codex with edits off keeps the read-only sandbox, never asks, and raises n
     ],
   });
   const harness = codexHarness({ executable: fake.executable, onRaw() {} });
-  assert.equal(harness.capabilities.canRaiseCards, false);
+  expect(harness.capabilities.canRaiseCards).toBe(false);
   await collect(
     harness.runTurn(
       request(fake.dir),
@@ -289,12 +286,12 @@ test("Codex with edits off keeps the read-only sandbox, never asks, and raises n
   );
   const calls = await fake.calls();
   const thread = calls.find((c) => c.method === "thread/start");
-  assert.equal(thread.params.sandbox, "read-only");
-  assert.equal(thread.params.approvalPolicy, "never");
+  expect(thread.params.sandbox).toBe("read-only");
+  expect(thread.params.approvalPolicy).toBe("never");
   const turn = calls.find((c) => c.method === "turn/start");
-  assert.deepEqual(turn.params.sandboxPolicy, { type: "readOnly" });
-  assert.equal(turn.params.approvalPolicy, "never");
-  assert.equal(calls.find((c) => c.id === "q1").error.code, -32601);
+  expect(turn.params.sandboxPolicy).toStrictEqual({ type: "readOnly" });
+  expect(turn.params.approvalPolicy).toBe("never");
+  expect(calls.find((c) => c.id === "q1").error.code).toBe(-32601);
 });
 
 test("Codex with edits on declines commands and accepts file changes only inside the folder and outside control files", async () => {
@@ -450,11 +447,11 @@ test("Codex with edits on declines commands and accepts file changes only inside
     const calls = await fake.calls();
 
     const thread = calls.find((c) => c.method === "thread/start");
-    assert.equal(thread.params.sandbox, "workspace-write");
-    assert.equal(thread.params.approvalPolicy, "untrusted");
+    expect(thread.params.sandbox).toBe("workspace-write");
+    expect(thread.params.approvalPolicy).toBe("untrusted");
     const turn = calls.find((c) => c.method === "turn/start");
-    assert.equal(turn.params.approvalPolicy, "untrusted");
-    assert.deepEqual(turn.params.sandboxPolicy, {
+    expect(turn.params.approvalPolicy).toBe("untrusted");
+    expect(turn.params.sandboxPolicy).toStrictEqual({
       type: "workspaceWrite",
       writableRoots: [dir],
       networkAccess: false,
@@ -465,9 +462,9 @@ test("Codex with edits on declines commands and accepts file changes only inside
     const decision = (id: string) =>
       calls.find((c) => c.id === `approve-${id}` && !c.method)?.result
         ?.decision;
-    assert.equal(decision("cmd"), "decline");
-    assert.equal(decision("inside"), "accept");
-    assert.equal(decision("relative"), "accept");
+    expect(decision("cmd")).toBe("decline");
+    expect(decision("inside")).toBe("accept");
+    expect(decision("relative")).toBe("accept");
     for (const id of [
       "outside",
       "parent",
@@ -485,19 +482,17 @@ test("Codex with edits on declines commands and accepts file changes only inside
       "throughDangling",
       "unknown",
     ]) {
-      assert.equal(decision(id), "decline", id);
+      expect(decision(id), id).toBe("decline");
     }
 
     const tools = results.filter(
       (e) => e.type === "tool_call" || e.type === "tool_result"
     );
-    assert.deepEqual(
-      tools.filter(
+    expect(tools.filter(
         (e) =>
           e.type === "tool_call" &&
           (e.id === "cmd" || e.id === "inside" || e.id === "mcp1")
-      ),
-      [
+      )).toStrictEqual([
         {
           type: "tool_call",
           id: "cmd",
@@ -516,16 +511,12 @@ test("Codex with edits on declines commands and accepts file changes only inside
           name: "atelier.post",
           summary: '{"a":1}',
         },
-      ]
-    );
-    assert.deepEqual(
-      tools.filter((e) => e.type === "tool_result"),
-      [
+      ]);
+    expect(tools.filter((e) => e.type === "tool_result")).toStrictEqual([
         { type: "tool_result", id: "cmd", ok: false },
         { type: "tool_result", id: "inside", ok: true },
         { type: "tool_result", id: "mcp1", ok: false },
-      ]
-    );
+      ]);
   } finally {
     await rm(outside, { recursive: true, force: true });
   }

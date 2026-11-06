@@ -4,6 +4,8 @@ import { router } from "expo-router";
 import { useEffect } from "react";
 import { Platform } from "react-native";
 
+import { notificationRitualId } from "../lib/notification-route";
+
 export function PushRouting() {
   const { isAuthenticated } = useConvexAuth();
   useEffect(() => {
@@ -22,14 +24,9 @@ export function PushRouting() {
         const open = (
           response: import("expo-notifications").NotificationResponse | null
         ) => {
-          if (
-            !response ||
-            disposed ||
-            response.notification.request.identifier === lastId
-          )
-            return;
-          const id = response.notification.request.content.data?.ritualId;
-          if (typeof id !== "string" || !/^[a-z0-9]+$/i.test(id)) return;
+          if (disposed) return;
+          const id = notificationRitualId(response, lastId);
+          if (!id || !response) return;
           lastId = response.notification.request.identifier;
           router.push({ pathname: "/ritual/[id]", params: { id } });
         };

@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test, mock, afterEach } from "node:test";
+import { afterEach, expect, test, vi } from "vitest";
 
 import type {
   Harness,
@@ -13,7 +12,9 @@ import { getFunctionName } from "convex/server";
 import { eventQueue } from "./adapters/events.ts";
 import { createTurns, type TurnsClient } from "./turns.ts";
 
-afterEach(() => mock.timers.reset());
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const MINUTE = 60_000;
 
@@ -174,7 +175,7 @@ test("a question raises a card, and an answer command resolves the harness with 
 
   const answer = run.input.onQuestion(card);
   await until(() => s.named("runner:raiseHand").length);
-  assert.deepEqual(s.named("runner:raiseHand"), [
+  expect(s.named("runner:raiseHand")).toStrictEqual([
     {
       secret: "s3cret",
       turnId: "t1",
@@ -184,14 +185,14 @@ test("a question raises a card, and an answer command resolves the harness with 
   ]);
 
   await s.turns.handle("c-answer");
-  assert.deepEqual(await answer, payload);
-  assert.deepEqual(s.named("runner:commandHandled"), [
+  expect(await answer).toStrictEqual(payload);
+  expect(s.named("runner:commandHandled")).toStrictEqual([
     { secret: "s3cret", commandId: "c-answer", ok: true },
   ]);
 
   end(run, { type: "final", text: "Small it is" });
   await turn;
-  assert.equal(s.named("runner:finish").length, 1);
+  expect(s.named("runner:finish").length).toBe(1);
 });
 
 test("a steer for a turn not running here is rejected without reaching a harness", async () => {
@@ -204,12 +205,12 @@ test("a steer for a turn not running here is rejected without reaching a harness
     },
   });
   await s.turns.handle("c-steer");
-  assert.deepEqual(s.named("runner:steerResult"), [
+  expect(s.named("runner:steerResult")).toStrictEqual([
     { secret: "s3cret", messageId: "m1", outcome: "rejected" },
   ]);
-  assert.equal(s.named("runner:commandHandled").length, 1);
-  assert.equal(s.named("runner:commandHandled")[0].ok, false);
-  assert.equal(s.runs.length, 0);
+  expect(s.named("runner:commandHandled").length).toBe(1);
+  expect(s.named("runner:commandHandled")[0].ok).toBe(false);
+  expect(s.runs.length).toBe(0);
 });
 
 test("a steer for a running turn goes to the harness and its outcome is reported", async () => {
@@ -224,11 +225,11 @@ test("a steer for a running turn goes to the harness and its outcome is reported
   const turn = s.turns.handle("c-run");
   await until(() => s.runs[0]);
   await s.turns.handle("c-steer");
-  assert.deepEqual(s.runs[0]!.steers, ["Use Postgres"]);
-  assert.deepEqual(s.named("runner:steerResult"), [
+  expect(s.runs[0]!.steers).toStrictEqual(["Use Postgres"]);
+  expect(s.named("runner:steerResult")).toStrictEqual([
     { secret: "s3cret", messageId: "m1", outcome: "steered" },
   ]);
-  assert.deepEqual(s.named("runner:commandHandled"), [
+  expect(s.named("runner:commandHandled")).toStrictEqual([
     { secret: "s3cret", commandId: "c-steer", ok: true },
   ]);
   end(s.runs[0]!, { type: "final", text: "done" });
@@ -247,10 +248,10 @@ test("start applies the current edit switch, and a settings command changes it l
   s.replies["runner:start"] = () => ({ editsEnabled: true });
   const turn = s.turns.handle("c-run");
   await until(() => s.runs[0]);
-  assert.equal(s.runs[0]!.req.editsEnabled, true);
+  expect(s.runs[0]!.req.editsEnabled).toBe(true);
   await s.turns.handle("c-settings");
-  assert.deepEqual(s.runs[0]!.edits, [false]);
-  assert.deepEqual(s.named("runner:commandHandled"), [
+  expect(s.runs[0]!.edits).toStrictEqual([false]);
+  expect(s.named("runner:commandHandled")).toStrictEqual([
     { secret: "s3cret", commandId: "c-settings", ok: true },
   ]);
   end(s.runs[0]!, { type: "final", text: "done" });
@@ -269,19 +270,19 @@ test("an interrupt command aborts the running turn, which ends interrupted", asy
   const turn = s.turns.handle("c-run");
   await until(() => s.runs[0]);
   await s.turns.handle("c-stop");
-  assert.equal(s.runs[0]!.signal.aborted, true);
+  expect(s.runs[0]!.signal.aborted).toBe(true);
   await turn;
   const [failed] = s.named("runner:fail");
-  assert.equal(failed.interrupted, true);
-  assert.equal(failed.error, "File edits were turned off");
-  assert.equal(s.named("runner:finish").length, 0);
-  assert.deepEqual(s.named("runner:commandHandled"), [
+  expect(failed.interrupted).toBe(true);
+  expect(failed.error).toBe("File edits were turned off");
+  expect(s.named("runner:finish").length).toBe(0);
+  expect(s.named("runner:commandHandled")).toStrictEqual([
     { secret: "s3cret", commandId: "c-stop", ok: true },
   ]);
 });
 
 test("an open question pauses the 30-minute deadline, and the card expires at 2 hours", async () => {
-  mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+  vi.useFakeTimers({ now: 0, toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
   const noDecision = {
     handId: "hand-1",
     requestId: "req-1",
@@ -300,43 +301,39 @@ test("an open question pauses the 30-minute deadline, and the card expires at 2 
   await until(() => s.runs[0]);
   const run = s.runs[0]!;
 
-  mock.timers.tick(10 * MINUTE);
+  vi.advanceTimersByTime(10 * MINUTE);
   const answer = run.input.onQuestion(card);
   await until(() => s.named("runner:raiseHand").length);
 
-  mock.timers.tick(31 * MINUTE);
-  assert.equal(
-    run.signal.aborted,
-    false,
-    "the deadline is paused while the card is open"
-  );
+  vi.advanceTimersByTime(31 * MINUTE);
+  expect(run.signal.aborted, "the deadline is paused while the card is open").toBe(false);
   // The lease is still renewed while the turn waits.
   const renewals = s.named("runner:progress").length;
-  mock.timers.tick(MINUTE);
-  assert.ok(s.named("runner:progress").length > renewals);
-  assert.equal(s.named("runner:handTimedOut").length, 0);
+  vi.advanceTimersByTime(MINUTE);
+  expect(s.named("runner:progress").length > renewals).toBeTruthy();
+  expect(s.named("runner:handTimedOut").length).toBe(0);
 
-  mock.timers.tick(2 * 60 * MINUTE - 32 * MINUTE);
+  vi.advanceTimersByTime(2 * 60 * MINUTE - 32 * MINUTE);
   await until(() => s.named("runner:handTimedOut").length);
-  assert.deepEqual(s.named("runner:handTimedOut"), [
+  expect(s.named("runner:handTimedOut")).toStrictEqual([
     { secret: "s3cret", handId: "hand-1" },
   ]);
 
   // Convex closes the card and tells the agent no decision was made.
   await s.turns.handle("c-expired");
-  assert.deepEqual(await answer, noDecision);
+  expect(await answer).toStrictEqual(noDecision);
 
   // The deadline resumes with the 20 minutes the turn had left.
-  mock.timers.tick(19 * MINUTE);
-  assert.equal(run.signal.aborted, false);
-  mock.timers.tick(MINUTE);
-  assert.equal(run.signal.aborted, true);
+  vi.advanceTimersByTime(19 * MINUTE);
+  expect(run.signal.aborted).toBe(false);
+  vi.advanceTimersByTime(MINUTE);
+  expect(run.signal.aborted).toBe(true);
   await turn;
-  assert.equal(s.named("runner:fail")[0].interrupted, true);
+  expect(s.named("runner:fail")[0].interrupted).toBe(true);
 });
 
 test("tool activity reaches Convex as items with one-line summaries, not raw output", async () => {
-  mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+  vi.useFakeTimers({ now: 0, toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
   const s = setup();
   const turn = s.turns.handle("c-run");
   await until(() => s.runs[0]);
@@ -349,14 +346,10 @@ test("tool activity reaches Convex as items with one-line summaries, not raw out
     summary: "src/plan.md",
   });
   await idle();
-  assert.equal(
-    s.named("runner:recordTurnItems").length,
-    0,
-    "items wait for the next flush"
-  );
-  mock.timers.tick(500);
+  expect(s.named("runner:recordTurnItems").length, "items wait for the next flush").toBe(0);
+  vi.advanceTimersByTime(500);
   await until(() => s.named("runner:recordTurnItems").length);
-  assert.deepEqual(s.named("runner:recordTurnItems")[0], {
+  expect(s.named("runner:recordTurnItems")[0]).toStrictEqual({
     secret: "s3cret",
     turnId: "t1",
     items: [{ callId: "call-1", seq: 0, name: "Read", summary: "src/plan.md" }],
@@ -370,9 +363,9 @@ test("tool activity reaches Convex as items with one-line summaries, not raw out
     output: "RAW FILE CONTENTS",
   } as HarnessEvent);
   await idle();
-  mock.timers.tick(500);
+  vi.advanceTimersByTime(500);
   await until(() => s.named("runner:recordTurnItems").length === 2);
-  assert.deepEqual(s.named("runner:recordTurnItems")[1].items, [
+  expect(s.named("runner:recordTurnItems")[1].items).toStrictEqual([
     {
       callId: "call-1",
       seq: 0,
@@ -384,7 +377,7 @@ test("tool activity reaches Convex as items with one-line summaries, not raw out
 
   end(run, { type: "final", text: "done" });
   await turn;
-  assert.ok(!JSON.stringify(s.calls).includes("RAW FILE CONTENTS"));
+  expect(!JSON.stringify(s.calls).includes("RAW FILE CONTENTS")).toBeTruthy();
 });
 
 test("the session id is saved as soon as it arrives, before the turn finishes", async () => {
@@ -398,10 +391,8 @@ test("the session id is saved as soon as it arrives, before the turn finishes", 
   );
   await turn;
   const names = s.calls.map((c) => c.name);
-  assert.deepEqual(s.named("runner:sessionStarted"), [
+  expect(s.named("runner:sessionStarted")).toStrictEqual([
     { secret: "s3cret", turnId: "t1", sessionId: "sess-1" },
   ]);
-  assert.ok(
-    names.indexOf("runner:sessionStarted") < names.indexOf("runner:finish")
-  );
+  expect(names.indexOf("runner:sessionStarted") < names.indexOf("runner:finish")).toBeTruthy();
 });

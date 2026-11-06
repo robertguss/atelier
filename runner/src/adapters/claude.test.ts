@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import {
   mkdtemp,
   mkdir,
@@ -10,7 +9,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { expect, test } from "vitest";
 
 import type {
   HarnessEvent,
@@ -209,11 +208,11 @@ test("AskUserQuestion becomes a card, and the answer maps back by question text"
       },
     }
   );
-  assert.equal(cards.length, 1);
+  expect(cards.length).toBe(1);
   const card = cards[0]!;
-  assert.equal(card.requestId, "ask1");
-  assert.equal(new Set(card.questions.map((q) => q.id)).size, 3);
-  assert.deepEqual(card.questions[0], {
+  expect(card.requestId).toBe("ask1");
+  expect(new Set(card.questions.map((q) => q.id)).size).toBe(3);
+  expect(card.questions[0]).toStrictEqual({
     id: card.questions[0]!.id,
     header: "Color",
     text: "Which color?",
@@ -224,17 +223,17 @@ test("AskUserQuestion becomes a card, and the answer maps back by question text"
     multiSelect: false,
     allowFreeText: true,
   });
-  assert.equal(card.questions[1]!.multiSelect, true);
+  expect(card.questions[1]!.multiSelect).toBe(true);
   const response = decision("ask1");
-  assert.equal(response.behavior, "allow");
-  assert.deepEqual(response.updatedInput.questions, questions);
-  assert.deepEqual(response.updatedInput.answers, {
+  expect(response.behavior).toBe("allow");
+  expect(response.updatedInput.questions).toStrictEqual(questions);
+  expect(response.updatedInput.answers).toStrictEqual({
     "Which color?": "Blue",
     "Which sizes?": "S, L",
     "Anything else?": "Ship it Friday",
   });
   for (const q of questions)
-    assert.match(response.updatedInput.annotations[q.question].notes, /Robert/);
+    expect(response.updatedInput.annotations[q.question].notes).toMatch(/Robert/);
 });
 
 test("a card closed without an answer tells Claude no decision was made", async () => {
@@ -261,11 +260,8 @@ test("a card closed without an answer tells Claude no decision was made", async 
     }
   );
   const response = decision("ask1");
-  assert.equal(response.behavior, "allow");
-  assert.match(
-    response.updatedInput.answers["Which color?"],
-    /no decision was made/i
-  );
+  expect(response.behavior).toBe("allow");
+  expect(response.updatedInput.answers["Which color?"]).toMatch(/no decision was made/i);
 });
 
 test("with the edit switch off, edits and unapproved commands are denied", async () => {
@@ -275,9 +271,9 @@ test("with the edit switch off, edits and unapproved commands are denied", async
     permission("b1", "Bash", { command: "rm -rf build" }),
     result("ok"),
   ]);
-  assert.ok(calls[0].argv.includes("--permission-mode=default"));
-  assert.equal(decision("w1").behavior, "deny");
-  assert.equal(decision("b1").behavior, "deny");
+  expect(calls[0].argv.includes("--permission-mode=default")).toBeTruthy();
+  expect(decision("w1").behavior).toBe("deny");
+  expect(decision("b1").behavior).toBe("deny");
 });
 
 test("with the edit switch on, only edits inside the folder and outside control paths are allowed", async () => {
@@ -342,8 +338,8 @@ test("with the edit switch on, only edits inside the folder and outside control 
       }
     );
     for (const id of ["in", "abs", "nb"])
-      assert.equal(decision(id).behavior, "allow", id);
-    assert.deepEqual(decision("in").updatedInput, {
+      expect(decision(id).behavior, id).toBe("allow");
+    expect(decision("in").updatedInput).toStrictEqual({
       file_path: "docs/plan.md",
       content: "x",
     });
@@ -360,7 +356,7 @@ test("with the edit switch on, only edits inside the folder and outside control 
       "agents",
       "bash",
     ]) {
-      assert.equal(decision(id).behavior, "deny", id);
+      expect(decision(id).behavior, id).toBe("deny");
     }
   } finally {
     await rm(outside, { recursive: true, force: true });
@@ -387,8 +383,8 @@ test("turning the switch off mid-turn denies the next edit", async () => {
       },
     }
   );
-  assert.equal(decision("w1").behavior, "allow");
-  assert.equal(decision("w2").behavior, "deny");
+  expect(decision("w1").behavior).toBe("allow");
+  expect(decision("w2").behavior).toBe("deny");
 });
 
 test("a steer goes in mid-turn with priority next and resolves steered when folded", async () => {
@@ -462,30 +458,24 @@ test("a steer goes in mid-turn with priority next and resolves steered when fold
       },
     }
   );
-  assert.equal(await steer, "steered");
+  expect(await steer).toBe("steered");
   const pushed = calls.filter((c) => c.type === "user").slice(1);
-  assert.equal(pushed.length, 1);
-  assert.equal(pushed[0].priority, "next");
-  assert.equal(pushed[0].parent_tool_use_id, null);
-  assert.match(pushed[0].uuid, /^[0-9a-f-]{36}$/);
-  assert.deepEqual(pushed[0].message, {
+  expect(pushed.length).toBe(1);
+  expect(pushed[0].priority).toBe("next");
+  expect(pushed[0].parent_tool_use_id).toBe(null);
+  expect(pushed[0].uuid).toMatch(/^[0-9a-f-]{36}$/);
+  expect(pushed[0].message).toStrictEqual({
     role: "user",
     content: "Use blue instead",
   });
-  assert.ok(
-    calls.some((c) => c.eof),
-    "input closes after the result"
-  );
-  assert.deepEqual(
-    events.filter((e) => e.type === "tool_call" || e.type === "tool_result"),
-    [
+  expect(calls.some((c) => c.eof), "input closes after the result").toBeTruthy();
+  expect(events.filter((e) => e.type === "tool_call" || e.type === "tool_result")).toStrictEqual([
       { type: "tool_call", id: "t1", name: "Bash", summary: "sleep 6" },
       { type: "tool_result", id: "t1", ok: true },
       { type: "tool_call", id: "t2", name: "Bash", summary: "false" },
       { type: "tool_result", id: "t2", ok: false },
-    ]
-  );
-  assert.deepEqual(events.at(-1), { type: "final", text: "Done, in blue" });
+    ]);
+  expect(events.at(-1)).toStrictEqual({ type: "final", text: "Done, in blue" });
 });
 
 test("a steer not folded before the result is withdrawn and rejected", async () => {
@@ -504,19 +494,17 @@ test("a steer not folded before the result is withdrawn and rejected", async () 
       },
     }
   );
-  assert.equal(await steer, "rejected");
+  expect(await steer).toBe("rejected");
   const uuid = calls.filter((c) => c.type === "user")[1].uuid;
-  assert.ok(
-    calls.some(
+  expect(calls.some(
       (c) =>
         c.type === "control_request" &&
         c.request.subtype === "cancel_async_message" &&
         c.request.message_uuid === uuid
-    )
-  );
-  assert.ok(calls.some((c) => c.eof));
-  assert.deepEqual(events.at(-1), { type: "final", text: "first" });
-  assert.equal(await input.steer("After the turn"), "rejected");
+    )).toBeTruthy();
+  expect(calls.some((c) => c.eof)).toBeTruthy();
+  expect(events.at(-1)).toStrictEqual({ type: "final", text: "first" });
+  expect(await input.steer("After the turn")).toBe("rejected");
 });
 
 test("a late steer the CLI could not withdraw runs on in the same turn and counts as steered", async () => {
@@ -543,8 +531,8 @@ test("a late steer the CLI could not withdraw runs on in the same turn and count
       },
     }
   );
-  assert.equal(await steer, "steered");
-  assert.deepEqual(events.filter((e) => e.type === "final").at(-1), {
+  expect(await steer).toBe("steered");
+  expect(events.filter((e) => e.type === "final").at(-1)).toStrictEqual({
     type: "final",
     text: "first\n\nsecond",
   });
@@ -561,7 +549,7 @@ test("independent review options are unchanged", async () => {
         });
     },
   });
-  assert.deepEqual(calls[0].argv, [
+  expect(calls[0].argv).toStrictEqual([
     "--output-format",
     "stream-json",
     "--verbose",
@@ -579,7 +567,7 @@ test("independent review options are unchanged", async () => {
     '{"disableAllHooks":true}',
   ]);
   const { request_id: _id, ...initialize } = calls[1];
-  assert.deepEqual(initialize, {
+  expect(initialize).toStrictEqual({
     type: "control_request",
     request: {
       subtype: "initialize",
@@ -587,7 +575,7 @@ test("independent review options are unchanged", async () => {
       systemPrompt: [""],
     },
   });
-  assert.deepEqual(calls[2], {
+  expect(calls[2]).toStrictEqual({
     type: "user",
     session_id: "",
     message: {
@@ -596,5 +584,5 @@ test("independent review options are unchanged", async () => {
     },
     parent_tool_use_id: null,
   });
-  assert.equal(steered, "rejected");
+  expect(steered).toBe("rejected");
 });

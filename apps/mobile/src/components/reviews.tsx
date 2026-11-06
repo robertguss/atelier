@@ -5,6 +5,10 @@ import { router } from "expo-router";
 import { useState } from "react";
 import { View } from "react-native";
 
+import {
+  includedParticipantIds,
+  toggleExcluded,
+} from "../lib/review-participants";
 import { Body, Button, Field, Muted } from "./ui";
 
 export function Reviews({
@@ -39,13 +43,7 @@ export function Reviews({
               kind="secondary"
               key={p._id}
               label={`${excluded.includes(p._id) ? "○" : "✓"} ${p.displayName}`}
-              onPress={() =>
-                setExcluded((ids) =>
-                  ids.includes(p._id)
-                    ? ids.filter((id) => id !== p._id)
-                    : [...ids, p._id]
-                )
-              }
+              onPress={() => setExcluded((ids) => toggleExcluded(ids, p._id))}
             />
           ))}
           <Field
@@ -60,7 +58,7 @@ export function Reviews({
             disabled={
               busy ||
               !request.trim() ||
-              participants.every((p) => excluded.includes(p._id))
+              includedParticipantIds(participants, excluded).length === 0
             }
             onPress={async () => {
               setBusy(true);
@@ -68,9 +66,10 @@ export function Reviews({
                 const id = await begin({
                   roomId,
                   request,
-                  participantIds: participants
-                    .filter((p) => !excluded.includes(p._id))
-                    .map((p) => p._id),
+                  participantIds: includedParticipantIds(
+                    participants,
+                    excluded
+                  ),
                 });
                 setRequest("");
                 setError("");
