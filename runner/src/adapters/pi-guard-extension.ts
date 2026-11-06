@@ -1,7 +1,7 @@
 // A Pi extension the runner loads when the room lets agents edit files. It
 // blocks Pi's edit and write tools outside the room folder, and inside it on
-// harness and repository control files, so an agent can't write an allow rule,
-// hook or extension that would run commands on a later turn.
+// harness and repository control files at any depth, so an agent can't write
+// an allow rule, hook or extension that would run commands on a later turn.
 // Pi loads this file itself, so it imports nothing but Node built-ins.
 import { lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -42,8 +42,8 @@ export function blockedEditReason(cwd: string, path: unknown): string | undefine
   if (!target) return `${path} is a symlink to a missing file`;
   const rel = relative(room, target);
   if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return `Edits outside the room folder ${room} are blocked`;
-  const first = rel.split(sep)[0] ?? '';
-  if (PROTECTED.includes(first)) return `Edits to ${first} are blocked in Atelier rooms`;
+  const name = rel.split(sep).find((part) => PROTECTED.includes(part));
+  if (name) return `Edits to ${name} are blocked in Atelier rooms`;
   return undefined;
 }
 

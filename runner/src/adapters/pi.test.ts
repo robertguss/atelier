@@ -134,7 +134,7 @@ test('Pi edit guard allows in-folder files and blocks outside, control folders a
     for (const path of ['notes.md', 'docs/plan.md', join(cwd, 'docs/new.md'), '@docs/at.md']) {
       assert.equal(blockedEditReason(cwd, path), undefined, path);
     }
-    for (const path of ['/tmp/outside', '../outside.txt', 'escape/x.txt', 'dangling.txt', '~/x.txt', '.pi/settings.json', '.git/HEAD', '.git/hooks/pre-commit', 'gitlink/config', '.claude/settings.json', '.mcp.json', '.codex/config.toml', '.agents/skills/x.md', 'docs/../.git/config']) {
+    for (const path of ['/tmp/outside', '../outside.txt', 'escape/x.txt', 'dangling.txt', '~/x.txt', '.pi/settings.json', '.git/HEAD', '.git/hooks/pre-commit', 'gitlink/config', '.claude/settings.json', '.mcp.json', '.codex/config.toml', '.agents/skills/x.md', 'docs/../.git/config', 'sub/.git/x', 'docs/.claude/settings.json', 'packages/app/.mcp.json']) {
       assert.ok(blockedEditReason(cwd, path), path);
     }
     assert.ok(blockedEditReason(cwd, undefined));
