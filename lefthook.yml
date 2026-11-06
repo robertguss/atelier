@@ -26,3 +26,11 @@ pre-commit:
         - "*.graphql"
         - "*.gql"
       stage_fixed: true
+
+pre-push:
+  piped: true
+  jobs:
+    - name: check
+      run: pnpm check
+    - name: typecheck and test
+      run: pnpm exec turbo run typecheck test
