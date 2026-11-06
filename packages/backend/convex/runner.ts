@@ -6,6 +6,7 @@ import { closeOpenCards, expireUnanswered } from './lib/cards';
 import { dispatchNext, isActiveTurnStatus, steerRejected } from './lib/dispatch';
 import { record } from './lib/ledger';
 import { reviewFinished } from './lib/review';
+import { sessionResetAfter } from './lib/sessions';
 import { cardQuestion, harnessId } from './schema';
 
 // Functions the runner calls. Each takes the runner secret instead of a Clerk
@@ -368,7 +369,7 @@ export const reportCapabilities = mutation({
 
 async function saveSession(ctx: MutationCtx, turn: Doc<'turns'>, sessionId: string) {
   if (turn.followUp?.separateSession) await saveFollowUpSession(ctx, turn.followUp.ritualId, turn.participantId, sessionId);
-  else await ctx.db.patch(turn.participantId, { harnessSessionId: sessionId });
+  else if (!(await sessionResetAfter(ctx, turn))) await ctx.db.patch(turn.participantId, { harnessSessionId: sessionId });
 }
 
 async function failTurn(

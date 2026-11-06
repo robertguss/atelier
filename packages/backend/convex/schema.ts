@@ -254,7 +254,9 @@ export default defineSchema({
     ritualId: v.optional(v.id('rituals')),
     choice: v.string(),
     rationale: v.optional(v.string()),
-    // Set on a decision recorded by answering one question on a card.
+    // Set on a decision recorded by answering a card: one per question when
+    // answered on the card, or one for the whole card, without a question id,
+    // when answered by a chat message.
     handId: v.optional(v.id('hands')),
     questionId: v.optional(v.string()),
     answeredByParticipantId: v.optional(v.id('participants')),

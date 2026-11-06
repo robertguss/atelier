@@ -2,9 +2,10 @@ import { v } from 'convex/values';
 import { internal } from './_generated/api';
 import type { Id } from './_generated/dataModel';
 import { action, internalMutation, internalQuery, mutation, query, type QueryCtx } from './_generated/server';
-import { ensureUser, requireOwner } from './lib/auth';
+import { ensureUser, hasActiveTeammate, requireOwner } from './lib/auth';
 import { record } from './lib/ledger';
 import { agentName } from './lib/prompt';
+import { resetSoloFollowUpSessions } from './lib/sessions';
 
 // Room invites. A Convex row per room and email decides access; a Clerk
 // invitation is sent only when the email has no Clerk account yet, so the
@@ -145,6 +146,8 @@ export const accept = mutation({
       .query('roomMembers')
       .withIndex('by_room_user', (q) => q.eq('roomId', roomId).eq('userId', user._id))
       .unique();
+    const joins = !existing || existing.removedAt !== undefined;
+    const firstTeammate = joins && !(await hasActiveTeammate(ctx, roomId));
     let memberId = existing?._id;
     let participantId = existing?.participantId;
     if (!existing) {
@@ -159,14 +162,15 @@ export const accept = mutation({
       await ctx.db.patch(existing._id, { removedAt: undefined });
     }
     await ctx.db.patch(invite._id, { status: 'accepted', acceptedByUserId: user._id, acceptedAt: Date.now() });
-    if (!existing || existing.removedAt !== undefined) {
-      await record(ctx, {
+    if (joins) {
+      const joinedLedgerId = await record(ctx, {
         roomId,
         type: 'member.joined',
         actorParticipantId: participantId,
         subjectId: memberId,
         payload: { inviteId: invite._id },
       });
+      if (firstTeammate) await resetSoloFollowUpSessions(ctx, roomId, joinedLedgerId);
     }
     return { ok: true, roomId };
   },

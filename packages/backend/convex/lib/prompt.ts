@@ -165,10 +165,17 @@ export async function agentDecisions(ctx: QueryCtx, roomId: Id<'rooms'>): Promis
   const out: AgentDecision[] = [];
   for (const { decision: d, hand } of shown.reverse()) {
     const crux = d.cruxId ? await ctx.db.get(d.cruxId) : null;
-    const question = hand ? hand.questions.find((q) => q.id === d.questionId)?.text : crux?.statement;
+    const question = hand ? cardQuestionText(hand, d.questionId) : crux?.statement;
     const answererId = d.answeredByParticipantId ?? (await findLedger(ctx, roomId, 'decision.recorded', d._id))?.actorParticipantId;
     const answerer = answererId ? await ctx.db.get(answererId) : null;
     out.push({ question: question ?? '', choice: d.choice, answeredBy: answerer?.displayName ?? 'someone', at: d._creationTime });
   }
   return out;
+}
+
+// A decision without a question id answers the whole card, from chat.
+function cardQuestionText(hand: Doc<'hands'>, questionId: string | undefined) {
+  if (questionId !== undefined) return hand.questions.find((q) => q.id === questionId)?.text;
+  const [first, ...rest] = hand.questions;
+  return first && (rest.length ? `${first.text} (and ${rest.length} more)` : first.text);
 }

@@ -8,8 +8,10 @@ import { agentName } from './prompt';
 
 // Question cards. A card is answered whole, once: the first answer wins,
 // whether it comes from the card or from a chat message to the waiting agent.
-// Each question records its own decision, linked by id to the team messages
-// posted while the card was open. The text of those messages is never copied.
+// On the card each question records its own decision; a chat message, given
+// to the agent as the answer to every question, records one decision for the
+// whole card. Decisions link by id to the team messages posted while the card
+// was open. The text of those messages is never copied.
 
 export type CardAnswer = Infer<typeof cardAnswer>;
 
@@ -74,12 +76,14 @@ export async function answerCard(
     parentLedgerId: await raisedLedgerId(ctx, hand),
     payload: { via, messageId },
   });
-  for (const answer of ordered) {
+  // A chat answer has no question id: the decision covers the whole card.
+  const decided = via === 'chat' ? [{ choice: choiceText(ordered[0]!), questionId: undefined }] : ordered.map((a) => ({ choice: choiceText(a), questionId: a.questionId }));
+  for (const { choice, questionId } of decided) {
     const decisionId = await ctx.db.insert('decisions', {
       roomId: hand.roomId,
-      choice: choiceText(answer),
+      choice,
       handId: hand._id,
-      questionId: answer.questionId,
+      questionId,
       answeredByParticipantId: answerer._id,
     });
     await record(ctx, {
@@ -88,7 +92,7 @@ export async function answerCard(
       actorParticipantId: answerer._id,
       subjectId: decisionId,
       parentLedgerId: answeredLedgerId,
-      payload: { handId: hand._id, questionId: answer.questionId, teamMessageIds },
+      payload: { handId: hand._id, questionId, teamMessageIds },
     });
   }
 

@@ -176,6 +176,27 @@ test('a message to an agent waiting on its card answers the card in chat and sta
   expect((await decisions(s.t))[0]).toMatchObject({ choice: 'go with option B but keep it short', answeredByParticipantId: s.danaP._id });
 });
 
+test('a chat answer to a two-question card records one decision, while the agent gets it as the answer to both questions', async () => {
+  const s = await setup();
+  const { turnId, commandId, handId } = await waitingClaude(s, [question('q1', 'First?'), question('q2', 'Second?')]);
+  await s.dana.mutation(api.messages.send, { roomId: s.roomId, body: 'ship the small one', toParticipantId: s.claude._id });
+
+  const rows = await decisions(s.t);
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ handId, choice: 'ship the small one', answeredByParticipantId: s.danaP._id });
+  expect(await ledger(s.t, 'decision.recorded')).toHaveLength(1);
+  const answer = (await allCommands(s.t)).find(c => c.type === 'answer')!;
+  expect(answer.payload.answers).toEqual([
+    { questionId: 'q1', labels: [], freeText: 'ship the small one', question: 'First?' },
+    { questionId: 'q2', labels: [], freeText: 'ship the small one', question: 'Second?' },
+  ]);
+
+  await s.t.mutation(api.runner.finish, { secret: SECRET, turnId, commandId, finalText: 'ok', transcriptRef: '/t' });
+  const next = (await s.owner.mutation(api.messages.send, { roomId: s.roomId, body: 'Continue', toParticipantId: s.claude._id }))!;
+  const prompt = (await s.t.run(ctx => ctx.db.get(next)))!.prompt;
+  expect(prompt).toMatch(/- First\? \(and 1 more\) → ship the small one \(decided by Dana, /);
+});
+
 test('a four-question card answered once records four decisions sharing the same team message links', async () => {
   const s = await setup();
   const questions = [question('q1', 'First?'), question('q2', 'Second?'), question('q3', 'Third?'), question('q4', 'Fourth?')];

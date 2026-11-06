@@ -105,8 +105,10 @@ complete answer wins, and the card shows who answered. Sending a chat message
 to an agent that is waiting on its card also answers the card, with that
 message as the free answer.
 
-Each answer is recorded as a decision, linked to the team messages posted while
-the card was open (by id only). Recent decisions appear in every agent's room
+Each answer on the card is recorded as one decision per question, linked to
+the team messages posted while the card was open (by id only). A chat answer
+reaches the agent as the answer to every question but is recorded as one
+decision for the whole card. Recent decisions appear in every agent's room
 context. A card left unanswered for 2 hours closes with no decision, and
 stopping the turn cancels its card.
 
@@ -146,9 +148,12 @@ it off stops a running Codex or Pi turn.
 ## Independent reviews
 
 Reviews stay owner-only in shared rooms. A teammate never sees review turns,
-answers or follow-ups. In a room with a teammate, a follow-up to a review runs
-on a separate session kept with the review, so the agent cannot repeat the
-review to the teammate later. See [independent review](independent-review.md).
+answers or follow-ups. In a room that is just Robert, a follow-up to a review
+continues the agent's session. In a room with a teammate, it runs on a separate
+session kept with the review, so the agent cannot repeat the review to the
+teammate later. When the first teammate joins, agents that ran follow-ups while
+Robert was alone start a fresh session. See
+[independent review](independent-review.md).
 
 ## When the runner is offline
 
