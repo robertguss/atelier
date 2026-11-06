@@ -5,9 +5,9 @@
 // screen is shown, call `pushBackend()` to re-run its queries, as a live
 // Convex subscription would.
 
-import { getFunctionName } from 'convex/server';
-import { useSyncExternalStore } from 'react';
-import { vi } from 'vitest';
+import { getFunctionName } from "convex/server";
+import { useSyncExternalStore } from "react";
+import { vi } from "vitest";
 
 type QueryHandler = (args: Record<string, unknown>) => unknown;
 
@@ -40,18 +40,21 @@ export function resetBackend() {
   signOut.mockClear();
 }
 
-function runQuery(ref: never, args?: Record<string, unknown> | 'skip') {
-  if (args === 'skip') return undefined;
+function runQuery(ref: never, args?: Record<string, unknown> | "skip") {
+  if (args === "skip") return undefined;
   const handler = backend.queries[getFunctionName(ref)];
   return handler ? handler(args ?? {}) : undefined;
 }
 
 export const convexMock = {
-  useConvexAuth: () => ({ isLoading: false, isAuthenticated: backend.signedIn }),
+  useConvexAuth: () => ({
+    isLoading: false,
+    isAuthenticated: backend.signedIn,
+  }),
   // Like Convex, a skipped query returns undefined and never runs; a query
   // the test did not set up stays loading. A handler that throws behaves like
   // a server error reaching the component.
-  useQuery: (ref: never, args?: Record<string, unknown> | 'skip') => {
+  useQuery: (ref: never, args?: Record<string, unknown> | "skip") => {
     useSyncExternalStore(subscribe, () => version);
     return runQuery(ref, args);
   },
@@ -65,11 +68,14 @@ export const convexMock = {
     backend.actions[name] ??= vi.fn(async () => null);
     return backend.actions[name];
   },
-  useConvex: () => ({ query: async (ref: never, args?: Record<string, unknown>) => runQuery(ref, args) }),
+  useConvex: () => ({
+    query: async (ref: never, args?: Record<string, unknown>) =>
+      runQuery(ref, args),
+  }),
 };
 
 export const authMock = {
   SignInPanel: () => <div>Clerk sign-in form</div>,
-  useSignedInEmail: () => (backend.signedIn ? 'sam@other.example' : null),
+  useSignedInEmail: () => (backend.signedIn ? "sam@other.example" : null),
   useSignOut: () => signOut,
 };

@@ -4,13 +4,27 @@
 
 import { Dialog as SheetPrimitive } from "@base-ui/react/dialog";
 import { XIcon } from "lucide-react";
-import { type ComponentProps, type CSSProperties, createContext, type ReactNode, use, useState } from "react";
-import { cn } from "~/lib/utils";
+import {
+  type ComponentProps,
+  type CSSProperties,
+  createContext,
+  type ReactNode,
+  use,
+  useState,
+} from "react";
+
 import { Button } from "~/components/ui/button";
+import { cn } from "~/lib/utils";
 
 const ControlledOpenContext = createContext<boolean | undefined>(undefined);
 
-function RetainedWhileClosed({ open, children }: { open: boolean; children: ReactNode }) {
+function RetainedWhileClosed({
+  open,
+  children,
+}: {
+  open: boolean;
+  children: ReactNode;
+}) {
   const controlledOpen = use(ControlledOpenContext);
   const isOpen = open && controlledOpen !== false;
   const [retained, setRetained] = useState(children);
@@ -20,10 +34,15 @@ function RetainedWhileClosed({ open, children }: { open: boolean; children: Reac
   return isOpen ? children : retained;
 }
 
-function renderRetainedPopup(props: ComponentProps<"div">, state: { open: boolean }) {
+function renderRetainedPopup(
+  props: ComponentProps<"div">,
+  state: { open: boolean }
+) {
   return (
     <div {...props}>
-      <RetainedWhileClosed open={state.open}>{props.children}</RetainedWhileClosed>
+      <RetainedWhileClosed open={state.open}>
+        {props.children}
+      </RetainedWhileClosed>
     </div>
   );
 }
@@ -42,8 +61,8 @@ function SheetBackdrop({ className, ...props }: SheetPrimitive.Backdrop.Props) {
   return (
     <SheetPrimitive.Backdrop
       className={cn(
-        "fixed inset-0 z-(--z-sheet) bg-background/60 backdrop-blur-xs transition-all duration-200 data-ending-style:opacity-0 data-starting-style:opacity-0",
-        className,
+        "bg-background/60 fixed inset-0 z-(--z-sheet) backdrop-blur-xs transition-all duration-200 data-ending-style:opacity-0 data-starting-style:opacity-0",
+        className
       )}
       data-slot="sheet-backdrop"
       {...props}
@@ -69,7 +88,7 @@ function SheetViewport({
         side === "left" && "flex justify-start",
         side === "right" && "flex justify-end",
         variant === "inset" && "sm:p-4",
-        className,
+        className
       )}
       data-slot="sheet-viewport"
       {...props}
@@ -97,7 +116,9 @@ function SheetPopup({
   const transitionStyle =
     transitionDurationMs === undefined
       ? undefined
-      : ({ transitionDuration: `${transitionDurationMs}ms` } satisfies CSSProperties);
+      : ({
+          transitionDuration: `${transitionDurationMs}ms`,
+        } satisfies CSSProperties);
   const instant = transitionDurationMs === 0;
 
   return (
@@ -113,20 +134,20 @@ function SheetPopup({
       <SheetViewport side={side} variant={variant}>
         <SheetPrimitive.Popup
           className={cn(
-            "relative flex max-h-full min-h-0 w-full min-w-0 flex-col bg-popover not-dark:bg-clip-padding text-popover-foreground shadow-lg/5 transition-[opacity,translate] duration-200 ease-in-out will-change-transform before:pointer-events-none before:absolute before:inset-0 before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:opacity-0 data-starting-style:opacity-0 max-sm:before:hidden dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
+            "bg-popover text-popover-foreground relative flex max-h-full min-h-0 w-full min-w-0 flex-col shadow-lg/5 transition-[opacity,translate] duration-200 ease-in-out will-change-transform not-dark:bg-clip-padding before:pointer-events-none before:absolute before:inset-0 before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:opacity-0 data-starting-style:opacity-0 max-sm:before:hidden dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
             side === "bottom" &&
               "row-start-2 border-t data-ending-style:translate-y-8 data-starting-style:translate-y-8",
             side === "top" &&
-              "data-ending-style:-translate-y-8 data-starting-style:-translate-y-8 border-b",
+              "border-b data-ending-style:-translate-y-8 data-starting-style:-translate-y-8",
             side === "left" &&
-              "data-ending-style:-translate-x-8 data-starting-style:-translate-x-8 w-[calc(100%-(--spacing(12)))] max-w-md border-e",
+              "w-[calc(100%-(--spacing(12)))] max-w-md border-e data-ending-style:-translate-x-8 data-starting-style:-translate-x-8",
             side === "right" &&
               "col-start-2 w-[calc(100%-(--spacing(12)))] max-w-md border-s data-ending-style:translate-x-8 data-starting-style:translate-x-8",
             variant === "inset" &&
               "before:hidden sm:rounded-2xl sm:border sm:before:rounded-[calc(var(--radius-2xl)-1px)] sm:**:data-[slot=sheet-footer]:rounded-b-[calc(var(--radius-2xl)-1px)]",
             instant &&
-              "transition-none! will-change-auto! data-ending-style:translate-x-0! data-starting-style:translate-x-0! data-ending-style:translate-y-0! data-starting-style:translate-y-0! data-ending-style:opacity-100! data-starting-style:opacity-100!",
-            className,
+              "transition-none! will-change-auto! data-ending-style:translate-x-0! data-ending-style:translate-y-0! data-ending-style:opacity-100! data-starting-style:translate-x-0! data-starting-style:translate-y-0! data-starting-style:opacity-100!",
+            className
           )}
           data-slot="sheet-popup"
           render={keepMounted ? undefined : renderRetainedPopup}
@@ -154,7 +175,7 @@ function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       className={cn(
         "flex flex-col gap-2 p-6 in-[[data-slot=sheet-popup]:has([data-slot=sheet-panel])]:pb-3 max-sm:pb-4",
-        className,
+        className
       )}
       data-slot="sheet-header"
       {...props}
@@ -165,14 +186,17 @@ function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
 function SheetTitle({ className, ...props }: SheetPrimitive.Title.Props) {
   return (
     <SheetPrimitive.Title
-      className={cn("font-semibold text-xl leading-snug", className)}
+      className={cn("text-xl leading-snug font-semibold", className)}
       data-slot="sheet-title"
       {...props}
     />
   );
 }
 
-function SheetDescription({ className, ...props }: SheetPrimitive.Description.Props) {
+function SheetDescription({
+  className,
+  ...props
+}: SheetPrimitive.Description.Props) {
   return (
     <SheetPrimitive.Description
       className={cn("text-muted-foreground text-sm", className)}

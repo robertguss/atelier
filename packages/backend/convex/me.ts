@@ -1,5 +1,5 @@
-import { query } from './_generated/server';
-import { getOwner, getUser } from './lib/auth';
+import { query } from "./_generated/server";
+import { getOwner, getUser } from "./lib/auth";
 
 // The phone's first proof that Clerk → Convex auth works end to end.
 export const get = query({

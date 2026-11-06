@@ -6,33 +6,41 @@
 // (https://github.com/pingdotgg/t3code). Copyright (c) 2026 T3 Tools Inc.
 // MIT License; see THIRD_PARTY_NOTICES.md.
 
-import { api } from '@atelier/backend/api';
-import { ClerkProvider, SignIn, SignUp, useAuth, useClerk, useUser } from '@clerk/react';
-import { ConvexReactClient, useConvexAuth, useMutation } from 'convex/react';
-import { ConvexProviderWithClerk } from 'convex/react-clerk';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Spinner } from '~/components/ui/spinner';
+import { api } from "@atelier/backend/api";
+import {
+  ClerkProvider,
+  SignIn,
+  SignUp,
+  useAuth,
+  useClerk,
+  useUser,
+} from "@clerk/react";
+import { ConvexReactClient, useConvexAuth, useMutation } from "convex/react";
+import { ConvexProviderWithClerk } from "convex/react-clerk";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
-const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ?? '';
-const convexUrl = import.meta.env.VITE_CONVEX_URL ?? '';
+import { Spinner } from "~/components/ui/spinner";
+
+const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ?? "";
+const convexUrl = import.meta.env.VITE_CONVEX_URL ?? "";
 
 const appearance = {
   // index.css orders this layer below components and utilities.
-  cssLayerName: 'clerk',
+  cssLayerName: "clerk",
   variables: {
-    borderRadius: '0.5rem',
-    colorPrimary: 'var(--primary)',
-    colorPrimaryForeground: 'var(--primary-foreground)',
-    colorDanger: 'var(--error)',
-    colorSuccess: 'var(--success)',
-    colorWarning: 'var(--warning)',
-    colorNeutral: 'var(--contrast-foreground)',
-    colorForeground: 'var(--contrast-foreground)',
-    colorMutedForeground: 'var(--contrast-muted-foreground)',
-    colorBackground: 'var(--card)',
-    colorInputForeground: 'var(--contrast-foreground)',
-    colorInput: 'var(--secondary)',
-    colorRing: 'var(--ring)',
+    borderRadius: "0.5rem",
+    colorPrimary: "var(--primary)",
+    colorPrimaryForeground: "var(--primary-foreground)",
+    colorDanger: "var(--error)",
+    colorSuccess: "var(--success)",
+    colorWarning: "var(--warning)",
+    colorNeutral: "var(--contrast-foreground)",
+    colorForeground: "var(--contrast-foreground)",
+    colorMutedForeground: "var(--contrast-muted-foreground)",
+    colorBackground: "var(--card)",
+    colorInputForeground: "var(--contrast-foreground)",
+    colorInput: "var(--secondary)",
+    colorRing: "var(--ring)",
   },
 };
 
@@ -40,7 +48,9 @@ let convex: ConvexReactClient | null = null;
 
 export function ClerkShell({ children }: { children: ReactNode }) {
   if (!publishableKey || !convexUrl) {
-    throw new Error('Set VITE_CLERK_PUBLISHABLE_KEY and VITE_CONVEX_URL in apps/web/.env.local');
+    throw new Error(
+      "Set VITE_CLERK_PUBLISHABLE_KEY and VITE_CONVEX_URL in apps/web/.env.local"
+    );
   }
   convex ??= new ConvexReactClient(convexUrl);
   return (
@@ -69,7 +79,7 @@ function EnsureUser({ children }: { children: ReactNode }) {
     if (started.current) return;
     started.current = true;
     ensure()
-      .catch((error: unknown) => console.error('users.ensure failed', error))
+      .catch((error: unknown) => console.error("users.ensure failed", error))
       .finally(() => setEnsured(true));
   }, [isAuthenticated, ensure]);
 
@@ -101,11 +111,25 @@ export function useSignOut(): () => Promise<void> {
 // ticket itself, so an invited address can sign up while sign-up is restricted.
 export function SignInPanel() {
   const params = new URLSearchParams(window.location.search);
-  const ticket = params.get('__clerk_ticket');
-  const status = params.get('__clerk_status');
+  const ticket = params.get("__clerk_ticket");
+  const status = params.get("__clerk_status");
   const returnTo = window.location.pathname;
-  if (ticket && (status === 'sign_up' || status === null)) {
-    return <SignUp routing="hash" oauthFlow="redirect" forceRedirectUrl={returnTo} signInForceRedirectUrl={returnTo} />;
+  if (ticket && (status === "sign_up" || status === null)) {
+    return (
+      <SignUp
+        routing="hash"
+        oauthFlow="redirect"
+        forceRedirectUrl={returnTo}
+        signInForceRedirectUrl={returnTo}
+      />
+    );
   }
-  return <SignIn routing="hash" oauthFlow="redirect" forceRedirectUrl={returnTo} signUpForceRedirectUrl={returnTo} />;
+  return (
+    <SignIn
+      routing="hash"
+      oauthFlow="redirect"
+      forceRedirectUrl={returnTo}
+      signUpForceRedirectUrl={returnTo}
+    />
+  );
 }

@@ -12,11 +12,16 @@ let reducedMotion: MediaQueryList | null = null;
 
 function updateAnimation(animation: ObservedAnimation) {
   const running =
-    animation.intersecting && document.visibilityState === "visible" && !reducedMotion?.matches;
-  animation.element.style.setProperty("--visible-animation-state", running ? "running" : "paused");
+    animation.intersecting &&
+    document.visibilityState === "visible" &&
+    !reducedMotion?.matches;
+  animation.element.style.setProperty(
+    "--visible-animation-state",
+    running ? "running" : "paused"
+  );
   animation.element.style.setProperty(
     "--visible-animation-will-change",
-    running ? "transform" : "auto",
+    running ? "transform" : "auto"
   );
 }
 
@@ -24,7 +29,9 @@ function updateAnimations() {
   for (const animation of animations.values()) updateAnimation(animation);
 }
 
-export function observeVisibleAnimation(element: HTMLElement | SVGElement | null) {
+export function observeVisibleAnimation(
+  element: HTMLElement | SVGElement | null
+) {
   if (element === null) return;
   element.style.setProperty("--visible-animation-state", "paused");
   element.style.setProperty("--visible-animation-will-change", "auto");

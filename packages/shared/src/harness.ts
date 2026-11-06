@@ -2,10 +2,10 @@
 // Adapters keep raw harness events in the turn's transcript file and yield
 // these normalized events.
 
-export const HARNESS_IDS = ['claude', 'codex', 'pi'] as const;
+export const HARNESS_IDS = ["claude", "codex", "pi"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
-export type Reasoning = 'low' | 'medium' | 'high' | 'xhigh';
+export type Reasoning = "low" | "medium" | "high" | "xhigh";
 
 export interface McpServerSpec {
   name: string;
@@ -61,12 +61,17 @@ export type QuestionAnswer =
       handId: string;
       requestId: string;
       answeredBy: string;
-      via: 'card' | 'chat';
-      answers: { questionId: string; question: string; labels: string[]; freeText?: string }[];
+      via: "card" | "chat";
+      answers: {
+        questionId: string;
+        question: string;
+        labels: string[];
+        freeText?: string;
+      }[];
     }
   | { handId: string; requestId: string; noDecision: true; message: string };
 
-export type SteerOutcome = 'steered' | 'rejected';
+export type SteerOutcome = "steered" | "rejected";
 
 /**
  * The adapter replaces `steer` and `setEditsEnabled` with its own as soon as
@@ -82,14 +87,19 @@ export interface TurnInput {
 }
 
 export type HarnessEvent =
-  | { type: 'session'; sessionId: string }
-  | { type: 'text_delta'; text: string }
+  | { type: "session"; sessionId: string }
+  | { type: "text_delta"; text: string }
   /** `id` pairs a call with its result. `summary` is one line, never raw output. */
-  | { type: 'tool_call'; id: string; name: string; summary: string }
-  | { type: 'tool_result'; id: string; ok: boolean }
-  | { type: 'usage'; inputTokens: number; outputTokens: number; costUsd?: number }
-  | { type: 'final'; text: string }
-  | { type: 'error'; message: string; retryable: boolean };
+  | { type: "tool_call"; id: string; name: string; summary: string }
+  | { type: "tool_result"; id: string; ok: boolean }
+  | {
+      type: "usage";
+      inputTokens: number;
+      outputTokens: number;
+      costUsd?: number;
+    }
+  | { type: "final"; text: string }
+  | { type: "error"; message: string; retryable: boolean };
 
 export interface HarnessCapabilities {
   /** Whether the agent's own question prompt reaches the room as a card. */
@@ -100,5 +110,9 @@ export interface Harness {
   id: HarnessId;
   capabilities: HarnessCapabilities;
   version(): Promise<string>;
-  runTurn(req: TurnRequest, signal: AbortSignal, input: TurnInput): AsyncIterable<HarnessEvent>;
+  runTurn(
+    req: TurnRequest,
+    signal: AbortSignal,
+    input: TurnInput
+  ): AsyncIterable<HarnessEvent>;
 }

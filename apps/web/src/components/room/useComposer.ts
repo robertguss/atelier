@@ -1,9 +1,13 @@
-import { useState, type KeyboardEvent } from 'react';
-import { errorText } from './errors';
+import { useState, type KeyboardEvent } from "react";
+
+import { errorText } from "./errors";
 
 /** Draft, busy and error state for a composer. Enter sends; Shift+Enter and IME composition do not. */
-export function useComposer(send: (body: string, steer: boolean) => Promise<unknown>, blocked = false) {
-  const [draft, setDraft] = useState('');
+export function useComposer(
+  send: (body: string, steer: boolean) => Promise<unknown>,
+  blocked = false
+) {
+  const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -15,7 +19,7 @@ export function useComposer(send: (body: string, steer: boolean) => Promise<unkn
     try {
       await send(body, steer);
       // Keep anything typed while the send was in flight.
-      setDraft((current) => (current.trim() === body ? '' : current));
+      setDraft((current) => (current.trim() === body ? "" : current));
     } catch (e) {
       setError(errorText(e));
     }
@@ -23,7 +27,7 @@ export function useComposer(send: (body: string, steer: boolean) => Promise<unkn
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
     e.preventDefault();
     void submit();
   };

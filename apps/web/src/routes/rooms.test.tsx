@@ -1,65 +1,97 @@
-import { fireEvent, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { backend, resetBackend } from '~/test/backend';
-import { renderAt } from '~/test/render';
+import { fireEvent, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock('convex/react', async () => (await import('~/test/backend')).convexMock);
-vi.mock('~/auth/ClerkShell', async () => (await import('~/test/backend')).authMock);
+import { backend, resetBackend } from "~/test/backend";
+import { renderAt } from "~/test/render";
 
-const ROOM = 'room1';
+vi.mock(
+  "convex/react",
+  async () => (await import("~/test/backend")).convexMock
+);
+vi.mock(
+  "~/auth/ClerkShell",
+  async () => (await import("~/test/backend")).authMock
+);
+
+const ROOM = "room1";
 const notMember = () => {
-  throw new Error('Not a member of this room');
+  throw new Error("Not a member of this room");
 };
 
 function member(acceptedVersion: number | null) {
-  backend.queries['rooms:access'] = () => 'member';
-  backend.queries['members:notice'] = () => ({ currentVersion: 2, acceptedVersion });
-  backend.queries['rooms:get'] = () => ({ room: { _id: ROOM, name: 'Pricing plan' }, participants: [] });
+  backend.queries["rooms:access"] = () => "member";
+  backend.queries["members:notice"] = () => ({
+    currentVersion: 2,
+    acceptedVersion,
+  });
+  backend.queries["rooms:get"] = () => ({
+    room: { _id: ROOM, name: "Pricing plan" },
+    participants: [],
+  });
 }
 
 beforeEach(resetBackend);
 
-describe('room page', () => {
-  it('shows the join notice before the room and stores the accepted version', async () => {
+describe("room page", () => {
+  it("shows the join notice before the room and stores the accepted version", async () => {
     member(null);
     renderAt(`/rooms/${ROOM}`);
 
-    expect(await screen.findByText(/recorded permanently/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/recorded permanently/i)
+    ).toBeInTheDocument();
     expect(screen.getByText(/run on Robert.s machine/i)).toBeInTheDocument();
-    expect(screen.getByText(/files outside the room.s folder/i)).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Pricing plan' })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/files outside the room.s folder/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Pricing plan" })
+    ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /enter the room/i }));
-    expect(backend.mutations['members:acceptNotice']).toHaveBeenCalledWith({ roomId: ROOM, version: 2 });
+    fireEvent.click(screen.getByRole("button", { name: /enter the room/i }));
+    expect(backend.mutations["members:acceptNotice"]).toHaveBeenCalledWith({
+      roomId: ROOM,
+      version: 2,
+    });
   });
 
-  it('opens the room once the current notice is accepted', async () => {
+  it("opens the room once the current notice is accepted", async () => {
     member(2);
     renderAt(`/rooms/${ROOM}`);
-    expect(await screen.findByRole('heading', { name: 'Pricing plan' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Pricing plan" })
+    ).toBeInTheDocument();
     expect(screen.queryByText(/recorded permanently/i)).not.toBeInTheDocument();
   });
 
-  it('asks again when the stored notice version is older', async () => {
+  it("asks again when the stored notice version is older", async () => {
     member(1);
     renderAt(`/rooms/${ROOM}`);
-    expect(await screen.findByText(/the notice has changed/i)).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Pricing plan' })).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(/the notice has changed/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Pricing plan" })
+    ).not.toBeInTheDocument();
   });
 
   it("tells a non-member they don't have access instead of failing", async () => {
-    backend.queries['rooms:access'] = () => 'none';
-    backend.queries['members:notice'] = notMember;
-    backend.queries['rooms:get'] = notMember;
+    backend.queries["rooms:access"] = () => "none";
+    backend.queries["members:notice"] = notMember;
+    backend.queries["rooms:get"] = notMember;
     renderAt(`/rooms/${ROOM}`);
-    expect(await screen.findByRole('heading', { name: "You don't have access" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "You don't have access" })
+    ).toBeInTheDocument();
   });
 
-  it('tells a removed member they no longer have access', async () => {
-    backend.queries['rooms:access'] = () => 'removed';
-    backend.queries['members:notice'] = notMember;
-    backend.queries['rooms:get'] = notMember;
+  it("tells a removed member they no longer have access", async () => {
+    backend.queries["rooms:access"] = () => "removed";
+    backend.queries["members:notice"] = notMember;
+    backend.queries["rooms:get"] = notMember;
     renderAt(`/rooms/${ROOM}`);
-    expect(await screen.findByRole('heading', { name: 'You no longer have access' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "You no longer have access" })
+    ).toBeInTheDocument();
   });
 });

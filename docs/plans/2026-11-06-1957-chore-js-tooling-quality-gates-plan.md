@@ -124,6 +124,7 @@ As a result, agent-written code reaches review with inconsistent style, unchecke
   - Keep `typescript` at `~6.0.3` wherever init or upgrade touches it.
 
   Generating the config keeps it upgradeable with `ultracite upgrade`, and the corrections are small. Governs R1–R3, R11, R13.
+
 - KTD3. **Accept Ultracite's oxfmt defaults:** double quotes, 80 columns, `trailingComma: "es5"`, sorted imports, Tailwind class sorting and sorted `package.json`.
   - The code currently uses single quotes in a dense style, so nearly every line changes.
   - The reformat lands as its own commit, recorded in `.git-blame-ignore-revs` (U2). That keeps `git blame` useful and keeps the reformat separate from behavior-adjacent lint fixes (U3).
@@ -143,6 +144,7 @@ As a result, agent-written code reaches review with inconsistent style, unchecke
   - It duplicates TypeScript's own checks.
 
   Each disable carries a one-line reason in the config. A few inline disable comments are acceptable when a rule is right in general but wrong at one site, and each needs a reason.
+
 - KTD7. **Vitest layout.** Each workspace gets its own `vitest.config.ts` and a `test` script, run through turbo so results cache per package.
   - The runner's `smoke.test.ts` becomes `smoke.integration.test.ts`. It is excluded from the default config and run by a separate `test:integration` script, which is not a turbo `test` dependency.
   - Coverage uses `@vitest/coverage-v8` at the vitest version, through a per-workspace `test:coverage` script and a root `coverage` turbo task.
@@ -155,6 +157,7 @@ As a result, agent-written code reaches review with inconsistent style, unchecke
   - lefthook installs through a root `prepare` script, with `lefthook` allowed in `pnpm-workspace.yaml` `allowBuilds`.
 
   (session-settled: user-approved — chosen over running everything on pre-commit or formatting only: fast commits with a full gate before code leaves the machine.) Governs R11, R12.
+
 - KTD10. **Agent hooks are committed project files.**
   - Claude Code gets a PostToolUse hook on `Write|Edit` in root `.claude/settings.json`.
   - Codex gets a PostToolUse hook on `apply_patch` in `.codex/hooks.json`.
@@ -199,11 +202,13 @@ flowchart TB
 **Dependencies:** none. Start from a new branch cut from `feat/shared-rooms` (KTD8).
 
 **Files:**
+
 - Create: `oxlint.config.ts`, `oxfmt.config.ts`, `apps/mobile/oxlint.config.ts`, `apps/web/oxlint.config.ts`, `packages/backend/tsconfig.json`
 - Modify: `package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml`, `turbo.json`, `apps/mobile/package.json`, `apps/web/package.json`, `packages/backend/package.json`, `packages/shared/package.json`, `runner/package.json`
 - Delete: `apps/mobile/eslint.config.js`
 
 **Approach:**
+
 1. Run Ultracite init with the KTD2 flags, then apply the KTD2 corrections: bump oxfmt to latest 0.x and keep `typescript` at `~6.0.3`.
 2. Add `"expo": { "install": { "exclude": [...] } }` to `apps/mobile/package.json` only if `expo install --check` or `expo-doctor` flags a tool this work installs.
 3. Write the workspace oxlint configs (KTD4) and `packages/backend/tsconfig.json` (KTD5).
@@ -223,12 +228,14 @@ flowchart TB
 **Execution note:** this unit is packaging and config. Prove it with install and a first `check` run (expected to fail on formatting until U2), not with unit tests.
 
 **Patterns to follow:**
+
 - rat-stack's `oxlint.config.ts` (`extends: [core]`, `options.typeAware`) and `oxfmt.config.ts` (spread of `ultracite/oxfmt` plus `ignorePatterns`).
 - Ultracite's shared ignore list, which already covers `**/_generated`, `**/.expo` and `**/.turbo`.
 
 **Test expectation:** none. This unit only changes tooling and configuration.
 
 **Verification:**
+
 - `pnpm install` succeeds with no blocked-build warning for lefthook.
 - `git config core.hooksPath` or `.git/hooks` shows lefthook installed.
 - `ultracite doctor` reports a healthy setup.
@@ -244,10 +251,12 @@ flowchart TB
 **Dependencies:** U1
 
 **Files:**
+
 - Modify: every formattable tracked file outside ignored paths.
 - Create: `.git-blame-ignore-revs`, containing the reformat commit's SHA. It is added in a follow-up commit, because a commit cannot contain its own SHA.
 
 **Approach:**
+
 1. Run the formatter only. Do not apply lint fixes, so this commit stays a pure, reviewable reformat.
 2. Make the reformat commit with lefthook disabled (`LEFTHOOK=0`). U1's `prepare` script has already installed the pre-commit hook, and that hook would apply lint fixes to the staged files.
 3. Leave `convex/_generated/**` and `apps/web/src/routeTree.gen.ts` untouched. Both are ignored generated output.
@@ -256,6 +265,7 @@ flowchart TB
 **Test expectation:** none. Formatting only. The existing test suites passing after the reformat is the behavior check.
 
 **Verification:**
+
 - The formatter's check mode reports clean.
 - Typecheck still passes, and the existing backend, web and runner tests pass unchanged.
 - The commit diff has no token-level changes beyond whitespace, quotes, commas, import order and Tailwind class order.
@@ -269,10 +279,12 @@ flowchart TB
 **Dependencies:** U2
 
 **Files:**
+
 - Modify: source files across `runner/src/**`, `packages/backend/convex/**`, `packages/backend/tests/**`, `apps/web/src/**`, `apps/mobile/src/**`, as the lint output dictates.
 - Modify: `oxlint.config.ts` and the workspace oxlint configs, for KTD6 disables only.
 
 **Approach:**
+
 1. Apply safe auto-fixes first, as their own commit.
 2. Fix the remaining errors by hand, grouped by rule family, so a reviewer can follow each kind of change.
 3. Handle floating and misused promises explicitly:
@@ -284,13 +296,16 @@ flowchart TB
 **Execution note:** run the affected workspace's existing tests after each rule-family batch. Where a fix touches runner adapter or Convex mutation logic that the existing tests do not cover, add a characterization test before changing it.
 
 **Patterns to follow:**
+
 - `LEARNINGS.md` "Independent review" notes. Cancellation polling must start only after the start mutation commits, so promise fixes in `runner/src/index.ts` and `runner/src/turns.ts` must keep that order.
 
 **Test scenarios:**
+
 - Existing `runner/src/turns.test.ts`, `review.test.ts`, the adapter tests and every `packages/backend/tests/*.test.ts` pass unchanged after the fixes. These suites are the behavior lock.
 - Characterization, added only where a promise or assertion fix touches untested runner or Convex code: the touched function's observable outcome is the same before and after the fix. For example, a rejected harness start still marks the turn failed, and nothing is left unhandled.
 
 **Verification:**
+
 - The full check reports zero errors and zero warnings.
 - Every config disable has a reason next to it.
 - The disable count is small enough that a reviewer can read each one.
@@ -304,6 +319,7 @@ flowchart TB
 **Dependencies:** U3. The migrated tests must pass lint.
 
 **Files:**
+
 - Create: `runner/vitest.config.ts`, `packages/backend/vitest.config.ts`, `packages/shared/vitest.config.ts`, `apps/mobile/vitest.config.ts`
 - Create: `apps/mobile/src/lib/notification-route.ts` and `apps/mobile/src/lib/notification-route.test.ts`
 - Create: `apps/mobile/src/lib/review-participants.ts` and `apps/mobile/src/lib/review-participants.test.ts`
@@ -314,6 +330,7 @@ flowchart TB
 - Modify: the workspace `package.json` files, for `test`, `test:coverage` and `test:integration` scripts.
 
 **Approach:**
+
 1. Translate the runner tests from `node:test` and `node:assert` to vitest:
    - `mock.timers` becomes `vi.useFakeTimers` / `vi.advanceTimersByTime`.
    - `mock.fn` becomes `vi.fn`.
@@ -331,10 +348,12 @@ flowchart TB
 **Execution note:** migrate one runner test file at a time and confirm its test count matches the `node --test` run before deleting the old form.
 
 **Patterns to follow:**
+
 - `apps/web/vite.config.ts` test block (`include`, `setupFiles`) for config shape.
 - `packages/backend/tests/review.test.ts` for vitest style in this repo.
 
 **Test scenarios:**
+
 - Migration parity: each runner test file reports the same number of tests under vitest as under `node --test`, and all pass.
 - `turns.test.ts` timer-driven cases (minute-based steering and queue timeouts) pass with vitest fake timers, and the timers are reset after each test.
 - The default runner `test` run does not execute the smoke test. `test:integration` executes it, and it passes on a machine with pi and codex installed.
@@ -356,10 +375,12 @@ flowchart TB
 **Dependencies:** U4. Test files and new lib modules must exist so Knip sees them as used.
 
 **Files:**
+
 - Create: `knip.json`
 - Modify: source files and `package.json` files, as the findings dictate.
 
 **Approach:**
+
 1. Configure one `workspaces` entry per package.
 2. Give the backend `typescript.config: ["convex/tsconfig.json"]`.
 3. Add `runner/src/adapters/pi-cli.mjs` as a runner entry if Knip does not infer it. The Pi adapter launches it by path.
@@ -379,10 +400,12 @@ flowchart TB
 **Dependencies:** U5. The full gate must already be green, or the first push blocks.
 
 **Files:**
+
 - Create or modify: `lefthook.yml`
 - Modify: `package.json` (`prepare` script, if U1 has not already added it)
 
 **Approach:**
+
 1. Keep Ultracite's generated pre-commit job (KTD9).
 2. Add a pre-push job that runs the root `check` script, then the turbo `typecheck` and `test` tasks (KTD9).
 3. Do not add the integration tests to either hook (R7).
@@ -390,6 +413,7 @@ flowchart TB
 **Test expectation:** none. This is hook configuration, verified by exercising the hooks.
 
 **Verification:**
+
 - Committing a deliberately misformatted staged file results in a commit containing the formatted file.
 - Pushing with a type error, a lint error or a failing unit test is rejected. Check each once, then revert.
 - pre-commit on a typical small change finishes in a few seconds.
@@ -403,16 +427,19 @@ flowchart TB
 **Dependencies:** U3. The repo must be lint-clean so hook feedback reflects only the agent's own edit.
 
 **Files:**
+
 - Create or modify: `.claude/settings.json` (repo root)
 - Create or modify: `.codex/hooks.json`
 
 **Approach:**
+
 1. Keep the hook configs that Ultracite generated in U1 (KTD10), and check that the command uses `pnpm exec ultracite fix --hook`.
 2. Do not merge or move `apps/mobile/.claude/settings.json`.
 
 **Test expectation:** none. This is agent configuration, verified live.
 
 **Verification:**
+
 - In a Claude Code session at the repo root, an Edit that writes single-quoted, misformatted code leaves the file formatted afterwards. An edit that introduces an unfixable lint error, such as an unused variable, produces hook feedback the agent sees.
 - The same works in a Codex session after the `.codex/` folder is trusted.
 
@@ -425,9 +452,11 @@ flowchart TB
 **Dependencies:** U6, U7
 
 **Files:**
+
 - Modify: `AGENTS.md`, `LEARNINGS.md`, `apps/mobile/AGENTS.md`
 
 **Approach:**
+
 1. In `AGENTS.md`, add a short tooling section:
    - `pnpm check`, `pnpm fix`, `pnpm test`, `pnpm coverage`, and `pnpm --filter @atelier/runner test:integration`.
    - What the pre-commit and pre-push hooks do, and that agents must never bypass them.
@@ -447,16 +476,16 @@ flowchart TB
 
 ## Verification Contract
 
-| Gate | Command (repo root) | Must show |
-|---|---|---|
-| Format and lint | `pnpm check` | Ultracite check (oxlint with type-aware rules, oxfmt check) and Knip all clean |
-| Typecheck | `pnpm typecheck` | `tsc` 6.0.3 passes in every workspace |
-| Unit tests | `pnpm test` | vitest passes in every workspace with no external CLI |
-| Integration | `pnpm --filter @atelier/runner test:integration` | Smoke test passes on a machine with pi and codex installed |
-| Coverage | `pnpm coverage` | Per-workspace reports written under each `coverage/` |
-| Hooks | commit and push exercises from U6 | pre-commit re-stages fixes, and pre-push blocks each failing gate |
-| Agent hooks | live edits from U7 | Claude and Codex edits are fixed, and leftover issues are reported |
-| App still runs | `LEARNINGS.md` Expo Go flow, `convex dev`, runner start | Mobile loads in Expo Go, Convex deploys and the runner connects |
+| Gate            | Command (repo root)                                     | Must show                                                                      |
+| --------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Format and lint | `pnpm check`                                            | Ultracite check (oxlint with type-aware rules, oxfmt check) and Knip all clean |
+| Typecheck       | `pnpm typecheck`                                        | `tsc` 6.0.3 passes in every workspace                                          |
+| Unit tests      | `pnpm test`                                             | vitest passes in every workspace with no external CLI                          |
+| Integration     | `pnpm --filter @atelier/runner test:integration`        | Smoke test passes on a machine with pi and codex installed                     |
+| Coverage        | `pnpm coverage`                                         | Per-workspace reports written under each `coverage/`                           |
+| Hooks           | commit and push exercises from U6                       | pre-commit re-stages fixes, and pre-push blocks each failing gate              |
+| Agent hooks     | live edits from U7                                      | Claude and Codex edits are fixed, and leftover issues are reported             |
+| App still runs  | `LEARNINGS.md` Expo Go flow, `convex dev`, runner start | Mobile loads in Expo Go, Convex deploys and the runner connects                |
 
 ---
 
@@ -486,13 +515,13 @@ flowchart TB
 
 ## Risks & Dependencies
 
-| Risk | Mitigation |
-|---|---|
-| tsgolint rejects or mis-handles TS 6.0.3 projects | U1 verifies type-aware rules fire before any reformat. If they don't, stop per the Goal Capsule rather than silently dropping R2 |
+| Risk                                                                               | Mitigation                                                                                                                                                                    |
+| ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| tsgolint rejects or mis-handles TS 6.0.3 projects                                  | U1 verifies type-aware rules fire before any reformat. If they don't, stop per the Goal Capsule rather than silently dropping R2                                              |
 | The reformat conflicts with work in flight on `feat/shared-rooms` or room-document | Land before room-document starts (KTD8). If shared-rooms receives more commits first, rebase this branch and re-run the formatter rather than hand-resolving format conflicts |
-| Lint fixes alter runner or Convex behavior | Rule-family commits, existing suites as the behavior lock, and characterization tests before touching untested logic (U3) |
-| `ultracite upgrade` later re-pins oxfmt below the installed version | Recorded in `LEARNINGS.md` (U8) |
-| Pre-push becomes slow as tests grow | Turbo caches per-package results. Revisit if pushes exceed about a minute |
+| Lint fixes alter runner or Convex behavior                                         | Rule-family commits, existing suites as the behavior lock, and characterization tests before touching untested logic (U3)                                                     |
+| `ultracite upgrade` later re-pins oxfmt below the installed version                | Recorded in `LEARNINGS.md` (U8)                                                                                                                                               |
+| Pre-push becomes slow as tests grow                                                | Turbo caches per-package results. Revisit if pushes exceed about a minute                                                                                                     |
 
 ---
 

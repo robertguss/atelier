@@ -170,6 +170,7 @@ flowchart LR
 - After that session, the ledger lets a later reader see each answer the agents received alongside the human discussion that produced it.
 
 <!-- ce-section: work-relationships -->
+
 ### How This Work Fits Together
 
 This plan covers shared rooms: membership, the two-pane web room, queued and steered messages, question cards, linked decisions and the edit switch. The breakdown below is the current understanding, not a committed roadmap.
@@ -239,6 +240,7 @@ This plan covers shared rooms: membership, the two-pane web room, queued and ste
   2. an attribution envelope for each human message: author, role, send time, and whether it was queued or steered. Envelope-looking text in a body is escaped.
 
   The module lives in the backend, not `packages/shared`, because the backend does not depend on `@atelier/shared` and the runner never sees Clerk identity. Governs R9, R11, R30.
+
 - KTD5. **The queue is enforced in Convex: one active ordinary turn per agent, and queued messages drain together as one prompt.** Messages sent to an agent are stored as `messages` rows with a delivery state (`queued`, `steering`, `steered`, `delivered`, `answeredCard`, `cancelled`) and the turn that delivered them. `answeredCard` is the terminal state of a message that answered an open card (R25).
   - A `dispatchNext(participant)` helper runs inside `send` (when the agent is idle), inside every terminal transition (`finish`, `fail`, `cancel`, lease reclaim), and inside `steerResult(rejected)`.
   - It creates one turn whose prompt is the context block plus every queued message, each in its envelope, in send order. A `steering` message whose target turn is already terminal counts as queued.
@@ -247,6 +249,7 @@ This plan covers shared rooms: membership, the two-pane web room, queued and ste
   - Review turns stay outside the queue. In rooms with a member, a review or decision follow-up is never batched with other messages (KTD13).
 
   Draining one message per turn would let the agent act on a message before it sees the correction queued behind it. Governs R12, R13, R27.
+
 - KTD6. **Question cards reuse and extend the `hands` table.** A card holds the harness request id, 1–4 questions (header, text, options, multi-select, free-text allowed), status (`raised`, `answered`, `cancelled`, `expired`), the answers, who answered, when, and how (`card` or `chat`). The turn records `waitingOnHandId`, and its status stays `running`, so the phone and existing status checks keep working. A card is answered as a whole in one first-wins mutation. Each question on it records its own decision, and the `decision.recorded` payload carries the ids of the team messages in the card's window, never their text. Governs R16–R19, R25, R26.
 - KTD7. **The runner receives steer, answer, settings and interrupt as `commands` with a payload, routed to the running turn's input channel.** The runner already subscribes to its pending commands. Control commands (every type except `run_turn`) take their own `claim` branch:
   - The branch requires the target turn to be `running` rather than `queued`.
@@ -259,6 +262,7 @@ This plan covers shared rooms: membership, the two-pane web room, queued and ste
   - `setEditsEnabled(on)`.
 
   `HarnessEvent` gains `question` events and id-correlated `tool_call` and `tool_result` events. A per-turn subscription would duplicate the existing claim and lease path. Governs R14–R17, R21.
+
 - KTD8. **Turn lifetime and liveness:**
   - The 30-minute turn deadline pauses while a card is open.
   - A separate 2-hour card ceiling closes the card as `expired` and tells the agent no decision was made (R26).
@@ -268,6 +272,7 @@ This plan covers shared rooms: membership, the two-pane web room, queued and ste
   - Members can read the runner's `lastHeartbeatAt`. The web app treats more than 45 s without a heartbeat as offline, and `send` refuses with the same rule.
 
   Governs R26, R27.
+
 - KTD9. **What the edit switch does in each harness:**
   - **Claude.** `permissionMode: 'default'` in both states. Not `acceptEdits`, which would auto-approve `rm`, `mv`, `cp` and `sed` in the folder without Robert's allow rules (R21). A runner-owned `canUseTool`:
     - turns `AskUserQuestion` into a card;
@@ -275,6 +280,7 @@ This plan covers shared rooms: membership, the two-pane web room, queued and ste
     - denies everything else that reaches it.
 
     Every unapproved edit reaches the callback, which reads the switch live through `setEditsEnabled`, so switching off applies immediately with no mode change.
+
   - **Codex.** Switch off: today's read-only sandbox with `approvalPolicy: 'never'`. Switch on: `workspaceWrite` with `writableRoots: [cwd]`, network off, and `approvalPolicy: 'untrusted'`. The runner declines command approvals and accepts file-change approvals under `cwd`.
   - **Pi.** Switch on adds `edit,write` to `--tools`, plus a runner-shipped extension that blocks edits outside `cwd`.
   - **Protected paths, all three harnesses.** Even inside `cwd`, edits are denied to harness and repository control files: `.claude/`, `.mcp.json`, `.codex/`, `.pi/`, `.agents/` and `.git/`. Paths are checked after resolving symlinks. Otherwise an agent could write an allow rule, hook or extension and run commands next turn, which breaks R21's command limit. For Codex, U1 confirms that `workspaceWrite` keeps these read-only or routes them through file-change approval. If neither holds, stop and ask Robert before enabling Codex edits.
@@ -282,6 +288,7 @@ This plan covers shared rooms: membership, the two-pane web room, queued and ste
   - Each turn snapshots the switch state for audit.
 
   `dontAsk` cannot stay, because it denies `AskUserQuestion` before the callback runs. Governs R16, R21.
+
 - KTD10. **The web app copies t3code's UI layer onto Convex.**
   - **Stack.** A Vite + React 19 + TypeScript SPA with file-based TanStack Router and Tailwind v4. shadcn `base-mira` on Base UI (`components.json` with the `@coss` registry), lucide icons, `react-markdown` + `remark-gfm` with t3code's incremental streaming split, and stock `@legendapp/list` for the agent timeline. A plain textarea composer.
   - **Data.** Convex hooks through `ConvexProviderWithClerk`.
@@ -289,11 +296,13 @@ This plan covers shared rooms: membership, the two-pane web room, queued and ste
   - **Wrappable later.** Clerk sits behind one shell module, the build is fully static, config comes from `VITE_*` env, and there are no popups or host-specific URLs, as t3code does for its Electron shell.
 
   Stock Vite is used rather than t3code's `vite-plus` to match the repo's existing toolchain. Governs R5, R6, R22, R24.
+
 - KTD11. **Both apps stay on the current dev Convex deployment and Clerk dev instance, and the web app deploys to Vercel.** (session-settled: user-directed — chosen over moving both apps to production with a domain and data migration now: it works for a few invited teammates with no migration, and keeps the phone and web on one database.) t3code also deploys its web app to Vercel. A `vercel.json` SPA rewrite and a turbo `build` task are added. Governs R23.
 - KTD12. **Persist streamed text and tool activity after a turn ends.** `partialText` is kept on finish instead of being replaced, and tool activity is stored as small `turnItems` rows (name, one-line summary, ok, sequence). Raw tool output stays on the runner's disk, as the spec's data split requires. Governs R7, R29.
 - KTD13. **Owner-only isolation is enforced in queries, using the role from `requireMember`.** For members, the agent-pane query excludes ritual-linked messages and turns, revealed review answers, and turns whose prompt came from a review follow-up. It never returns `turns.prompt`. All `rituals.*`, `push.*` and `runners.list` stay `requireOwner`. The single-human `.find(p => p.kind === 'human')` calls resolve the caller's own participant instead.
 
   Hiding follow-ups in queries isn't enough, because the agent remembers them. In rooms with a member, a review or decision follow-up runs alone, on a separate harness session stored on its ritual and never written back to the participant's ordinary session id. Solo rooms keep today's behavior. (session-settled: user-approved — chosen over letting follow-ups continue the ordinary session with the join notice warning that review content can surface: keeps reviews Robert-only, at the cost of follow-up context not carrying into the agent's ordinary conversation in shared rooms.) Governs R3, R9.
+
 - KTD14. **Harness capability gaps are decided by a spike (U1), with fixed rules for what follows:**
   - **Claude steering.** If a message pushed with `priority: 'now'` mid-turn is folded in without ending the turn, steering uses it. Otherwise stop and ask Robert, per the Goal Capsule.
   - **Codex question cards.** If `requestUserInput` only fires in Plan collaboration mode, Codex is not switched into Plan mode. It asks in plain text, and the room marks it as unable to raise cards (R16).
@@ -377,23 +386,23 @@ sequenceDiagram
 
 ## Implementation Units
 
-| U-ID | Title | Files touched (primary) | Depends on |
-|---|---|---|---|
-| U1 | Harness capability spike | `runner/scripts/spikes/*`, `LEARNINGS.md` | — |
-| U2 | Identity, membership and invites | `convex/schema.ts`, `convex/lib/auth.ts`, `convex/members.ts`, `convex/invites.ts`, `convex/me.ts`, `convex/rooms.ts` | — |
-| U3 | Owner-only isolation and multi-human fixes | `convex/messages.ts`, `convex/rituals.ts`, `convex/rooms.ts` | U2 |
-| U4 | Team chat backend | `convex/team.ts`, `convex/schema.ts` | U2 |
-| U5 | Agent queue, context block, liveness | `convex/agent.ts`, `convex/lib/prompt.ts`, `convex/lib/dispatch.ts`, `convex/runner.ts`, `convex/crons.ts` | U2, U3 |
-| U6 | Question cards and decisions backend | `convex/hands.ts`, `convex/schema.ts`, `convex/runner.ts` | U5 |
-| U7 | Edit switch backend | `convex/rooms.ts`, `convex/runner.ts` | U5 |
-| U8 | Runner live channel and harness interface | `packages/shared/src/harness.ts`, `runner/src/turns.ts`, `runner/src/index.ts` | U5, U6, U7 |
-| U9 | Claude adapter | `runner/src/adapters/claude.ts` | U1, U8 |
-| U10 | Codex adapter | `runner/src/adapters/codex.ts` | U1, U8 |
-| U11 | Pi adapter | `runner/src/adapters/pi.ts`, `runner/src/adapters/pi-guard-extension.*` | U1, U8 |
-| U12 | Web app scaffold | `apps/web/*`, `turbo.json`, `pnpm-workspace.yaml` | U2 |
-| U13 | Web room UI | `apps/web/src/routes/*`, `apps/web/src/components/*` | U4, U5, U6, U7, U12 |
-| U14 | Phone compatibility fixes | `apps/mobile/src/app/room/[id].tsx`, `apps/mobile/src/app/index.tsx` | U2, U5, U6 |
-| U15 | Docs and operational notes | `docs/v0-spec.md`, `docs/independent-review.md`, `LEARNINGS.md`, `docs/shared-rooms.md` | all |
+| U-ID | Title                                      | Files touched (primary)                                                                                               | Depends on          |
+| ---- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| U1   | Harness capability spike                   | `runner/scripts/spikes/*`, `LEARNINGS.md`                                                                             | —                   |
+| U2   | Identity, membership and invites           | `convex/schema.ts`, `convex/lib/auth.ts`, `convex/members.ts`, `convex/invites.ts`, `convex/me.ts`, `convex/rooms.ts` | —                   |
+| U3   | Owner-only isolation and multi-human fixes | `convex/messages.ts`, `convex/rituals.ts`, `convex/rooms.ts`                                                          | U2                  |
+| U4   | Team chat backend                          | `convex/team.ts`, `convex/schema.ts`                                                                                  | U2                  |
+| U5   | Agent queue, context block, liveness       | `convex/agent.ts`, `convex/lib/prompt.ts`, `convex/lib/dispatch.ts`, `convex/runner.ts`, `convex/crons.ts`            | U2, U3              |
+| U6   | Question cards and decisions backend       | `convex/hands.ts`, `convex/schema.ts`, `convex/runner.ts`                                                             | U5                  |
+| U7   | Edit switch backend                        | `convex/rooms.ts`, `convex/runner.ts`                                                                                 | U5                  |
+| U8   | Runner live channel and harness interface  | `packages/shared/src/harness.ts`, `runner/src/turns.ts`, `runner/src/index.ts`                                        | U5, U6, U7          |
+| U9   | Claude adapter                             | `runner/src/adapters/claude.ts`                                                                                       | U1, U8              |
+| U10  | Codex adapter                              | `runner/src/adapters/codex.ts`                                                                                        | U1, U8              |
+| U11  | Pi adapter                                 | `runner/src/adapters/pi.ts`, `runner/src/adapters/pi-guard-extension.*`                                               | U1, U8              |
+| U12  | Web app scaffold                           | `apps/web/*`, `turbo.json`, `pnpm-workspace.yaml`                                                                     | U2                  |
+| U13  | Web room UI                                | `apps/web/src/routes/*`, `apps/web/src/components/*`                                                                  | U4, U5, U6, U7, U12 |
+| U14  | Phone compatibility fixes                  | `apps/mobile/src/app/room/[id].tsx`, `apps/mobile/src/app/index.tsx`                                                  | U2, U5, U6          |
+| U15  | Docs and operational notes                 | `docs/v0-spec.md`, `docs/independent-review.md`, `LEARNINGS.md`, `docs/shared-rooms.md`                               | all                 |
 
 ### U1. Harness capability spike
 
@@ -404,10 +413,12 @@ sequenceDiagram
 **Dependencies:** None.
 
 **Files:**
+
 - Create: `runner/scripts/spikes/claude-steer.ts`, `runner/scripts/spikes/codex-input.ts`, `runner/scripts/spikes/pi-guard.ts`
 - Modify: `LEARNINGS.md`
 
 **Approach:**
+
 1. **Claude.** Use a streaming-input `query()` in a scratch directory. While a long tool call runs, push an `SDKUserMessage` with `priority: 'now'`, and observe whether it folds in without a `result`. Separately, check that `AskUserQuestion` and an unapproved in-folder Write both reach `canUseTool` under `default` mode, and that a returned `updatedInput.answers` resumes the turn.
 2. **Codex.** Initialize with `experimentalApi`. Check whether `item/tool/requestUserInput` fires in Default mode. Check `turn/steer` mid-turn and with a stale `expectedTurnId`. Check that `workspaceWrite` with `untrusted` produces command approval requests the runner can decline. Check that writes under `.git/` and `.codex/` are either read-only or arrive as file-change approvals (KTD9 protected paths).
 3. **Pi.** Check `steer` mid-tool. Check that a `--extension` hook can block `edit` and `write` outside `cwd` while user extensions still load.
@@ -430,11 +441,13 @@ sequenceDiagram
 **Dependencies:** None.
 
 **Files:**
+
 - Modify: `packages/backend/convex/schema.ts`, `packages/backend/convex/lib/auth.ts`, `packages/backend/convex/me.ts`, `packages/backend/convex/rooms.ts`
 - Create: `packages/backend/convex/users.ts`, `packages/backend/convex/members.ts`, `packages/backend/convex/invites.ts`, `packages/backend/convex/migrations.ts`
 - Test: `packages/backend/tests/membership.test.ts`
 
 **Approach:**
+
 1. Add the `users`, `roomMembers` (by room, by user, by room and user) and `roomInvites` (by room, by token hash) tables, an optional `userId` on `participants`, and a notice version constant.
 2. `users.ensure` (called on sign-in) upserts by `tokenIdentifier`.
 3. Add `requireMember` to `lib/auth.ts`. Keep `requireOwner` as it is.
@@ -452,6 +465,7 @@ sequenceDiagram
 **Patterns to follow:** `lib/ledger.ts` `record` in the same transaction. The owner identity mocking in `packages/backend/tests/review.test.ts`.
 
 **Test scenarios:**
+
 - Covers AE7. A member identity can call `rooms.get` for its room but gets `access: none` for another room. It fails on `rooms.addParticipant`, `rituals.begin`, `invites.create` and the edit switch mutation.
 - Covers AE10. `invites.accept` with a valid token but a different verified email is rejected. `invites.lookup` for that caller returns the masked invited email with `matches: false`.
 - `invites.lookup` with an unknown token returns nothing about any room.
@@ -472,10 +486,12 @@ sequenceDiagram
 **Dependencies:** U2.
 
 **Files:**
+
 - Modify: `packages/backend/convex/messages.ts`, `packages/backend/convex/rituals.ts`, `packages/backend/convex/rooms.ts`
 - Test: `packages/backend/tests/isolation.test.ts`, `packages/backend/tests/review.test.ts`
 
 **Approach:**
+
 1. Replace `requireOwner` in `messages.timeline`, `messages.send`, `messages.cancel` and `rooms.get` with `requireMember`. Cancelling a turn that has a `ritualId` stays owner-only.
 2. For members, `timeline` and the new agent-pane query (U5) exclude messages and turns with a `ritualId`, plus messages and turns created by review or decision follow-ups. They never include `turns.prompt`. `decisionId` and `reviewTurnId` on `send` are owner-only arguments.
 3. In rooms with a member, a follow-up `send` creates its own turn, which is not batched, with a session stored on the ritual. `claim` resumes that session, and `finish` saves to it instead of the participant's ordinary `harnessSessionId`.
@@ -485,6 +501,7 @@ sequenceDiagram
 **Patterns to follow:** The `JSON.stringify(...).not.toContain('SECRET')` assertions in `packages/backend/tests/review.test.ts`.
 
 **Test scenarios:**
+
 - After a review is revealed, a member's `timeline` contains no review answer text, while the owner's still does.
 - A review follow-up sent by the owner, and the agent's reply to it, are absent from the member's view.
 - In a room with a member, a follow-up turn resumes and saves a session on the ritual. The participant's ordinary session id is unchanged, so the next member-prompted turn resumes a session that never saw the review answer.
@@ -505,6 +522,7 @@ sequenceDiagram
 **Dependencies:** U2.
 
 **Files:**
+
 - Modify: `packages/backend/convex/schema.ts`
 - Create: `packages/backend/convex/team.ts`
 - Test: `packages/backend/tests/team.test.ts`
@@ -514,6 +532,7 @@ sequenceDiagram
 **Patterns to follow:** `messages.send`, and the ledger use in `rooms.create`.
 
 **Test scenarios:**
+
 - Both the owner and a member can post and list. A non-member and a removed member are rejected.
 - An empty or whitespace-only body is rejected.
 - No mutation exists to edit or delete a team message (an assertion on the API surface).
@@ -529,11 +548,13 @@ sequenceDiagram
 **Dependencies:** U2, U3.
 
 **Files:**
+
 - Create: `packages/backend/convex/lib/prompt.ts`, `packages/backend/convex/lib/dispatch.ts`, `packages/backend/convex/agent.ts`, `packages/backend/convex/crons.ts`
 - Modify: `packages/backend/convex/schema.ts`, `packages/backend/convex/messages.ts`, `packages/backend/convex/runner.ts`
 - Test: `packages/backend/tests/queue.test.ts`, `packages/backend/tests/prompt.test.ts`
 
 **Approach:**
+
 1. Add to `messages`: `toParticipantId`, `delivery`, `deliveredTurnId`. Add to `turns`: `requestedByParticipantIds`, `editsEnabled`, `waitingOnHandId`. Add `payload` on `commands`, with new command types `steer`, `answer` and `settings`. Add a `by_room_type` index on the ledger and use it instead of scanning the whole room's ledger.
 2. `lib/prompt.ts` builds the context block and the envelopes per KTD4. Recent decisions are read through a single `agentDecisions` projection helper.
 3. `send` routes through `dispatch.ts`:
@@ -555,6 +576,7 @@ sequenceDiagram
 **Patterns to follow:** `reviewFinished` in `lib/review.ts`, which shows a side effect running in the same transaction as the terminal transition.
 
 **Test scenarios:**
+
 - Covers AE1. With Claude running, a teammate's send creates no command. When the turn finishes, exactly one new turn exists whose prompt contains the teammate's envelope.
 - Two messages from different authors queued during a turn drain into one prompt, in send order, each attributed.
 - A message with a forged envelope line in its body appears escaped, attributed to its real author.
@@ -581,11 +603,13 @@ sequenceDiagram
 **Dependencies:** U5.
 
 **Files:**
+
 - Modify: `packages/backend/convex/schema.ts`, `packages/backend/convex/runner.ts`, `packages/backend/convex/lib/dispatch.ts`
 - Create: `packages/backend/convex/hands.ts`
 - Test: `packages/backend/tests/hands.test.ts`
 
 **Approach:**
+
 1. Extend `hands` per KTD6, and `decisions` with `handId`, `questionId` and `answeredByParticipantId`.
 2. Runner mutations:
    - `raiseHand(turnId, requestId, questions)` creates the card and sets `waitingOnHandId`.
@@ -597,6 +621,7 @@ sequenceDiagram
 **Patterns to follow:** The ledger writes for `rituals.decide`.
 
 **Test scenarios:**
+
 - Covers AE3. Two `answer` calls on the same card: the first succeeds, and the second returns "already answered by Robert" and creates no second decision or command.
 - Covers AE5. Team messages at 14:11 and 14:13 are linked, and the one at 14:16 is not (fake timers).
 - Covers AE9. A message to an agent waiting on a card resolves the card with `via: 'chat'` and the message as the answer. No new turn is created.
@@ -617,10 +642,12 @@ sequenceDiagram
 **Dependencies:** U5.
 
 **Files:**
+
 - Modify: `packages/backend/convex/schema.ts`, `packages/backend/convex/rooms.ts`, `packages/backend/convex/runner.ts`
 - Test: `packages/backend/tests/editSwitch.test.ts`
 
 **Approach:**
+
 1. Add an optional `editsEnabled` field to `rooms`.
 2. `rooms.setEditsEnabled(roomId, on)` is owner-only and records `room.edits_changed`.
 3. `claim` returns the room's current value, and the turn snapshots it.
@@ -630,6 +657,7 @@ sequenceDiagram
 **Patterns to follow:** `rooms.addParticipant`.
 
 **Test scenarios:**
+
 - A member calling `setEditsEnabled` is rejected.
 - Turning the switch on mid-turn sends `settings` to a running Claude turn and does not interrupt it.
 - Turning it off mid-turn sends `interrupt` for running Codex and Pi turns and `settings` for Claude.
@@ -646,11 +674,13 @@ sequenceDiagram
 **Dependencies:** U5, U6, U7.
 
 **Files:**
+
 - Create: `runner/src/turns.ts`
 - Modify: `packages/shared/src/harness.ts`, `runner/src/index.ts`, `runner/src/adapters/events.ts`, `runner/package.json` (add the new test to the `test` script)
 - Test: `runner/src/turns.test.ts`
 
 **Approach:**
+
 1. Extend `TurnRequest` with `editsEnabled` (replacing the unused `readOnly` for ordinary turns) and add the input object from KTD7.
 2. Extend `HarnessEvent` with `question` and with id-correlated `tool_call` and `tool_result`.
 3. Move command and turn handling out of `index.ts` into `runner/src/turns.ts`. It takes the Convex client, secret and harness map as parameters, so it can be tested without the real environment and Convex connection that `index.ts` sets up on import. In it:
@@ -664,6 +694,7 @@ sequenceDiagram
 **Patterns to follow:** The `running` map and abort plumbing in `runner/src/index.ts`, and `eventQueue` in `runner/src/adapters/events.ts`.
 
 **Test scenarios:**
+
 - A fake harness that emits `question` makes the runner call `raiseHand`. An `answer` command resolves the harness's pending `onQuestion` with the payload.
 - A `steer` command for a turn that isn't running locally is marked failed, `steerResult(rejected)` is reported, and no harness call is made.
 - An `interrupt` command aborts the running turn's signal, and the turn ends interrupted.
@@ -682,10 +713,12 @@ sequenceDiagram
 **Dependencies:** U1, U8.
 
 **Files:**
+
 - Modify: `runner/src/adapters/claude.ts`
 - Test: `runner/src/adapters/claude.test.ts`
 
 **Approach:**
+
 1. Ordinary turns pass an async-iterable prompt: the first message, then steers pushed with the priority U1 confirmed.
    - Each steer carries a uuid. `steer()` resolves `steered` only when that uuid's fold echo appears before `result`.
    - At `result`, any steer not yet folded is withdrawn and resolved `rejected`, so Convex re-queues it.
@@ -700,6 +733,7 @@ sequenceDiagram
 **Patterns to follow:** The fake-executable protocol tests in `runner/src/adapters/codex.test.ts`.
 
 **Test scenarios:**
+
 - A fake CLI that issues an `AskUserQuestion` permission request receives `updatedInput.answers` mapping the question text to the chosen label.
 - With the switch off, a Write request is denied. With it on, a Write inside `cwd` is allowed and one outside `cwd` is denied.
 - A Bash request that isn't pre-approved is denied in both states.
@@ -720,10 +754,12 @@ sequenceDiagram
 **Dependencies:** U1, U8.
 
 **Files:**
+
 - Modify: `runner/src/adapters/codex.ts`
 - Test: `runner/src/adapters/codex.test.ts`
 
 **Approach:**
+
 1. Send `capabilities: {experimentalApi: true, requestAttestation: false}` in `initialize`.
 2. Keep the `turn.id` from `turn/start`. Steer with `turn/steer {threadId, input, expectedTurnId}`, and report a precondition failure as `rejected`.
 3. Stop uses `turn/interrupt` before killing the process.
@@ -735,6 +771,7 @@ sequenceDiagram
 **Patterns to follow:** The existing fake-harness tests in `runner/src/adapters/codex.test.ts`, and the generated schema from `codex app-server generate-ts`.
 
 **Test scenarios:**
+
 - `initialize` carries `experimentalApi`.
 - A steer sends `turn/steer` with the stored turn id. A mismatch error resolves `rejected`.
 - With the switch on, a command approval request is declined and a file-change approval under `cwd` is accepted. A file change outside `cwd` or under `.git/` or `.codex/` is declined.
@@ -752,11 +789,13 @@ sequenceDiagram
 **Dependencies:** U1, U8.
 
 **Files:**
+
 - Modify: `runner/src/adapters/pi.ts`
 - Create: `runner/src/adapters/pi-guard-extension.ts`
 - Test: `runner/src/adapters/pi.test.ts`
 
 **Approach:**
+
 1. Steer with `client.steer(text)` while the run streams. If the run has already settled, report `rejected`.
 2. With the switch on, add `edit,write` to `--tools` and load the guard extension, which blocks edits and writes outside `cwd`.
 3. Answer any `extension_ui_request` with `{id, cancelled: true}` by writing to the child's stdin.
@@ -766,6 +805,7 @@ sequenceDiagram
 **Patterns to follow:** The fake Pi CLI in `runner/src/adapters/pi.test.ts`, and `runner/src/adapters/pi-cli.mjs`.
 
 **Test scenarios:**
+
 - A steer during a run calls `steer`. After `agent_settled` it resolves `rejected`.
 - With the switch on, the CLI arguments include `edit,write` and the guard extension. With it off, they match today's.
 - An `extension_ui_request` gets a `cancelled` response and the turn completes.
@@ -782,11 +822,13 @@ sequenceDiagram
 **Dependencies:** U2.
 
 **Files:**
+
 - Create: `apps/web/package.json`, `apps/web/vite.config.ts`, `apps/web/tsconfig.json`, `apps/web/index.html`, `apps/web/components.json`, `apps/web/vercel.json`, `apps/web/THIRD_PARTY_NOTICES.md`, `apps/web/src/main.tsx`, `apps/web/src/index.css`, `apps/web/src/auth/ClerkShell.tsx`, `apps/web/src/lib/utils.ts`, `apps/web/src/components/ui/*`, `apps/web/src/routes/__root.tsx`, `apps/web/src/routes/index.tsx`, `apps/web/src/routes/invite.$token.tsx`, `apps/web/src/routes/rooms.$roomId.tsx`
 - Modify: `turbo.json` (add `build` and `test` tasks), `pnpm-workspace.yaml` (`allowBuilds` as needed)
 - Test: `apps/web/src/routes/invite.test.tsx`
 
 **Approach:**
+
 1. Vite + React 19 + TanStack Router plugin + Tailwind v4 plugin.
 2. Copy only the t3code UI components that U12 and U13 import, from those named in Sources, with the MIT header and the notices file. Add others when a screen needs them. Replace `effect/Schema` in any copied file.
 3. Copy the `index.css` tokens and layer order (`theme, base, clerk, components, utilities`), and Inter from `@fontsource-variable/inter`.
@@ -803,6 +845,7 @@ sequenceDiagram
 **Patterns to follow:** The provider setup in `apps/mobile/src/app/_layout.tsx`. t3code's `BrowserManagedAuthShell.tsx` and `main.tsx`.
 
 **Test scenarios:**
+
 - The invite route renders the mismatch state with a masked email when `invites.lookup` returns `matches: false`, and the expired and revoked states for those statuses (mocked Convex).
 - The notice must be accepted before the room renders, and an older stored notice version prompts again.
 - A non-member opening `/rooms/<id>` sees "You don't have access" rather than an error boundary.
@@ -818,6 +861,7 @@ sequenceDiagram
 **Dependencies:** U4, U5, U6, U7, U12.
 
 **Files:**
+
 - Create:
   - `apps/web/src/components/room/AgentPane.tsx`, `apps/web/src/components/room/TeamPane.tsx`, `apps/web/src/components/room/TurnView.tsx`
   - `apps/web/src/components/room/QuestionCard.tsx`, `apps/web/src/components/room/QueueStrip.tsx`, `apps/web/src/components/room/AgentComposer.tsx`, `apps/web/src/components/room/TeamComposer.tsx`
@@ -827,6 +871,7 @@ sequenceDiagram
 - Test: `apps/web/src/lib/pendingUserInput.test.ts`, `apps/web/src/lib/composerTarget.test.ts`, `apps/web/src/lib/markdownStreamBlocks.test.ts`
 
 **Approach:**
+
 1. A resizable two-column layout, with the team pane as a sheet below about 760 px, following t3code's `RightPanelSheet`.
 2. The agent pane is a Legend List timeline:
    - Each human message shows "Name → Agent" and its delivery state.
@@ -841,6 +886,7 @@ sequenceDiagram
    - expired after 2 hours or a runner restart, offering to send a late answer as a message (R26).
 
    An agent that can't raise cards shows that on its status chip (R16).
+
 4. The queue strip shows "steer now" on each queued message. A steer that is rejected shows the message back in the queue. A message cancelled for removal or for "runner offline" shows that reason.
 5. While the target agent is working, the agent composer offers "Send and steer now" next to "Send" (R14). Each running turn has its own Stop.
 6. The two composers are labelled by audience ("To Claude" and "To team only"). Enter sends only from the focused composer. Focus never moves to the agent composer by itself, for example after answering a card or posting to the team (R9).
@@ -854,6 +900,7 @@ sequenceDiagram
 **Patterns to follow:** t3code `MessagesTimeline.tsx` (Legend List props), `timelineViewport.ts`, `useTimelineFollow.ts`, `QueuedRunsControl.tsx` and `TimelineToolActivityIcon.tsx`, as references only.
 
 **Test scenarios:**
+
 - `composerTarget` picks the agent with an open card over the last target, and falls back to Claude.
 - `pendingUserInput` builds the answers map for single-select, multi-select (labels joined with ", ") and free text.
 - `splitMarkdownBlocks` keeps an open code fence in the last block and returns null for footnote syntax.
@@ -870,9 +917,11 @@ sequenceDiagram
 **Dependencies:** U2, U5, U6.
 
 **Files:**
+
 - Modify: `apps/mobile/src/app/room/[id].tsx`, `apps/mobile/src/app/index.tsx`
 
 **Approach:**
+
 1. `mine` compares the author's user id with `me.get().userId`.
 2. A message waiting behind a busy agent shows as queued. While an agent waits on a card, the composer shows "This will answer Claude's question" (R25).
 3. Show the teammate's name on their messages.
@@ -895,10 +944,12 @@ sequenceDiagram
 **Dependencies:** All units above.
 
 **Files:**
+
 - Modify: `docs/v0-spec.md`, `docs/independent-review.md`, `LEARNINGS.md`
 - Create: `docs/shared-rooms.md`
 
 **Approach:**
+
 1. `v0-spec.md`: lift the multiple-users and web-client non-goals, document the new tables, command types and ledger types (`member.*`, `team_message.posted`, `message.steered`, `hand.*`, `room.edits_changed`), and correct the lease note.
 2. `independent-review.md`: record that reviews stay owner-only in shared rooms.
 3. `docs/shared-rooms.md`: inviting, the notice, the edit switch per harness, which agents can raise cards, and the operator setup (Clerk Restricted mode, `CLERK_SECRET_KEY`, `ATELIER_WEB_URL`, Vercel env). It also says to rotate `ATELIER_RUNNER_SECRET` after removing a member: under full reach, a teammate prompt can read it from `runner/.env.local`, and removal cannot revoke a copy already taken.
@@ -920,14 +971,14 @@ sequenceDiagram
 
 ## Risks & Dependencies
 
-| Risk | Mitigation |
-|---|---|
-| Claude mid-turn steering doesn't work without ending the turn | U1 runs first, and the Goal Capsule stop condition returns the question to Robert |
-| Codex `requestUserInput` is experimental and may change | KTD14 limits it to a capability flag. Codex falls back to plain-text questions |
-| Clerk dev instance limits (development badge, user cap, Restricted mode on a non-localhost domain) | Verified first in U12. The production move is deferred follow-up work |
-| Full reach: a teammate prompt drives Robert's connectors | Robert's explicit choice, disclosed in the R1 notice. Recorded as considered and not built |
-| Legend List jitter while streaming without t3code's patch | Prototype first in U13 |
-| Concurrent `dispatchNext` and `steer` races | Both are single Convex transactions. Steer outcomes are confirmed by the runner and fall back to the queue |
+| Risk                                                                                               | Mitigation                                                                                                 |
+| -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Claude mid-turn steering doesn't work without ending the turn                                      | U1 runs first, and the Goal Capsule stop condition returns the question to Robert                          |
+| Codex `requestUserInput` is experimental and may change                                            | KTD14 limits it to a capability flag. Codex falls back to plain-text questions                             |
+| Clerk dev instance limits (development badge, user cap, Restricted mode on a non-localhost domain) | Verified first in U12. The production move is deferred follow-up work                                      |
+| Full reach: a teammate prompt drives Robert's connectors                                           | Robert's explicit choice, disclosed in the R1 notice. Recorded as considered and not built                 |
+| Legend List jitter while streaming without t3code's patch                                          | Prototype first in U13                                                                                     |
+| Concurrent `dispatchNext` and `steer` races                                                        | Both are single Convex transactions. Steer outcomes are confirmed by the runner and fall back to the queue |
 
 ## Open Questions
 
@@ -942,17 +993,17 @@ sequenceDiagram
 
 ## Verification Contract
 
-| Gate | Command or check | Proves |
-|---|---|---|
-| Backend tests | `pnpm --filter @atelier/backend test` | Membership, isolation, team chat, queue, cards, edit switch, and the existing review tests |
-| Runner tests | `pnpm --filter @atelier/runner test` | Adapter protocols with fake Claude, Codex and Pi, and runner command routing |
-| Web tests | `pnpm --filter @atelier/web test` | Card answer building, composer target, stream block splitting, invite and notice routes |
-| Types and lint | `pnpm typecheck` and `pnpm lint` | All workspaces, including `apps/web` |
-| Web build | `pnpm --filter @atelier/web build` | Static `dist/` ready for Vercel |
-| Live harness probes | U1 spike plus per-adapter live checks on the VM | Steering, cards and the edit switch on real Claude, Codex and Pi |
-| Two-browser acceptance | Robert and a second Clerk account on the Vercel preview | F1, F2, F3 and AE1–AE11 |
-| Phone check | Expo Go via the LEARNINGS launch page | Attribution, waiting label, send, stream, cancel and review still work |
-| R9 canary | A unique token posted in team chat, then turns on all three harnesses, including resume and a linked decision | The token is absent from prompts, command payloads and the runner's transcript files |
+| Gate                   | Command or check                                                                                              | Proves                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Backend tests          | `pnpm --filter @atelier/backend test`                                                                         | Membership, isolation, team chat, queue, cards, edit switch, and the existing review tests |
+| Runner tests           | `pnpm --filter @atelier/runner test`                                                                          | Adapter protocols with fake Claude, Codex and Pi, and runner command routing               |
+| Web tests              | `pnpm --filter @atelier/web test`                                                                             | Card answer building, composer target, stream block splitting, invite and notice routes    |
+| Types and lint         | `pnpm typecheck` and `pnpm lint`                                                                              | All workspaces, including `apps/web`                                                       |
+| Web build              | `pnpm --filter @atelier/web build`                                                                            | Static `dist/` ready for Vercel                                                            |
+| Live harness probes    | U1 spike plus per-adapter live checks on the VM                                                               | Steering, cards and the edit switch on real Claude, Codex and Pi                           |
+| Two-browser acceptance | Robert and a second Clerk account on the Vercel preview                                                       | F1, F2, F3 and AE1–AE11                                                                    |
+| Phone check            | Expo Go via the LEARNINGS launch page                                                                         | Attribution, waiting label, send, stream, cancel and review still work                     |
+| R9 canary              | A unique token posted in team chat, then turns on all three harnesses, including resume and a linked decision | The token is absent from prompts, command payloads and the runner's transcript files       |
 
 ## Definition of Done
 

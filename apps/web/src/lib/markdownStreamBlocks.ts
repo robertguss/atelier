@@ -2,7 +2,8 @@
 // Copyright (c) 2026 T3 Tools Inc. MIT License; see THIRD_PARTY_NOTICES.md.
 
 // Definitions, footnotes, raw HTML, container directives and display math can tie blocks together.
-const DOCUMENT_WIDE_SYNTAX = /^ {0,3}(?:\[[^\]\n]+\]:|<[A-Za-z!?/]|:::|\$\$)|\[\^/m;
+const DOCUMENT_WIDE_SYNTAX =
+  /^ {0,3}(?:\[[^\]\n]+\]:|<[A-Za-z!?/]|:::|\$\$)|\[\^/m;
 const FENCE_PATTERN = /^ {0,3}(`{3,}|~{3,})/;
 // After a blank line these still continue the previous block: a list item or indented content.
 const CONTINUATION_PATTERN = /^(?:[ \t]|(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$))/;
@@ -35,7 +36,11 @@ export function splitMarkdownBlocks(text: string): string[] | null {
     } else if (line.trim() === "") {
       afterBlankLine = true;
     } else {
-      if (afterBlankLine && lineStart > blockStart && !CONTINUATION_PATTERN.test(line)) {
+      if (
+        afterBlankLine &&
+        lineStart > blockStart &&
+        !CONTINUATION_PATTERN.test(line)
+      ) {
         blocks.push(text.slice(blockStart, lineStart));
         blockStart = lineStart;
       }

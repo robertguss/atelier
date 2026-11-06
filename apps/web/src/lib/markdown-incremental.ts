@@ -21,7 +21,11 @@ function hasDefinitions(node: Root | RootContent): boolean {
   );
 }
 
-function shiftPositions(node: Root | RootContent, offset: number, lines: number): void {
+function shiftPositions(
+  node: Root | RootContent,
+  offset: number,
+  lines: number
+): void {
   if (node.position) {
     for (const point of [node.position.start, node.position.end]) {
       if (point.offset !== undefined) point.offset += offset;
@@ -39,15 +43,18 @@ function createIncrementalMarkdownParser(parse: Parser): Parser {
 
   return (source, file) => {
     // Streaming CR may become CRLF; parsing a suffix separately would strip an internal BOM.
-    if (source.includes("\r") || source.includes("\uFEFF")) return parse(source, file);
+    if (source.includes("\r") || source.includes("\uFEFF"))
+      return parse(source, file);
 
-    const prefix = cached && source.startsWith(cached.source) ? cached : undefined;
+    const prefix =
+      cached && source.startsWith(cached.source) ? cached : undefined;
     let root: Root;
     if (prefix) {
       root = parse(source.slice(prefix.offset), file);
       if (hasDefinitions(root)) return parse(source, file);
       shiftPositions(root, prefix.offset, prefix.line - 1);
-      if (root.position) root.position.start = { line: 1, column: 1, offset: 0 };
+      if (root.position)
+        root.position.start = { line: 1, column: 1, offset: 0 };
       // Remark mutates nodes; give each render a clone of the pristine cache.
       root.children.unshift(...structuredClone(prefix.children));
     } else {
@@ -66,7 +73,9 @@ function createIncrementalMarkdownParser(parse: Parser): Parser {
       const opening = /^ {0,3}(`{3,}|~{3,})[^\n]*\n/.exec(value)?.[1];
       if (!opening) continue;
       const lastLine = value.slice(value.lastIndexOf("\n") + 1);
-      const closing = new RegExp(`^ {0,3}${opening[0]}{${opening.length},}[ \\t]*$`);
+      const closing = new RegExp(
+        `^ {0,3}${opening[0]}{${opening.length},}[ \\t]*$`
+      );
       const separator = /^\n[ \t]*\n/.exec(source.slice(end))?.[0];
       if (!closing.test(lastLine) || !separator) continue;
       const offset = end + separator.length;
@@ -88,7 +97,9 @@ export function createIncrementalMarkdownPlugin(): Plugin<[], Root> {
   return function () {
     const original = this.parser;
     if (!original) return;
-    parser ??= createIncrementalMarkdownParser((source, file) => original(source, file) as Root);
+    parser ??= createIncrementalMarkdownParser(
+      (source, file) => original(source, file) as Root
+    );
     const parseDocument = parser;
     // ReactMarkdown parses recovery text second; only the first parse may access the document cache.
     let documentParsed = false;

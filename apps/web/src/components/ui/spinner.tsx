@@ -1,10 +1,11 @@
 // Copied from T3 Code (https://github.com/pingdotgg/t3code), apps/web/src/components/ui/spinner.tsx.
 // Copyright (c) 2026 T3 Tools Inc. MIT License; see THIRD_PARTY_NOTICES.md.
 
-import { LoaderCircleIcon } from "lucide-react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { observeVisibleAnimation } from "~/lib/visibleAnimation";
+import { LoaderCircleIcon } from "lucide-react";
+
 import { cn } from "~/lib/utils";
+import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 
 // No default size: inside a Button the parent's svg rule sizes the glyph.
 const spinnerVariants = cva("motion-safe:visible-animate-spin", {
@@ -28,7 +29,8 @@ function Spinner({
   size,
   tone,
   ...props
-}: React.ComponentPropsWithoutRef<typeof LoaderCircleIcon> & VariantProps<typeof spinnerVariants>) {
+}: React.ComponentPropsWithoutRef<typeof LoaderCircleIcon> &
+  VariantProps<typeof spinnerVariants>) {
   return (
     <LoaderCircleIcon
       aria-label="Loading"

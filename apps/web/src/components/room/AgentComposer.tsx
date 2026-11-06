@@ -1,18 +1,20 @@
-import { api } from '@atelier/backend/api';
-import type { Id } from '@atelier/backend/dataModel';
-import { useMutation } from 'convex/react';
-import { Button } from '~/components/ui/button';
-import { Textarea } from '~/components/ui/textarea';
-import type { PaneAgent } from '~/lib/room';
-import { cn } from '~/lib/utils';
-import { useComposer } from './useComposer';
+import { api } from "@atelier/backend/api";
+import type { Id } from "@atelier/backend/dataModel";
+import { useMutation } from "convex/react";
+
+import { Button } from "~/components/ui/button";
+import { Textarea } from "~/components/ui/textarea";
+import type { PaneAgent } from "~/lib/room";
+import { cn } from "~/lib/utils";
+
+import { useComposer } from "./useComposer";
 
 interface AgentComposerProps {
-  roomId: Id<'rooms'>;
+  roomId: Id<"rooms">;
   agents: PaneAgent[];
   target: PaneAgent | null;
-  onPickTarget: (participantId: Id<'participants'>) => void;
-  onSent: (participantId: Id<'participants'>) => void;
+  onPickTarget: (participantId: Id<"participants">) => void;
+  onSent: (participantId: Id<"participants">) => void;
   offline: boolean;
 }
 
@@ -20,32 +22,56 @@ interface AgentComposerProps {
  * Writes to one agent. A busy agent queues the message; "Send and steer now"
  * puts it into the running turn instead. Enter sends only from this box.
  */
-export function AgentComposer({ roomId, agents, target, onPickTarget, onSent, offline }: AgentComposerProps) {
+export function AgentComposer({
+  roomId,
+  agents,
+  target,
+  onPickTarget,
+  onSent,
+  offline,
+}: AgentComposerProps) {
   const send = useMutation(api.messages.send);
-  const { draft, setDraft, busy, error, submit, onKeyDown } = useComposer(async (body, steerNow) => {
-    if (!target) return;
-    const to = target.participantId;
-    await send(steerNow ? { roomId, body, toParticipantId: to, steer: true } : { roomId, body, toParticipantId: to });
-    onSent(to);
-  }, offline);
+  const { draft, setDraft, busy, error, submit, onKeyDown } = useComposer(
+    async (body, steerNow) => {
+      if (!target) return;
+      const to = target.participantId;
+      await send(
+        steerNow
+          ? { roomId, body, toParticipantId: to, steer: true }
+          : { roomId, body, toParticipantId: to }
+      );
+      onSent(to);
+    },
+    offline
+  );
 
   if (!target) {
-    return <p className="text-sm text-muted-foreground">This room has no agents.</p>;
+    return (
+      <p className="text-muted-foreground text-sm">This room has no agents.</p>
+    );
   }
 
-  const working = target.status === 'running';
+  const working = target.status === "running";
   const canSend = draft.trim().length > 0 && !busy && !offline;
 
   return (
     <div className="space-y-2">
       {agents.length > 1 ? (
-        <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground" role="group" aria-label="Send to">
+        <div
+          className="text-muted-foreground flex flex-wrap items-center gap-1 text-xs"
+          role="group"
+          aria-label="Send to"
+        >
           <span className="mr-1">To</span>
           {agents.map((agent) => (
             <Button
               key={agent.participantId}
               size="xs"
-              variant={agent.participantId === target.participantId ? 'secondary' : 'ghost'}
+              variant={
+                agent.participantId === target.participantId
+                  ? "secondary"
+                  : "ghost"
+              }
               aria-pressed={agent.participantId === target.participantId}
               onClick={() => onPickTarget(agent.participantId)}
             >
@@ -54,9 +80,10 @@ export function AgentComposer({ roomId, agents, target, onPickTarget, onSent, of
           ))}
         </div>
       ) : null}
-      {target.status === 'waiting' ? (
-        <p className="text-xs text-info-foreground">
-          {target.displayName} is waiting on a question card. Sending a message answers it in chat.
+      {target.status === "waiting" ? (
+        <p className="text-info-foreground text-xs">
+          {target.displayName} is waiting on a question card. Sending a message
+          answers it in chat.
         </p>
       ) : null}
       <Textarea
@@ -72,13 +99,26 @@ export function AgentComposer({ roomId, agents, target, onPickTarget, onSent, of
         onKeyDown={onKeyDown}
       />
       <div className="flex flex-wrap items-center justify-end gap-2">
-        {error ? <p className={cn('mr-auto text-xs text-destructive-foreground')}>{error}</p> : null}
+        {error ? (
+          <p className={cn("text-destructive-foreground mr-auto text-xs")}>
+            {error}
+          </p>
+        ) : null}
         {working ? (
-          <Button size="sm" variant="outline" disabled={!canSend} onClick={() => void submit(true)}>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!canSend}
+            onClick={() => void submit(true)}
+          >
             Send and steer now
           </Button>
         ) : null}
-        <Button size="sm" disabled={!canSend} onClick={() => void submit(false)}>
+        <Button
+          size="sm"
+          disabled={!canSend}
+          onClick={() => void submit(false)}
+        >
           Send
         </Button>
       </div>

@@ -4,7 +4,10 @@
 /** The question fields answer handling reads. Web and mobile question types both fit it. */
 export interface PendingUserInputQuestion {
   readonly id: string;
-  readonly options: ReadonlyArray<{ readonly label: string; readonly value?: string | undefined }>;
+  readonly options: ReadonlyArray<{
+    readonly label: string;
+    readonly value?: string | undefined;
+  }>;
   readonly multiSelect?: boolean | undefined;
   readonly allowCustomAnswer?: boolean | undefined;
   readonly initialAnswer?: string | undefined;
@@ -28,7 +31,7 @@ function normalizeDraftAnswer(value: string | undefined): string | null {
 // Provider option values stay exact, including whitespace. Only options without a value match by label.
 function resolvePendingUserInputOptionValue(
   question: PendingUserInputQuestion,
-  value: string,
+  value: string
 ): string | null {
   if (question.options.some((option) => option.value === value)) {
     return value;
@@ -36,7 +39,9 @@ function resolvePendingUserInputOptionValue(
 
   const label = value.trim();
   return label.length > 0 &&
-    question.options.some((option) => option.value === undefined && option.label.trim() === label)
+    question.options.some(
+      (option) => option.value === undefined && option.label.trim() === label
+    )
     ? label
     : null;
 }
@@ -44,7 +49,7 @@ function resolvePendingUserInputOptionValue(
 /** The draft's selections that name an offered option, deduplicated, in selection order. */
 export function normalizeSelectedOptionValues(
   question: PendingUserInputQuestion,
-  value: ReadonlyArray<string> | undefined,
+  value: ReadonlyArray<string> | undefined
 ): ReadonlyArray<string> {
   if (!Array.isArray(value)) {
     return [];
@@ -54,15 +59,15 @@ export function normalizeSelectedOptionValues(
     new Set(
       value
         .map((entry) => resolvePendingUserInputOptionValue(question, entry))
-        .filter((entry): entry is string => entry !== null),
-    ),
+        .filter((entry): entry is string => entry !== null)
+    )
   );
 }
 
 /** The answer to submit for one question, or null while it is unanswered. */
 export function resolvePendingUserInputAnswer(
   question: PendingUserInputQuestion,
-  draft: PendingUserInputDraftAnswer | undefined,
+  draft: PendingUserInputDraftAnswer | undefined
 ): PendingUserInputAnswer | null {
   if (draft?.attachmentsBlocked) return null;
   const customAnswer =
@@ -75,24 +80,32 @@ export function resolvePendingUserInputAnswer(
     return customAnswer;
   }
 
-  const selectedOptionValues = normalizeSelectedOptionValues(question, draft?.selectedOptionValues);
+  const selectedOptionValues = normalizeSelectedOptionValues(
+    question,
+    draft?.selectedOptionValues
+  );
   if (question.multiSelect) {
     return selectedOptionValues.length > 0
       ? selectedOptionValues
       : (customAnswer ??
-          (question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0 ? "" : null));
+          (question.allowCustomAnswer !== false &&
+          (draft?.attachmentCount ?? 0) > 0
+            ? ""
+            : null));
   }
   return (
     selectedOptionValues[0] ??
     customAnswer ??
-    (question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0 ? "" : null)
+    (question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0
+      ? ""
+      : null)
   );
 }
 
 export function setPendingUserInputCustomAnswer(
   question: PendingUserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
-  customAnswer: string,
+  customAnswer: string
 ): PendingUserInputDraftAnswer {
   if (question.allowCustomAnswer === false) {
     return draft ?? {};
@@ -104,25 +117,34 @@ export function setPendingUserInputCustomAnswer(
       : normalizeSelectedOptionValues(question, draft?.selectedOptionValues);
   return {
     customAnswer,
-    ...(selectedOptionValues && selectedOptionValues.length > 0 ? { selectedOptionValues } : {}),
+    ...(selectedOptionValues && selectedOptionValues.length > 0
+      ? { selectedOptionValues }
+      : {}),
   };
 }
 
 export function isPendingUserInputOptionSelected(
   question: PendingUserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
-  optionValue: string,
+  optionValue: string
 ): boolean {
-  if (question.allowCustomAnswer !== false && normalizeDraftAnswer(draft?.customAnswer)) {
+  if (
+    question.allowCustomAnswer !== false &&
+    normalizeDraftAnswer(draft?.customAnswer)
+  ) {
     return false;
   }
 
-  const resolvedOptionValue = resolvePendingUserInputOptionValue(question, optionValue);
+  const resolvedOptionValue = resolvePendingUserInputOptionValue(
+    question,
+    optionValue
+  );
   return (
     resolvedOptionValue !== null &&
-    normalizeSelectedOptionValues(question, draft?.selectedOptionValues).includes(
-      resolvedOptionValue,
-    )
+    normalizeSelectedOptionValues(
+      question,
+      draft?.selectedOptionValues
+    ).includes(resolvedOptionValue)
   );
 }
 
@@ -130,9 +152,12 @@ export function isPendingUserInputOptionSelected(
 export function togglePendingUserInputOptionSelection(
   question: PendingUserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
-  optionValue: string,
+  optionValue: string
 ): PendingUserInputDraftAnswer {
-  const resolvedOptionValue = resolvePendingUserInputOptionValue(question, optionValue);
+  const resolvedOptionValue = resolvePendingUserInputOptionValue(
+    question,
+    optionValue
+  );
   if (resolvedOptionValue === null) {
     return draft ?? {};
   }
@@ -140,9 +165,11 @@ export function togglePendingUserInputOptionSelection(
   if (question.multiSelect) {
     const selectedOptionValues = normalizeSelectedOptionValues(
       question,
-      draft?.selectedOptionValues,
+      draft?.selectedOptionValues
     );
-    const nextSelectedOptionValues = selectedOptionValues.includes(resolvedOptionValue)
+    const nextSelectedOptionValues = selectedOptionValues.includes(
+      resolvedOptionValue
+    )
       ? selectedOptionValues.filter((value) => value !== resolvedOptionValue)
       : [...selectedOptionValues, resolvedOptionValue];
 
@@ -163,12 +190,15 @@ export function togglePendingUserInputOptionSelection(
 /** Every question's answer keyed by question id, or null while any is unanswered. */
 export function buildPendingUserInputAnswers(
   questions: ReadonlyArray<PendingUserInputQuestion>,
-  draftAnswers: Record<string, PendingUserInputDraftAnswer>,
+  draftAnswers: Record<string, PendingUserInputDraftAnswer>
 ): Record<string, PendingUserInputAnswer> | null {
   const answers: Record<string, PendingUserInputAnswer> = {};
 
   for (const question of questions) {
-    const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
+    const answer = resolvePendingUserInputAnswer(
+      question,
+      draftAnswers[question.id]
+    );
     if (answer === null) {
       return null;
     }

@@ -18,9 +18,13 @@ export function composerTarget({
   openCardAgentIds: readonly string[];
   lastTarget: string | null;
 }): string | null {
-  const inRoom = (id: string | null) => id !== null && agents.some((a) => a.participantId === id);
+  const inRoom = (id: string | null) =>
+    id !== null && agents.some((a) => a.participantId === id);
   const waiting = openCardAgentIds.find(inRoom);
   if (waiting) return waiting;
   if (inRoom(lastTarget)) return lastTarget;
-  return (agents.find((a) => a.harness === 'claude') ?? agents[0])?.participantId ?? null;
+  return (
+    (agents.find((a) => a.harness === "claude") ?? agents[0])?.participantId ??
+    null
+  );
 }
