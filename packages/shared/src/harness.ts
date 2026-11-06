@@ -25,6 +25,8 @@ export interface TurnRequest {
   resumeSessionId?: string;
   /** True for independent review: no edits, no side effects. */
   readOnly: boolean;
+  /** Sealed independent review: fresh session, supplied snapshot, no execution tools. */
+  independentReview?: boolean;
   /** Always includes the Atelier MCP server. */
   mcpServers: McpServerSpec[];
 }

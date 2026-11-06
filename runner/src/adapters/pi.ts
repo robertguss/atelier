@@ -14,7 +14,7 @@ export function piHarness(opts: { cliPath?: string; onRaw: (id: string, event: u
     async *runTurn(req, signal) {
       signal.throwIfAborted();
       if (req.mcpServers.length) throw new Error('Configure Pi MCP through your own extension until per-turn MCP support exists');
-      const client = new RpcClient({ cliPath, cwd: req.cwd, model: req.model, args: ['--tools', 'read,grep,find,ls', ...(req.resumeSessionId ? ['--session', req.resumeSessionId] : [])] });
+      const client = new RpcClient({ cliPath, cwd: req.cwd, model: req.model, args: req.independentReview ? ['--no-tools', '--no-extensions', '--no-mcp', '--no-session'] : ['--tools', 'read,grep,find,ls', ...(req.resumeSessionId ? ['--session', req.resumeSessionId] : [])] });
       const events = eventQueue();
       let failed = false;
       const unsubscribe = client.onEvent((ev) => {

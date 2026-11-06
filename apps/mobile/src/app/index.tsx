@@ -1,3 +1,4 @@
+import { PushReadiness } from '@/components/push-readiness';
 import { api } from '@atelier/backend/api';
 import { useAuth, useClerk } from '@clerk/expo';
 import { useHostedAuth } from '@clerk/expo/hosted-auth';
@@ -64,6 +65,7 @@ function SignedIn() {
     <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.scroll}>
       <Rooms />
       <Runners />
+      <PushReadiness />
       <Section title="You">
         <Body>{me.email ?? me.name}</Body>
         <Button label="Sign out" kind="secondary" onPress={() => signOut()} />
@@ -99,7 +101,7 @@ function Rooms() {
           key={room._id}
           onPress={() => router.push({ pathname: '/room/[id]', params: { id: room._id } })}
           style={({ pressed }) => [styles.card, { backgroundColor: colors.card, opacity: pressed ? 0.6 : 1 }]}>
-          <Body style={{ fontWeight: '600' }}>{room.name}</Body>
+          <Body style={{ fontWeight: '600' }}>{room.name}{room.readyReviews ? ` · ${room.readyReviews} completed reviews` : ''}</Body>
           <Muted style={{ fontSize: 13 }}>{room.cwd}</Muted>
         </Pressable>
       ))}

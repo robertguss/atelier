@@ -2,6 +2,11 @@
 
 Status: draft, 2026-11-06. Written from the brainstorm that led to Atelier.
 
+Product update: reviews now finish when answers are revealed. The owner rejected
+mandatory crux/decision entry. Follow-up with any participant is available directly;
+saving a takeaway is optional. Older crux/decision records remain readable. This
+supersedes the required crux/decision steps below.
+
 ## What Atelier is
 
 Atelier is a team room where a human and AI models work together on a project.
