@@ -1,0 +1,104 @@
+import { api } from '@atelier/backend/api';
+import type { Id } from '@atelier/backend/dataModel';
+import { useQuery } from 'convex/react';
+import { useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import { PageSpinner } from '~/components/page';
+import { Sheet, SheetPopup } from '~/components/ui/sheet';
+import { isOffline, namesFrom, useMediaQuery, useNow } from '~/lib/room';
+import { AgentPane } from './AgentPane';
+import { MembersSheet } from './MembersSheet';
+import { RoomHeader } from './RoomHeader';
+import { TeamPane } from './TeamPane';
+
+const TEAM_MIN = 260;
+const TEAM_DEFAULT = 360;
+
+/** The shared room: the agent pane and the team pane side by side. */
+export function RoomView({ roomId, isOwner }: { roomId: Id<'rooms'>; isOwner: boolean }) {
+  const data = useQuery(api.rooms.get, { roomId });
+  const pane = useQuery(api.agent.pane, { roomId });
+  const me = useQuery(api.me.get, {});
+  // Ticks so the offline banner appears when heartbeats stop, with no new data.
+  const now = useNow(5_000);
+  const narrow = useMediaQuery('(max-width: 759px)');
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [teamOpen, setTeamOpen] = useState(false);
+  const [teamWidth, setTeamWidth] = useState(TEAM_DEFAULT);
+  const layoutRef = useRef<HTMLDivElement>(null);
+
+  if (data === undefined) return <PageSpinner />;
+  if (data === null) return null;
+
+  const names = namesFrom(data.participants);
+  const userId = me?.signedIn ? me.userId : null;
+  const myParticipantId = data.participants.find((p) => userId !== null && p.userId === userId)?._id ?? null;
+  const offline = pane ? isOffline(pane, now) : false;
+
+  const resizeTo = (clientX: number) => {
+    const box = layoutRef.current?.getBoundingClientRect();
+    if (!box) return;
+    setTeamWidth(Math.round(Math.min(Math.max(box.right - clientX, TEAM_MIN), box.width * 0.6)));
+  };
+  const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) resizeTo(e.clientX);
+  };
+  const onSeparatorKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'ArrowLeft') setTeamWidth((w) => w + 24);
+    if (e.key === 'ArrowRight') setTeamWidth((w) => Math.max(TEAM_MIN, w - 24));
+  };
+
+  const team = <TeamPane roomId={roomId} names={names} />;
+
+  return (
+    <div className="flex h-full flex-col">
+      <RoomHeader
+        roomId={roomId}
+        name={data.room.name}
+        isOwner={isOwner}
+        editsEnabled={pane?.editsEnabled}
+        offline={offline}
+        onOpenMembers={() => setMembersOpen(true)}
+        onOpenTeam={narrow ? () => setTeamOpen(true) : undefined}
+      />
+      <div ref={layoutRef} className="flex min-h-0 flex-1">
+        <div className="min-w-0 flex-1">
+          {pane === undefined ? (
+            <PageSpinner />
+          ) : (
+            <AgentPane roomId={roomId} pane={pane} names={names} myParticipantId={myParticipantId} offline={offline} />
+          )}
+        </div>
+        {narrow ? (
+          <Sheet open={teamOpen} onOpenChange={setTeamOpen}>
+            <SheetPopup side="right" keepMounted className="w-[min(88vw,24rem)]">
+              {team}
+            </SheetPopup>
+          </Sheet>
+        ) : (
+          <>
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize team pane"
+              aria-valuenow={teamWidth}
+              tabIndex={0}
+              className="w-1 shrink-0 cursor-col-resize border-l bg-transparent hover:bg-accent focus-visible:bg-accent"
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onKeyDown={onSeparatorKey}
+            />
+            <aside className="shrink-0 bg-card/40" style={{ width: teamWidth }}>
+              {team}
+            </aside>
+          </>
+        )}
+      </div>
+      {isOwner ? (
+        <MembersSheet roomId={roomId} participants={data.participants} open={membersOpen} onOpenChange={setMembersOpen} />
+      ) : null}
+    </div>
+  );
+}

@@ -2,9 +2,9 @@ import { api } from '@atelier/backend/api';
 import type { Id } from '@atelier/backend/dataModel';
 import { Link, createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery } from 'convex/react';
-import { ChevronLeftIcon } from 'lucide-react';
-import { useState } from 'react';
+import { Component, useState, type ReactNode } from 'react';
 import { MessagePage, PageSpinner, SignedInOnly } from '~/components/page';
+import { RoomView } from '~/components/room/RoomView';
 import { Button } from '~/components/ui/button';
 
 export const Route = createFileRoute('/rooms/$roomId')({ component: RoomPage });
@@ -38,7 +38,11 @@ function RoomGate({ roomId }: { roomId: string }) {
       return <JoinNotice roomId={id} version={notice.currentVersion} changed={notice.acceptedVersion !== null} />;
     }
   }
-  return <RoomPlaceholder roomId={id} />;
+  return (
+    <RoomErrorBoundary key={access}>
+      <RoomView roomId={id} isOwner={access === 'owner'} />
+    </RoomErrorBoundary>
+  );
 }
 
 function NoAccess({ title, description }: { title: string; description: string }) {
@@ -95,19 +99,21 @@ function JoinNotice({ roomId, version, changed }: { roomId: Id<'rooms'>; version
   );
 }
 
-// The two-pane room view replaces this.
-function RoomPlaceholder({ roomId }: { roomId: Id<'rooms'> }) {
-  const data = useQuery(api.rooms.get, { roomId });
-  if (data === undefined) return <PageSpinner />;
-  return (
-    <div className="mx-auto flex h-full max-w-2xl flex-col px-4 sm:px-6">
-      <header className="flex items-center gap-2 py-4">
-        <Button variant="ghost" size="icon-sm" aria-label="Your rooms" render={<Link to="/" />}>
-          <ChevronLeftIcon />
-        </Button>
-        <h1 className="text-lg font-medium tracking-tight">{data?.room.name ?? 'Room'}</h1>
-      </header>
-      <p className="text-sm text-muted-foreground">The room's conversation view isn't available on the web yet.</p>
-    </div>
-  );
+// A room query that fails (for example in the moment someone is removed,
+// before the access check above catches up) shows a message instead of a
+// blank page. A change in access re-renders the gate and clears it.
+class RoomErrorBoundary extends Component<{ children: ReactNode }, { error: unknown }> {
+  state = { error: null as unknown };
+  static getDerivedStateFromError(error: unknown) {
+    return { error };
+  }
+  render() {
+    if (this.state.error === null) return this.props.children;
+    return (
+      <NoAccess
+        title="This room couldn't load"
+        description={this.state.error instanceof Error ? this.state.error.message : String(this.state.error)}
+      />
+    );
+  }
 }
