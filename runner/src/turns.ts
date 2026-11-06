@@ -4,6 +4,7 @@ import { api } from "@atelier/backend/api";
 import type { Id } from "@atelier/backend/dataModel";
 import type {
   Harness,
+  HarnessEvent,
   HarnessId,
   QuestionAnswer,
   QuestionCard,
@@ -26,8 +27,8 @@ export interface TurnsOptions {
   client: TurnsClient;
   secret: string;
   harnesses: Partial<Record<HarnessId, Harness>>;
-  appendTranscript(turnId: string, record: unknown): void;
-  transcriptPath(turnId: string): string;
+  appendTranscript: (turnId: string, record: unknown) => void;
+  transcriptPath: (turnId: string) => string;
   /** Used when a participant has no model of its own. */
   defaultModels?: Partial<Record<HarnessId, string>>;
 }
@@ -38,7 +39,7 @@ interface RunningTurn {
   /** Why a person or Convex stopped the turn, if one did. */
   stopReason?: string;
   /** Resolves the harness's pending question. False if none matches. */
-  answer(payload: QuestionAnswer): boolean;
+  answer: (payload: QuestionAnswer) => boolean;
 }
 
 type Claimed = NonNullable<FunctionReturnType<typeof api.runner.claim>>;
@@ -53,48 +54,122 @@ interface ToolItem {
   ok?: boolean;
 }
 
-export function createTurns({
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === "string");
+
+// A client can only check an id's shape; Convex checks its table.
+const isCommandId = (value: unknown): value is Id<"commands"> =>
+  typeof value === "string";
+const isMessageId = (value: unknown): value is Id<"messages"> =>
+  typeof value === "string";
+
+const isCardAnswer = (value: unknown) =>
+  isRecord(value) &&
+  typeof value.questionId === "string" &&
+  typeof value.question === "string" &&
+  isStringArray(value.labels) &&
+  (value.freeText === undefined || typeof value.freeText === "string");
+
+// The answer payload Convex builds for a card.
+const isQuestionAnswer = (value: unknown): value is QuestionAnswer => {
+  if (
+    !isRecord(value) ||
+    typeof value.handId !== "string" ||
+    typeof value.requestId !== "string"
+  ) {
+    return false;
+  }
+  if (value.noDecision === true) {
+    return typeof value.message === "string";
+  }
+  return (
+    typeof value.answeredBy === "string" &&
+    (value.via === "card" || value.via === "chat") &&
+    Array.isArray(value.answers) &&
+    value.answers.every(isCardAnswer)
+  );
+};
+
+// A timeout that can stop counting and later go on with the time it had left.
+const pausableTimer = (ms: number, fire: () => void) => {
+  let left = ms;
+  let since = Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined = setTimeout(fire, ms);
+  return {
+    clear() {
+      clearTimeout(timer);
+      timer = undefined;
+    },
+    pause() {
+      if (timer === undefined) {
+        return;
+      }
+      clearTimeout(timer);
+      timer = undefined;
+      left -= Date.now() - since;
+    },
+    resume() {
+      if (timer !== undefined) {
+        return;
+      }
+      since = Date.now();
+      timer = setTimeout(fire, Math.max(0, left));
+    },
+  };
+};
+
+const parseReasoning = (value: string | undefined) => {
+  if (
+    value === undefined ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh"
+  ) {
+    return value;
+  }
+  throw new Error(`Unsupported reasoning level: ${value}`);
+};
+
+export const createTurns = ({
   client,
   secret,
   harnesses,
   appendTranscript,
   transcriptPath,
   defaultModels = {},
-}: TurnsOptions) {
+}: TurnsOptions) => {
   const running = new Map<string, RunningTurn>();
 
-  async function handle(commandId: string) {
-    const job = await client.mutation(api.runner.claim, {
-      commandId: commandId as Id<"commands">,
-      secret,
-    });
-    if (!job) {
-      return;
-    }
-    if (job.type === "run_turn") {
-      await runTurn(job);
-    } else {
-      await control(job);
-    }
-  }
-
-  async function control(job: ControlJob) {
+  const control = async (job: ControlJob) => {
     const turn = running.get(job.turn.id);
-    const payload = job.payload ?? {};
-    const handled = async (ok: boolean, error?: string) =>
-      client.mutation(api.runner.commandHandled, {
+    const payload: Record<string, unknown> = isRecord(job.payload)
+      ? job.payload
+      : {};
+    const messageId = () => {
+      if (!isMessageId(payload.messageId)) {
+        throw new Error("A steer command needs a messageId");
+      }
+      return payload.messageId;
+    };
+    const handled = async (ok: boolean, error?: string) => {
+      await client.mutation(api.runner.commandHandled, {
         commandId: job.commandId,
         ok,
         secret,
-        ...(error ? { error } : {}),
+        ...(error === undefined ? {} : { error }),
       });
+    };
 
     if (!turn) {
       if (job.type === "steer") {
         await client.mutation(api.runner.steerResult, {
-          secret,
-          messageId: payload.messageId,
+          messageId: messageId(),
           outcome: "rejected",
+          secret,
         });
       }
       await handled(false, "Turn is not running on the runner");
@@ -102,9 +177,11 @@ export function createTurns({
     }
     switch (job.type) {
       case "interrupt": {
-        turn.stopReason = payload.reason;
+        turn.stopReason =
+          typeof payload.reason === "string" ? payload.reason : undefined;
         turn.abort.abort();
-        return await handled(true);
+        await handled(true);
+        break;
       }
       case "steer": {
         let outcome: SteerOutcome;
@@ -115,28 +192,31 @@ export function createTurns({
           outcome = "rejected";
         }
         await client.mutation(api.runner.steerResult, {
-          messageId: payload.messageId,
+          messageId: messageId(),
           outcome,
           secret,
         });
-        return await handled(true);
+        await handled(true);
+        break;
       }
       case "answer": {
-        return turn.answer(payload)
-          ? await handled(true)
-          : await handled(false, "No question is waiting for this answer");
+        await (isQuestionAnswer(payload) && turn.answer(payload)
+          ? handled(true)
+          : handled(false, "No question is waiting for this answer"));
+        break;
       }
       case "settings": {
         turn.input.setEditsEnabled(payload.editsEnabled === true);
-        return await handled(true);
+        await handled(true);
+        break;
       }
       default: {
-        return await handled(false, `Unknown command ${job.type}`);
+        await handled(false, `Unknown command ${String(job.type)}`);
       }
     }
-  }
+  };
 
-  async function runTurn(job: RunJob) {
+  const runTurn = async (job: RunJob) => {
     const turnId = job.turn.id;
     const { commandId } = job;
     const harness = harnesses[job.participant.harness];
@@ -163,27 +243,27 @@ export function createTurns({
     const questions = new Map<
       string,
       {
-        resolve(answer: QuestionAnswer): void;
-        reject(error: Error): void;
+        resolve: (answer: QuestionAnswer) => void;
+        reject: (error: Error) => void;
         ceiling?: ReturnType<typeof setTimeout>;
       }
     >();
     const settle = (requestId: string) => {
       const question = questions.get(requestId);
-      if (!question) {
-        return undefined;
-      }
-      clearTimeout(question.ceiling);
-      questions.delete(requestId);
-      if (!questions.size && !ended) {
-        deadline.resume();
+      if (question !== undefined) {
+        clearTimeout(question.ceiling);
+        questions.delete(requestId);
+        if (!questions.size && !ended) {
+          deadline.resume();
+        }
       }
       return question;
     };
     const onQuestion = async (card: QuestionCard) => {
-      const answer = new Promise<QuestionAnswer>((resolve, reject) =>
-        questions.set(card.requestId, { reject, resolve })
-      );
+      // oxlint-disable-next-line promise/avoid-new -- the answer arrives later through a separate Convex command, which settles this promise from outside
+      const answer = new Promise<QuestionAnswer>((resolve, reject) => {
+        questions.set(card.requestId, { reject, resolve });
+      });
       deadline.pause();
       try {
         const handId = await client.mutation(api.runner.raiseHand, {
@@ -197,8 +277,8 @@ export function createTurns({
           question.ceiling = setTimeout(() => {
             client
               .mutation(api.runner.handTimedOut, { handId, secret })
-              .catch((error_) => {
-                console.error("card timeout failed:", error_);
+              .catch((timeoutError: unknown) => {
+                console.error("card timeout failed:", timeoutError);
               });
           }, CARD_ANSWER_TIMEOUT_MS);
         }
@@ -241,12 +321,17 @@ export function createTurns({
       changed.clear();
       try {
         await client.mutation(api.runner.recordTurnItems, {
-          items: ids.map((id) => ({ ...items.get(id)! })),
+          items: ids.flatMap((id) => {
+            const item = items.get(id);
+            return item === undefined ? [] : [{ ...item }];
+          }),
           secret,
           turnId,
         });
       } catch (error_) {
-        for (const id of ids) changed.add(id);
+        for (const id of ids) {
+          changed.add(id);
+        }
         throw error_;
       }
     };
@@ -265,6 +350,113 @@ export function createTurns({
     };
     let timer: ReturnType<typeof setInterval> | undefined;
 
+    // An independent review's prompt carries the repository snapshot.
+    const reviewEvidence = async () => {
+      const { ritualId } = job.turn;
+      if (ritualId === undefined) {
+        return "";
+      }
+      return await client.mutation(api.runner.prepareReview, {
+        ritualId,
+        secret,
+        snapshot: await reviewSnapshot(job.room.cwd),
+      });
+    };
+    const record = async (ev: HarnessEvent) => {
+      switch (ev.type) {
+        case "session": {
+          ({ sessionId } = ev);
+          if (sessionId !== savedSessionId) {
+            savedSessionId = sessionId;
+            // Saved now, so a turn interrupted mid-question can still be resumed.
+            await client
+              .mutation(api.runner.sessionStarted, {
+                secret,
+                sessionId,
+                turnId,
+              })
+              .catch((sessionError: unknown) => {
+                console.error("saving session failed:", sessionError);
+              });
+          }
+          break;
+        }
+        case "text_delta": {
+          text += ev.text;
+          break;
+        }
+        case "tool_call": {
+          if (!items.has(ev.id)) {
+            items.set(ev.id, {
+              callId: ev.id,
+              name: ev.name,
+              seq: items.size,
+              summary: ev.summary,
+            });
+          }
+          changed.add(ev.id);
+          break;
+        }
+        case "tool_result": {
+          const item = items.get(ev.id);
+          if (item) {
+            item.ok = ev.ok;
+            changed.add(ev.id);
+          }
+          break;
+        }
+        case "usage": {
+          usage = {
+            costUsd: ev.costUsd,
+            inputTokens: ev.inputTokens,
+            outputTokens: ev.outputTokens,
+          };
+          break;
+        }
+        case "final": {
+          finalText = ev.text;
+          break;
+        }
+        case "error": {
+          error = ev.message;
+          break;
+        }
+        default: {
+          break;
+        }
+      }
+    };
+
+    // Tells Convex how the turn ended.
+    const report = async () => {
+      if (finalText !== null && (error === null || error === "")) {
+        await client.mutation(api.runner.finish, {
+          commandId,
+          finalText: finalText === "" ? text : finalText,
+          model: effectiveModel,
+          secret,
+          sessionId,
+          transcriptRef,
+          turnId,
+          usage,
+        });
+        const cost = usage?.costUsd;
+        console.log(
+          `turn ${turnId}: done${cost === undefined || cost === 0 ? "" : ` ($${cost.toFixed(4)})`}`
+        );
+      } else {
+        await client.mutation(api.runner.fail, {
+          commandId,
+          error: error ?? "Turn ended without a result",
+          interrupted: abort.signal.aborted,
+          secret,
+          transcriptRef,
+          turnId,
+        });
+        console.error(`turn ${turnId}: ${error}`);
+      }
+    };
+
     try {
       const started = await client.mutation(api.runner.start, {
         harnessVersion: await harness.version(),
@@ -272,13 +464,11 @@ export function createTurns({
         turnId,
       });
       // Start polling only after start commits: a queued turn is not cancelled.
-      timer = setInterval(
-        async () =>
-          flush().catch((error_) => {
-            console.error("progress failed:", error_);
-          }),
-        PROGRESS_MS
-      );
+      timer = setInterval(() => {
+        flush().catch((progressError: unknown) => {
+          console.error("progress failed:", progressError);
+        });
+      }, PROGRESS_MS);
       console.log(`turn ${turnId}: ${harness.id} in ${job.room.cwd}`);
       appendTranscript(turnId, {
         atelier: "request",
@@ -295,15 +485,7 @@ export function createTurns({
           independentReview: job.turn.independentReview,
           mcpServers: [],
           model: effectiveModel,
-          prompt:
-            job.turn.prompt +
-            (job.turn.ritualId
-              ? await client.mutation(api.runner.prepareReview, {
-                  secret,
-                  ritualId: job.turn.ritualId,
-                  snapshot: await reviewSnapshot(job.room.cwd),
-                })
-              : ""),
+          prompt: job.turn.prompt + (await reviewEvidence()),
           reasoning: parseReasoning(job.participant.reasoning),
           resumeSessionId: sessionId,
           turnId,
@@ -311,142 +493,58 @@ export function createTurns({
         abort.signal,
         turn.input
       )) {
-        if (ev.type === "session") {
-          sessionId = ev.sessionId;
-          if (sessionId !== savedSessionId) {
-            savedSessionId = sessionId;
-            // Saved now, so a turn interrupted mid-question can still be resumed.
-            await client
-              .mutation(api.runner.sessionStarted, {
-                secret,
-                sessionId,
-                turnId,
-              })
-              .catch((error_) => {
-                console.error("saving session failed:", error_);
-              });
-          }
-        } else if (ev.type === "text_delta") {
-          text += ev.text;
-        } else if (ev.type === "tool_call") {
-          if (!items.has(ev.id)) {
-            items.set(ev.id, {
-              callId: ev.id,
-              seq: items.size,
-              name: ev.name,
-              summary: ev.summary,
-            });
-          }
-          changed.add(ev.id);
-        } else if (ev.type === "tool_result") {
-          const item = items.get(ev.id);
-          if (item) {
-            item.ok = ev.ok;
-            changed.add(ev.id);
-          }
-        } else if (ev.type === "usage") {
-          usage = {
-            inputTokens: ev.inputTokens,
-            outputTokens: ev.outputTokens,
-            costUsd: ev.costUsd,
-          };
-        } else if (ev.type === "final") {
-          finalText = ev.text;
-        } else if (ev.type === "error") {
-          error = ev.message;
-        }
+        await record(ev);
       }
     } catch (error_) {
-      error = abort.signal.aborted
-        ? "Interrupted"
-        : error_ instanceof Error
-          ? error_.message
-          : String(error_);
+      if (abort.signal.aborted) {
+        error = "Interrupted";
+      } else {
+        error = error_ instanceof Error ? error_.message : String(error_);
+      }
     } finally {
       ended = true;
       clearInterval(timer);
       deadline.clear();
-      for (const requestId of [...questions.keys()]) {
+      for (const requestId of questions.keys()) {
         settle(requestId)?.reject(new Error("The turn ended"));
       }
       running.delete(turnId);
     }
-    if (abort.signal.aborted && turn.stopReason) {
+    if (
+      abort.signal.aborted &&
+      turn.stopReason !== undefined &&
+      turn.stopReason !== ""
+    ) {
       error = turn.stopReason;
     }
-    await flushItems().catch((error_) => {
-      console.error("saving tool activity failed:", error_);
+    await flushItems().catch((activityError: unknown) => {
+      console.error("saving tool activity failed:", activityError);
     });
 
-    if (finalText !== null && !error) {
-      await client.mutation(api.runner.finish, {
-        commandId,
-        finalText: finalText || text,
-        model: effectiveModel,
-        secret,
-        sessionId,
-        transcriptRef,
-        turnId,
-        usage,
-      });
-      console.log(
-        `turn ${turnId}: done${usage?.costUsd ? ` ($${usage.costUsd.toFixed(4)})` : ""}`
-      );
-    } else {
-      await client.mutation(api.runner.fail, {
-        commandId,
-        error: error ?? "Turn ended without a result",
-        interrupted: abort.signal.aborted,
-        secret,
-        transcriptRef,
-        turnId,
-      });
-      console.error(`turn ${turnId}: ${error}`);
+    await report();
+  };
+
+  const handle = async (commandId: string) => {
+    if (!isCommandId(commandId)) {
+      throw new Error("Command ids are strings");
     }
-  }
+    const job = await client.mutation(api.runner.claim, {
+      commandId,
+      secret,
+    });
+    if (!job) {
+      return;
+    }
+    await (job.type === "run_turn" ? runTurn(job) : control(job));
+  };
 
   return {
     /** Stops every turn running here, for shutdown. */
     abortAll() {
-      for (const turn of running.values()) turn.abort.abort();
+      for (const turn of running.values()) {
+        turn.abort.abort();
+      }
     },
     handle,
   };
-}
-
-// A timeout that can stop counting and later go on with the time it had left.
-function pausableTimer(ms: number, fire: () => void) {
-  let left = ms;
-  let since = Date.now();
-  let timer: ReturnType<typeof setTimeout> | undefined = setTimeout(fire, ms);
-  return {
-    clear() {
-      clearTimeout(timer);
-      timer = undefined;
-    },
-    pause() {
-      if (!timer) return;
-      clearTimeout(timer);
-      timer = undefined;
-      left -= Date.now() - since;
-    },
-    resume() {
-      if (timer) return;
-      since = Date.now();
-      timer = setTimeout(fire, Math.max(0, left));
-    },
-  };
-}
-
-function parseReasoning(value: string | undefined) {
-  if (
-    value === undefined ||
-    value === "low" ||
-    value === "medium" ||
-    value === "high" ||
-    value === "xhigh"
-  ) {
-    return value;
-  }
-  throw new Error(`Unsupported reasoning level: ${value}`);
-}
+};

@@ -17,7 +17,9 @@ child.on("exit", (code) => {
 for (const signal of ["SIGTERM", "SIGINT"]) {
   process.on(signal, () => {
     child.kill(signal);
-    const timer = setTimeout(() => child.kill("SIGKILL"), 500);
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, 500);
     timer.unref();
   });
 }

@@ -8,7 +8,7 @@ import {
   realpath,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import path from "node:path";
 
 import type {
   HarnessEvent,
@@ -17,7 +17,7 @@ import type {
   SteerOutcome,
   TurnInput,
 } from "@atelier/shared";
-import { expect, test } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 
 import { claudeHarness } from "./claude.ts";
 import { turnInput } from "./events.ts";
@@ -66,6 +66,22 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 }).on('close', () => { eof = true; log({ eof: true }); exit(); });
 `;
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+// The value at `keys` inside parsed JSON, or undefined where the path breaks.
+const at = (value: unknown, ...keys: string[]): unknown => {
+  let current = value;
+  for (const key of keys) {
+    current = isRecord(current) ? current[key] : undefined;
+  }
+  return current;
+};
+
+// The same expected value for every id, keyed by id.
+const everyId = (ids: string[], expected: unknown) =>
+  Object.fromEntries(ids.map((id) => [id, expected]));
+
 const init = { emit: { subtype: "init", type: "system", uuid: "i1" } };
 const result = (text: string) => ({
   emit: {
@@ -81,7 +97,7 @@ const result = (text: string) => ({
 const toolUse = (id: string, name: string, input: unknown) => ({
   emit: {
     message: {
-      content: [{ type: "tool_use", id, name, input }],
+      content: [{ id, input, name, type: "tool_use" }],
       role: "assistant",
     },
     parent_tool_use_id: null,
@@ -102,16 +118,16 @@ interface Options {
   setup?: (cwd: string) => Promise<void>;
 }
 
-async function runFake(steps: unknown[], opts: Options = {}) {
+const runFake = async (steps: unknown[], opts: Options = {}) => {
   const dir = await realpath(
-    await mkdtemp(join(tmpdir(), "atelier-claude-test-"))
+    await mkdtemp(path.join(tmpdir(), "atelier-claude-test-"))
   );
-  const cwd = join(dir, "room");
+  const cwd = path.join(dir, "room");
   await mkdir(cwd);
-  const executable = join(dir, "fake-claude.mjs");
+  const executable = path.join(dir, "fake-claude.mjs");
   await writeFile(executable, FAKE_CLI, { mode: 0o700 });
   await writeFile(
-    join(cwd, "script.json"),
+    path.join(cwd, "script.json"),
     JSON.stringify({ cancelled: opts.cancelled, steps })
   );
   await opts.setup?.(cwd);
@@ -135,473 +151,541 @@ async function runFake(steps: unknown[], opts: Options = {}) {
       events.push(ev);
       opts.onEvent?.(ev, input, cwd);
     }
-    const calls = (await readFile(join(cwd, "calls.jsonl"), "utf-8"))
+    const log = await readFile(path.join(cwd, "calls.jsonl"), "utf-8");
+    const calls = log
       .trim()
       .split("\n")
-      .map((l) => JSON.parse(l));
-    const decision = (id: string) =>
+      .map((line) => {
+        const parsed: unknown = JSON.parse(line);
+        assert(isRecord(parsed), `calls.jsonl holds a non-object: ${line}`);
+        return parsed;
+      });
+    const decision = (id: string): unknown =>
       calls.find((c) => c.permissionResult === id)?.response;
     return { calls, cwd, decision, events, input };
   } finally {
     await rm(dir, { force: true, recursive: true });
   }
-}
+};
 
-test("AskUserQuestion becomes a card, and the answer maps back by question text", async () => {
-  const cards: QuestionCard[] = [];
-  const questions = [
-    {
-      header: "Color",
-      multiSelect: false,
-      options: [
-        { label: "Red", description: "warm" },
-        { label: "Blue", description: "cool" },
-      ],
-      question: "Which color?",
-    },
-    {
-      header: "Size",
-      multiSelect: true,
-      options: [
-        { label: "S", description: "" },
-        { label: "M", description: "" },
-        { label: "L", description: "" },
-      ],
-      question: "Which sizes?",
-    },
-    {
-      header: "Notes",
-      multiSelect: false,
-      options: [
-        { label: "No", description: "" },
-        { label: "Yes", description: "" },
-      ],
-      question: "Anything else?",
-    },
-  ];
-  const { decision } = await runFake(
-    [init, permission("ask1", "AskUserQuestion", { questions }), result("ok")],
-    {
-      async onQuestion(card) {
-        cards.push(card);
-        const [color, sizes, notes] = card.questions.map((q) => q.id);
-        return {
-          answeredBy: "Robert",
-          answers: [
-            { questionId: color!, question: "Which color?", labels: ["Blue"] },
-            {
-              questionId: sizes!,
-              question: "Which sizes?",
-              labels: ["S", "L"],
-            },
-            {
-              questionId: notes!,
-              question: "Anything else?",
-              labels: [],
-              freeText: "Ship it Friday",
-            },
-          ],
-          handId: "h1",
-          requestId: card.requestId,
-          via: "card",
-        };
+describe(claudeHarness, () => {
+  it("AskUserQuestion becomes a card, and the answer maps back by question text", async () => {
+    const cards: QuestionCard[] = [];
+    const questions = [
+      {
+        header: "Color",
+        multiSelect: false,
+        options: [
+          { description: "warm", label: "Red" },
+          { description: "cool", label: "Blue" },
+        ],
+        question: "Which color?",
       },
-    }
-  );
-  expect(cards).toHaveLength(1);
-  const card = cards[0]!;
-  expect(card.requestId).toBe("ask1");
-  expect(new Set(card.questions.map((q) => q.id)).size).toBe(3);
-  expect(card.questions[0]).toStrictEqual({
-    allowFreeText: true,
-    header: "Color",
-    id: card.questions[0]!.id,
-    multiSelect: false,
-    options: [
-      { label: "Red", description: "warm" },
-      { label: "Blue", description: "cool" },
-    ],
-    text: "Which color?",
-  });
-  expect(card.questions[1]!.multiSelect).toBe(true);
-  const response = decision("ask1");
-  expect(response.behavior).toBe("allow");
-  expect(response.updatedInput.questions).toStrictEqual(questions);
-  expect(response.updatedInput.answers).toStrictEqual({
-    "Anything else?": "Ship it Friday",
-    "Which color?": "Blue",
-    "Which sizes?": "S, L",
-  });
-  for (const q of questions) {
-    expect(response.updatedInput.annotations[q.question].notes).toMatch(
-      /Robert/
-    );
-  }
-});
-
-test("a card closed without an answer tells Claude no decision was made", async () => {
-  const questions = [
-    {
-      header: "Color",
-      multiSelect: false,
-      options: [
-        { label: "Red", description: "" },
-        { label: "Blue", description: "" },
-      ],
-      question: "Which color?",
-    },
-  ];
-  const { decision } = await runFake(
-    [init, permission("ask1", "AskUserQuestion", { questions }), result("ok")],
-    {
-      onQuestion: async (card) => ({
-        handId: "h1",
-        message: "No one answered in time; no decision was made.",
-        noDecision: true,
-        requestId: card.requestId,
-      }),
-    }
-  );
-  const response = decision("ask1");
-  expect(response.behavior).toBe("allow");
-  expect(response.updatedInput.answers["Which color?"]).toMatch(
-    /no decision was made/i
-  );
-});
-
-test("with the edit switch off, edits and unapproved commands are denied", async () => {
-  const { decision, calls } = await runFake([
-    init,
-    permission("w1", "Write", { content: "x", file_path: "plan.md" }),
-    permission("b1", "Bash", { command: "rm -rf build" }),
-    result("ok"),
-  ]);
-  expect(calls[0].argv.includes("--permission-mode=default")).toBeTruthy();
-  expect(decision("w1").behavior).toBe("deny");
-  expect(decision("b1").behavior).toBe("deny");
-});
-
-test("with the edit switch on, only edits inside the folder and outside control paths are allowed", async () => {
-  const outside = await realpath(
-    await mkdtemp(join(tmpdir(), "atelier-claude-outside-"))
-  );
-  try {
+      {
+        header: "Size",
+        multiSelect: true,
+        options: [
+          { description: "", label: "S" },
+          { description: "", label: "M" },
+          { description: "", label: "L" },
+        ],
+        question: "Which sizes?",
+      },
+      {
+        header: "Notes",
+        multiSelect: false,
+        options: [
+          { description: "", label: "No" },
+          { description: "", label: "Yes" },
+        ],
+        question: "Anything else?",
+      },
+    ];
     const { decision } = await runFake(
       [
         init,
-        permission("in", "Write", { content: "x", file_path: "docs/plan.md" }),
-        permission("abs", "Edit", {
-          file_path: "$CWD/notes.md",
-          new_string: "b",
-          old_string: "a",
-        }),
-        permission("nb", "NotebookEdit", {
-          new_source: "x",
-          notebook_path: "analysis.ipynb",
-        }),
-        permission("up", "Write", { content: "x", file_path: "../escape.md" }),
-        permission("away", "Write", {
-          content: "x",
-          file_path: join(outside, "x.md"),
-        }),
-        permission("link", "Write", { content: "x", file_path: "linked/x.md" }),
-        permission("dangling", "Write", {
-          content: "x",
-          file_path: "dangling.md",
-        }),
-        permission("claude", "Write", {
-          content: "{}",
-          file_path: ".claude/settings.local.json",
-        }),
-        permission("hook", "Write", {
-          content: "x",
-          file_path: ".git/hooks/pre-commit",
-        }),
-        permission("mcp", "Write", { content: "{}", file_path: ".mcp.json" }),
-        permission("codex", "Write", {
-          content: "x",
-          file_path: ".codex/config.toml",
-        }),
-        permission("pi", "Write", {
-          content: "x",
-          file_path: "sub/.pi/x.json",
-        }),
-        permission("agents", "Write", {
-          content: "x",
-          file_path: ".agents/skills/x.md",
-        }),
-        permission("bash", "Bash", { command: "rm -rf build" }),
+        permission("ask1", "AskUserQuestion", { questions }),
+        result("ok"),
+      ],
+      {
+        onQuestion: async (card) => {
+          cards.push(card);
+          const [color, sizes, notes] = card.questions.map((q) => q.id);
+          assert(
+            color !== undefined && sizes !== undefined && notes !== undefined
+          );
+          return await Promise.resolve<QuestionAnswer>({
+            answeredBy: "Robert",
+            answers: [
+              { labels: ["Blue"], question: "Which color?", questionId: color },
+              {
+                labels: ["S", "L"],
+                question: "Which sizes?",
+                questionId: sizes,
+              },
+              {
+                freeText: "Ship it Friday",
+                labels: [],
+                question: "Anything else?",
+                questionId: notes,
+              },
+            ],
+            handId: "h1",
+            requestId: card.requestId,
+            via: "card",
+          });
+        },
+      }
+    );
+    const [card] = cards;
+    assert(card !== undefined, "a card was raised");
+    const [first, second] = card.questions;
+    assert(first !== undefined, "the card has a first question");
+    expect({
+      cardCount: cards.length,
+      requestId: card.requestId,
+      secondMultiSelect: second?.multiSelect,
+      uniqueIds: new Set(card.questions.map((q) => q.id)).size,
+    }).toStrictEqual({
+      cardCount: 1,
+      requestId: "ask1",
+      secondMultiSelect: true,
+      uniqueIds: 3,
+    });
+    expect(first).toStrictEqual({
+      allowFreeText: true,
+      header: "Color",
+      id: first.id,
+      multiSelect: false,
+      options: [
+        { description: "warm", label: "Red" },
+        { description: "cool", label: "Blue" },
+      ],
+      text: "Which color?",
+    });
+    const response = decision("ask1");
+    expect({
+      answers: at(response, "updatedInput", "answers"),
+      behavior: at(response, "behavior"),
+      questions: at(response, "updatedInput", "questions"),
+    }).toStrictEqual({
+      answers: {
+        "Anything else?": "Ship it Friday",
+        "Which color?": "Blue",
+        "Which sizes?": "S, L",
+      },
+      behavior: "allow",
+      questions,
+    });
+    const mentionsRobert: unknown = expect.stringMatching(/Robert/u);
+    expect(
+      questions.map((q) =>
+        at(response, "updatedInput", "annotations", q.question, "notes")
+      )
+    ).toStrictEqual(questions.map(() => mentionsRobert));
+  });
+
+  it("a card closed without an answer tells Claude no decision was made", async () => {
+    const questions = [
+      {
+        header: "Color",
+        multiSelect: false,
+        options: [
+          { description: "", label: "Red" },
+          { description: "", label: "Blue" },
+        ],
+        question: "Which color?",
+      },
+    ];
+    const { decision } = await runFake(
+      [
+        init,
+        permission("ask1", "AskUserQuestion", { questions }),
+        result("ok"),
+      ],
+      {
+        onQuestion: async (card) =>
+          await Promise.resolve<QuestionAnswer>({
+            handId: "h1",
+            message: "No one answered in time; no decision was made.",
+            noDecision: true,
+            requestId: card.requestId,
+          }),
+      }
+    );
+    const response = decision("ask1");
+    expect(at(response, "behavior")).toBe("allow");
+    expect(at(response, "updatedInput", "answers", "Which color?")).toMatch(
+      /no decision was made/iu
+    );
+  });
+
+  it("with the edit switch off, edits and unapproved commands are denied", async () => {
+    const { decision, calls } = await runFake([
+      init,
+      permission("w1", "Write", { content: "x", file_path: "plan.md" }),
+      permission("b1", "Bash", { command: "rm -rf build" }),
+      result("ok"),
+    ]);
+    expect(at(calls[0], "argv")).toContain("--permission-mode=default");
+    expect(at(decision("w1"), "behavior")).toBe("deny");
+    expect(at(decision("b1"), "behavior")).toBe("deny");
+  });
+
+  it("with the edit switch on, only edits inside the folder and outside control paths are allowed", async () => {
+    const outside = await realpath(
+      await mkdtemp(path.join(tmpdir(), "atelier-claude-outside-"))
+    );
+    try {
+      const { decision } = await runFake(
+        [
+          init,
+          permission("in", "Write", {
+            content: "x",
+            file_path: "docs/plan.md",
+          }),
+          permission("abs", "Edit", {
+            file_path: "$CWD/notes.md",
+            new_string: "b",
+            old_string: "a",
+          }),
+          permission("nb", "NotebookEdit", {
+            new_source: "x",
+            notebook_path: "analysis.ipynb",
+          }),
+          permission("up", "Write", {
+            content: "x",
+            file_path: "../escape.md",
+          }),
+          permission("away", "Write", {
+            content: "x",
+            file_path: path.join(outside, "x.md"),
+          }),
+          permission("link", "Write", {
+            content: "x",
+            file_path: "linked/x.md",
+          }),
+          permission("dangling", "Write", {
+            content: "x",
+            file_path: "dangling.md",
+          }),
+          permission("claude", "Write", {
+            content: "{}",
+            file_path: ".claude/settings.local.json",
+          }),
+          permission("hook", "Write", {
+            content: "x",
+            file_path: ".git/hooks/pre-commit",
+          }),
+          permission("mcp", "Write", { content: "{}", file_path: ".mcp.json" }),
+          permission("codex", "Write", {
+            content: "x",
+            file_path: ".codex/config.toml",
+          }),
+          permission("pi", "Write", {
+            content: "x",
+            file_path: "sub/.pi/x.json",
+          }),
+          permission("agents", "Write", {
+            content: "x",
+            file_path: ".agents/skills/x.md",
+          }),
+          permission("bash", "Bash", { command: "rm -rf build" }),
+          result("ok"),
+        ],
+        {
+          editsEnabled: true,
+          async setup(cwd) {
+            await mkdir(path.join(cwd, ".git", "hooks"), { recursive: true });
+            await symlink(outside, path.join(cwd, "linked"));
+            await symlink(
+              path.join(outside, "gone.md"),
+              path.join(cwd, "dangling.md")
+            );
+          },
+        }
+      );
+      const allowed = ["in", "abs", "nb"];
+      const denied = [
+        "up",
+        "away",
+        "link",
+        "dangling",
+        "claude",
+        "hook",
+        "mcp",
+        "codex",
+        "pi",
+        "agents",
+        "bash",
+      ];
+      // Keyed by id, so a failure names the request that got the wrong decision.
+      const behaviors = (ids: string[]) =>
+        Object.fromEntries(ids.map((id) => [id, at(decision(id), "behavior")]));
+      expect(behaviors(allowed)).toStrictEqual(everyId(allowed, "allow"));
+      expect(at(decision("in"), "updatedInput")).toStrictEqual({
+        content: "x",
+        file_path: "docs/plan.md",
+      });
+      expect(behaviors(denied)).toStrictEqual(everyId(denied, "deny"));
+    } finally {
+      await rm(outside, { force: true, recursive: true });
+    }
+  });
+
+  it("turning the switch off mid-turn denies the next edit", async () => {
+    const { decision } = await runFake(
+      [
+        init,
+        permission("w1", "Write", { content: "x", file_path: "a.md" }),
+        toolUse("marker", "Read", { file_path: "a.md" }),
+        { waitFile: "go" },
+        permission("w2", "Write", { content: "x", file_path: "b.md" }),
         result("ok"),
       ],
       {
         editsEnabled: true,
-        async setup(cwd) {
-          await mkdir(join(cwd, ".git", "hooks"), { recursive: true });
-          await symlink(outside, join(cwd, "linked"));
-          await symlink(join(outside, "gone.md"), join(cwd, "dangling.md"));
+        onEvent(ev, input, cwd) {
+          if (ev.type === "tool_call" && ev.id === "marker") {
+            input.setEditsEnabled(false);
+            void writeFile(path.join(cwd, "go"), "");
+          }
         },
       }
     );
-    for (const id of ["in", "abs", "nb"]) {
-      expect(decision(id).behavior, id).toBe("allow");
-    }
-    expect(decision("in").updatedInput).toStrictEqual({
-      content: "x",
-      file_path: "docs/plan.md",
-    });
-    for (const id of [
-      "up",
-      "away",
-      "link",
-      "dangling",
-      "claude",
-      "hook",
-      "mcp",
-      "codex",
-      "pi",
-      "agents",
-      "bash",
-    ]) {
-      expect(decision(id).behavior, id).toBe("deny");
-    }
-  } finally {
-    await rm(outside, { force: true, recursive: true });
-  }
-});
-
-test("turning the switch off mid-turn denies the next edit", async () => {
-  const { decision } = await runFake(
-    [
-      init,
-      permission("w1", "Write", { content: "x", file_path: "a.md" }),
-      toolUse("marker", "Read", { file_path: "a.md" }),
-      { waitFile: "go" },
-      permission("w2", "Write", { content: "x", file_path: "b.md" }),
-      result("ok"),
-    ],
-    {
-      editsEnabled: true,
-      onEvent(ev, input, cwd) {
-        if (ev.type === "tool_call" && ev.id === "marker") {
-          input.setEditsEnabled(false);
-          void writeFile(join(cwd, "go"), "");
-        }
-      },
-    }
-  );
-  expect(decision("w1").behavior).toBe("allow");
-  expect(decision("w2").behavior).toBe("deny");
-});
-
-test("a steer goes in mid-turn with priority next and resolves steered when folded", async () => {
-  let steer: Promise<SteerOutcome> | undefined;
-  const { events, calls } = await runFake(
-    [
-      init,
-      toolUse("t1", "Bash", { command: "sleep 6" }),
-      { waitUser: true },
-      {
-        emit: {
-          command_uuid: "$STEER",
-          state: "queued",
-          type: "command_lifecycle",
-        },
-      },
-      {
-        emit: {
-          message: {
-            content: [
-              { type: "tool_result", tool_use_id: "t1", content: "done" },
-            ],
-            role: "user",
-          },
-          parent_tool_use_id: null,
-          type: "user",
-          uuid: "u1",
-        },
-      },
-      {
-        emit: {
-          command_uuid: "$STEER",
-          state: "started",
-          type: "command_lifecycle",
-        },
-      },
-      {
-        emit: {
-          status: null,
-          subtype: "status",
-          type: "system",
-          user_message_uuids: ["first", "$STEER"],
-          uuid: "s1",
-        },
-      },
-      toolUse("t2", "Bash", { command: "false" }),
-      {
-        emit: {
-          message: {
-            content: [
-              {
-                type: "tool_result",
-                tool_use_id: "t2",
-                content: "exit 1",
-                is_error: true,
-              },
-            ],
-            role: "user",
-          },
-          parent_tool_use_id: null,
-          type: "user",
-          uuid: "u2",
-        },
-      },
-      result("Done, in blue"),
-    ],
-    {
-      onEvent(ev, input) {
-        if (ev.type === "tool_call" && ev.id === "t1") {
-          steer = input.steer("Use blue instead");
-        }
-      },
-    }
-  );
-  await expect(steer).resolves.toBe("steered");
-  const pushed = calls.filter((c) => c.type === "user").slice(1);
-  expect(pushed).toHaveLength(1);
-  expect(pushed[0].priority).toBe("next");
-  expect(pushed[0].parent_tool_use_id).toBeNull();
-  expect(pushed[0].uuid).toMatch(/^[0-9a-f-]{36}$/);
-  expect(pushed[0].message).toStrictEqual({
-    content: "Use blue instead",
-    role: "user",
+    expect(at(decision("w1"), "behavior")).toBe("allow");
+    expect(at(decision("w2"), "behavior")).toBe("deny");
   });
-  expect(
-    calls.some((c) => c.eof),
-    "input closes after the result"
-  ).toBeTruthy();
-  expect(
-    events.filter((e) => e.type === "tool_call" || e.type === "tool_result")
-  ).toStrictEqual([
-    { id: "t1", name: "Bash", summary: "sleep 6", type: "tool_call" },
-    { id: "t1", ok: true, type: "tool_result" },
-    { id: "t2", name: "Bash", summary: "false", type: "tool_call" },
-    { id: "t2", ok: false, type: "tool_result" },
-  ]);
-  expect(events.at(-1)).toStrictEqual({ text: "Done, in blue", type: "final" });
-});
 
-test("a steer not folded before the result is withdrawn and rejected", async () => {
-  let steer: Promise<SteerOutcome> | undefined;
-  const { calls, events, input } = await runFake(
-    [
-      init,
-      toolUse("t1", "Bash", { command: "sleep 6" }),
-      { waitUser: true },
-      result("first"),
-    ],
-    {
-      cancelled: true,
-      onEvent(ev, input) {
-        if (ev.type === "tool_call") {
-          steer = input.steer("Too late");
-        }
-      },
-    }
-  );
-  await expect(steer).resolves.toBe("rejected");
-  const { uuid } = calls.filter((c) => c.type === "user")[1];
-  expect(
-    calls.some(
-      (c) =>
-        c.type === "control_request" &&
-        c.request.subtype === "cancel_async_message" &&
-        c.request.message_uuid === uuid
-    )
-  ).toBeTruthy();
-  expect(calls.some((c) => c.eof)).toBeTruthy();
-  expect(events.at(-1)).toStrictEqual({ text: "first", type: "final" });
-  await expect(input.steer("After the turn")).resolves.toBe("rejected");
-});
-
-test("a late steer the CLI could not withdraw runs on in the same turn and counts as steered", async () => {
-  let steer: Promise<SteerOutcome> | undefined;
-  const { events } = await runFake(
-    [
-      init,
-      toolUse("t1", "Bash", { command: "sleep 6" }),
-      { waitUser: true },
-      result("first"),
-      {
-        emit: {
-          command_uuid: "$STEER",
-          state: "started",
-          type: "command_lifecycle",
+  it("a steer goes in mid-turn with priority next and resolves steered when folded", async () => {
+    let steer: Promise<SteerOutcome> | undefined;
+    const { events, calls } = await runFake(
+      [
+        init,
+        toolUse("t1", "Bash", { command: "sleep 6" }),
+        { waitUser: true },
+        {
+          emit: {
+            command_uuid: "$STEER",
+            state: "queued",
+            type: "command_lifecycle",
+          },
         },
-      },
-      result("second"),
-    ],
-    {
-      cancelled: false,
-      onEvent(ev, input) {
-        if (ev.type === "tool_call") {
-          steer = input.steer("One more thing");
-        }
-      },
-    }
-  );
-  await expect(steer).resolves.toBe("steered");
-  expect(events.filter((e) => e.type === "final").at(-1)).toStrictEqual({
-    text: "first\n\nsecond",
-    type: "final",
-  });
-});
-
-test("independent review options are unchanged", async () => {
-  let steered: SteerOutcome | undefined;
-  const { calls } = await runFake([init, result("review")], {
-    independentReview: true,
-    onEvent(ev, input) {
-      if (ev.type === "session") {
-        void input.steer("x").then((o) => {
-          steered = o;
-        });
+        {
+          emit: {
+            message: {
+              content: [
+                { content: "done", tool_use_id: "t1", type: "tool_result" },
+              ],
+              role: "user",
+            },
+            parent_tool_use_id: null,
+            type: "user",
+            uuid: "u1",
+          },
+        },
+        {
+          emit: {
+            command_uuid: "$STEER",
+            state: "started",
+            type: "command_lifecycle",
+          },
+        },
+        {
+          emit: {
+            status: null,
+            subtype: "status",
+            type: "system",
+            user_message_uuids: ["first", "$STEER"],
+            uuid: "s1",
+          },
+        },
+        toolUse("t2", "Bash", { command: "false" }),
+        {
+          emit: {
+            message: {
+              content: [
+                {
+                  content: "exit 1",
+                  is_error: true,
+                  tool_use_id: "t2",
+                  type: "tool_result",
+                },
+              ],
+              role: "user",
+            },
+            parent_tool_use_id: null,
+            type: "user",
+            uuid: "u2",
+          },
+        },
+        result("Done, in blue"),
+      ],
+      {
+        onEvent(ev, input) {
+          if (ev.type === "tool_call" && ev.id === "t1") {
+            steer = input.steer("Use blue instead");
+          }
+        },
       }
-    },
+    );
+    await expect(steer).resolves.toBe("steered");
+    const pushed = calls.filter((c) => c.type === "user").slice(1);
+    const [steered] = pushed;
+    const uuidPattern: unknown = expect.stringMatching(/^[0-9a-f-]{36}$/u);
+    expect({
+      count: pushed.length,
+      message: at(steered, "message"),
+      parentToolUseId: at(steered, "parent_tool_use_id"),
+      priority: at(steered, "priority"),
+      uuid: at(steered, "uuid"),
+    }).toStrictEqual({
+      count: 1,
+      message: { content: "Use blue instead", role: "user" },
+      parentToolUseId: null,
+      priority: "next",
+      uuid: uuidPattern,
+    });
+    expect({
+      finalEvent: events.at(-1),
+      inputClosesAfterResult: calls.some((c) => c.eof === true),
+      tools: events.filter(
+        (e) => e.type === "tool_call" || e.type === "tool_result"
+      ),
+    }).toStrictEqual({
+      finalEvent: { text: "Done, in blue", type: "final" },
+      inputClosesAfterResult: true,
+      tools: [
+        { id: "t1", name: "Bash", summary: "sleep 6", type: "tool_call" },
+        { id: "t1", ok: true, type: "tool_result" },
+        { id: "t2", name: "Bash", summary: "false", type: "tool_call" },
+        { id: "t2", ok: false, type: "tool_result" },
+      ],
+    });
   });
-  expect(calls[0].argv).toStrictEqual([
-    "--output-format",
-    "stream-json",
-    "--verbose",
-    "--input-format",
-    "stream-json",
-    "--permission-prompt-tool=stdio",
-    "--allowedTools=Skill",
-    "--tools=",
-    "--setting-sources=user,project,local",
-    "--strict-mcp-config",
-    "--permission-mode=dontAsk",
-    "--include-partial-messages",
-    "--no-session-persistence",
-    "--settings",
-    '{"disableAllHooks":true}',
-  ]);
-  const { request_id: _id, ...initialize } = calls[1];
-  expect(initialize).toStrictEqual({
-    request: {
-      hooks: { PreToolUse: [{ hookCallbackIds: ["hook_0"] }] },
-      subtype: "initialize",
-      systemPrompt: [""],
-    },
-    type: "control_request",
+
+  it("a steer not folded before the result is withdrawn and rejected", async () => {
+    let steer: Promise<SteerOutcome> | undefined;
+    const {
+      calls,
+      events,
+      input: channel,
+    } = await runFake(
+      [
+        init,
+        toolUse("t1", "Bash", { command: "sleep 6" }),
+        { waitUser: true },
+        result("first"),
+      ],
+      {
+        cancelled: true,
+        onEvent(ev, input) {
+          if (ev.type === "tool_call") {
+            steer = input.steer("Too late");
+          }
+        },
+      }
+    );
+    await expect(steer).resolves.toBe("rejected");
+    const [, steerMessage] = calls.filter((c) => c.type === "user");
+    assert(steerMessage !== undefined, "the steer reached the CLI");
+    const { uuid } = steerMessage;
+    expect(
+      calls.some(
+        (c) =>
+          c.type === "control_request" &&
+          at(c, "request", "subtype") === "cancel_async_message" &&
+          at(c, "request", "message_uuid") === uuid
+      )
+    ).toBeTruthy();
+    expect(calls.some((c) => c.eof === true)).toBeTruthy();
+    expect(events.at(-1)).toStrictEqual({ text: "first", type: "final" });
+    await expect(channel.steer("After the turn")).resolves.toBe("rejected");
   });
-  expect(calls[2]).toStrictEqual({
-    message: {
-      content: [{ type: "text", text: "Plan the launch" }],
-      role: "user",
-    },
-    parent_tool_use_id: null,
-    session_id: "",
-    type: "user",
+
+  it("a late steer the CLI could not withdraw runs on in the same turn and counts as steered", async () => {
+    let steer: Promise<SteerOutcome> | undefined;
+    const { events } = await runFake(
+      [
+        init,
+        toolUse("t1", "Bash", { command: "sleep 6" }),
+        { waitUser: true },
+        result("first"),
+        {
+          emit: {
+            command_uuid: "$STEER",
+            state: "started",
+            type: "command_lifecycle",
+          },
+        },
+        result("second"),
+      ],
+      {
+        cancelled: false,
+        onEvent(ev, input) {
+          if (ev.type === "tool_call") {
+            steer = input.steer("One more thing");
+          }
+        },
+      }
+    );
+    await expect(steer).resolves.toBe("steered");
+    expect(events.findLast((e) => e.type === "final")).toStrictEqual({
+      text: "first\n\nsecond",
+      type: "final",
+    });
   });
-  expect(steered).toBe("rejected");
+
+  it("independent review options are unchanged", async () => {
+    let steered: SteerOutcome | undefined;
+    const { calls } = await runFake([init, result("review")], {
+      independentReview: true,
+      onEvent(ev, input) {
+        if (ev.type === "session") {
+          void input.steer("x").then((outcome) => {
+            steered = outcome;
+            return outcome;
+          });
+        }
+      },
+    });
+    expect(at(calls[0], "argv")).toStrictEqual([
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--input-format",
+      "stream-json",
+      "--permission-prompt-tool=stdio",
+      "--allowedTools=Skill",
+      "--tools=",
+      "--setting-sources=user,project,local",
+      "--strict-mcp-config",
+      "--permission-mode=dontAsk",
+      "--include-partial-messages",
+      "--no-session-persistence",
+      "--settings",
+      '{"disableAllHooks":true}',
+    ]);
+    const [, initializeCall, userCall] = calls;
+    assert(initializeCall !== undefined, "the SDK sent initialize");
+    const { request_id: _id, ...initialize } = initializeCall;
+    expect(initialize).toStrictEqual({
+      request: {
+        hooks: { PreToolUse: [{ hookCallbackIds: ["hook_0"] }] },
+        subtype: "initialize",
+        systemPrompt: [""],
+      },
+      type: "control_request",
+    });
+    expect(userCall).toStrictEqual({
+      message: {
+        content: [{ text: "Plan the launch", type: "text" }],
+        role: "user",
+      },
+      parent_tool_use_id: null,
+      session_id: "",
+      type: "user",
+    });
+    expect(steered).toBe("rejected");
+  });
 });

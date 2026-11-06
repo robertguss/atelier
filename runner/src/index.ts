@@ -2,6 +2,7 @@
 // Convex assigns to it (docs/v0-spec.md, "Runner ↔ Convex protocol").
 
 import { hostname } from "node:os";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { api } from "@atelier/backend/api";
 import { HARNESS_IDS } from "@atelier/shared";
@@ -15,6 +16,15 @@ import { appendTranscript, transcriptPath } from "./transcripts.ts";
 import { createTurns } from "./turns.ts";
 
 const HEARTBEAT_MS = 15_000;
+
+const mustEnv = (key: string): string => {
+  const value = process.env[key];
+  if (value === undefined || value === "") {
+    console.error(`Missing ${key}. Put it in runner/.env.local.`);
+    process.exit(1);
+  }
+  return value;
+};
 
 const convexUrl = mustEnv("CONVEX_URL");
 const secret = mustEnv("ATELIER_RUNNER_SECRET");
@@ -51,19 +61,21 @@ const turns = createTurns({
   transcriptPath,
 });
 
-async function cliVersion(id: HarnessId): Promise<string | null> {
+const cliVersion = async (id: HarnessId): Promise<string | null> => {
   try {
-    return (await harnesses[id]?.version()) ?? null;
+    const version = await harnesses[id]?.version();
+    return version ?? null;
   } catch {
     return null;
   }
-}
+};
 
-async function heartbeat() {
+const heartbeat = async () => {
+  const versions = await Promise.all(HARNESS_IDS.map(cliVersion));
   const found = [];
-  for (const id of HARNESS_IDS) {
-    const version = await cliVersion(id);
-    if (version) {
+  for (const [index, id] of HARNESS_IDS.entries()) {
+    const version = versions[index];
+    if (version !== undefined && version !== null && version !== "") {
       found.push({ id, version });
     }
   }
@@ -74,23 +86,17 @@ async function heartbeat() {
     secret,
   });
   return { found, runnerId };
-}
-
-function mustEnv(key: string): string {
-  const value = process.env[key];
-  if (!value) {
-    console.error(`Missing ${key}. Put it in runner/.env.local.`);
-    process.exit(1);
-  }
-  return value;
-}
+};
 
 const { runnerId, found } = await heartbeat();
 await client.mutation(api.runner.reportCapabilities, {
-  harnesses: found.map(({ id }) => ({
-    id,
-    canRaiseCards: harnesses[id]!.capabilities.canRaiseCards,
-  })),
+  harnesses: found.map(({ id }) => {
+    const harness = harnesses[id];
+    if (harness === undefined) {
+      throw new Error(`Found a ${id} version without a ${id} adapter`);
+    }
+    return { canRaiseCards: harness.capabilities.canRaiseCards, id };
+  }),
   runnerId,
   secret,
 });
@@ -107,13 +113,11 @@ if (recovered) {
   );
 }
 
-setInterval(
-  async () =>
-    heartbeat().catch((error) => {
-      console.error("heartbeat failed:", error);
-    }),
-  HEARTBEAT_MS
-);
+setInterval(() => {
+  heartbeat().catch((heartbeatError: unknown) => {
+    console.error("heartbeat failed:", heartbeatError);
+  });
+}, HEARTBEAT_MS);
 
 const inFlight = new Set<string>();
 client.onUpdate(
@@ -127,19 +131,26 @@ client.onUpdate(
       inFlight.add(command._id);
       turns
         .handle(command._id)
-        .catch((error) => {
-          console.error(`command ${command._id} failed:`, error);
+        .finally(() => {
+          inFlight.delete(command._id);
         })
-        .finally(() => inFlight.delete(command._id));
+        .catch((commandError: unknown) => {
+          console.error(`command ${command._id} failed:`, commandError);
+        });
     }
   }
 );
 
+const shutdown = async () => {
+  turns.abortAll();
+  await sleep(1000);
+  await client.close();
+  process.exit(0);
+};
+
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
-  process.on(sig, async () => {
-    turns.abortAll();
-    await new Promise((r) => setTimeout(r, 1000));
-    await client.close();
-    process.exit(0);
+  process.on(sig, () => {
+    // A failed shutdown still surfaces as an unhandled rejection.
+    void shutdown();
   });
 }

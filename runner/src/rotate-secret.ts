@@ -10,19 +10,19 @@ import { fileURLToPath } from "node:url";
 const KEY = "ATELIER_RUNNER_SECRET";
 
 /** The .env text with KEY set to `value`, replacing its line or adding one. */
-export function withEnvValue(text: string, key: string, value: string) {
+export const withEnvValue = (text: string, key: string, value: string) => {
   const line = `${key}=${value}`;
   const lines = text.split("\n");
   const at = lines.findIndex((l) =>
-    l.replace(/^export\s+/, "").startsWith(`${key}=`)
+    l.replace(/^export\s+/u, "").startsWith(`${key}=`)
   );
-  if (at !== -1) {
-    lines[at] = line;
-  } else {
+  if (at === -1) {
     lines.splice(lines.at(-1) === "" ? -1 : lines.length, 0, line);
+  } else {
+    lines[at] = line;
   }
   return lines.join("\n") + (lines.at(-1) === "" ? "" : "\n");
-}
+};
 
 if (import.meta.main) {
   const envFile = fileURLToPath(new URL("../.env.local", import.meta.url));

@@ -1,11 +1,10 @@
-import { execFile } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
+import { ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 
 import type { Harness } from "@atelier/shared";
 import { RpcClient } from "@earendil-works/pi-coding-agent";
 
+import { execFileAsync } from "../exec.ts";
 import { eventQueue } from "./events.ts";
 
 const READ_TOOLS = "read,grep,find,ls";
@@ -13,29 +12,63 @@ const guardExtension = fileURLToPath(
   new URL("pi-guard-extension.ts", import.meta.url)
 );
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+// One line naming what a tool call works on, never its content.
+const summarize = (args: unknown): string => {
+  if (!isRecord(args)) {
+    return "";
+  }
+  const pick = args.path ?? args.pattern ?? args.command ?? args.query;
+  if (typeof pick !== "string") {
+    return "";
+  }
+  const [firstLine = ""] = pick.split("\n");
+  return firstLine.slice(0, 200);
+};
+
 // RpcClient launches a Node CLI entry point, not Pi's standalone binary.
-export function piHarness(opts: {
+export const piHarness = (opts: {
   cliPath?: string;
   onRaw: (id: string, event: unknown) => void;
-}): Harness {
+}): Harness => {
   const cliPath =
     opts.cliPath ?? fileURLToPath(new URL("pi-cli.mjs", import.meta.url));
   return {
-    id: "pi",
     // Pi has no built-in question prompt, so it asks in plain text.
     capabilities: { canRaiseCards: false },
-    async version() {
-      const result = await promisify(execFile)(
-        process.execPath,
-        [cliPath, "--version"],
-        { timeout: 10_000 }
-      );
-      return (result.stdout || result.stderr).trim();
-    },
+    id: "pi",
     async *runTurn(req, signal, input) {
       // Pi fixes its tools when a turn starts. Turning edits off interrupts
       // the turn instead, and turning them on applies from the next turn.
-      input.setEditsEnabled = () => {};
+      input.setEditsEnabled = () => {
+        // Pi cannot change its tools mid-turn.
+      };
+      signal.throwIfAborted();
+      if (req.mcpServers.length) {
+        throw new Error(
+          "Configure Pi MCP through your own extension until per-turn MCP support exists"
+        );
+      }
+      const args =
+        req.independentReview === true
+          ? ["--no-tools", "--no-extensions", "--no-mcp", "--no-session"]
+          : [
+              "--tools",
+              req.editsEnabled ? `${READ_TOOLS},edit,write` : READ_TOOLS,
+              ...(req.editsEnabled ? ["--extension", guardExtension] : []),
+              ...(req.resumeSessionId !== undefined &&
+              req.resumeSessionId !== ""
+                ? ["--session", req.resumeSessionId]
+                : []),
+            ];
+      const client = new RpcClient({
+        args,
+        cliPath,
+        cwd: req.cwd,
+        model: req.model,
+      });
       // Steers go into the run only while it streams. Once Pi has settled it
       // would hold a steer without starting a run to deliver it.
       let running = false;
@@ -50,68 +83,51 @@ export function piHarness(opts: {
         await client.steer(text);
         return "steered";
       };
-      signal.throwIfAborted();
-      if (req.mcpServers.length) {
-        throw new Error(
-          "Configure Pi MCP through your own extension until per-turn MCP support exists"
-        );
-      }
-      const args = req.independentReview
-        ? ["--no-tools", "--no-extensions", "--no-mcp", "--no-session"]
-        : [
-            "--tools",
-            req.editsEnabled ? `${READ_TOOLS},edit,write` : READ_TOOLS,
-            ...(req.editsEnabled ? ["--extension", guardExtension] : []),
-            ...(req.resumeSessionId ? ["--session", req.resumeSessionId] : []),
-          ];
-      const client = new RpcClient({
-        args,
-        cliPath,
-        cwd: req.cwd,
-        model: req.model,
-      });
       // RpcClient has no call for answering extension dialogs; write to Pi's stdin directly.
-      const answerUi = (id: string) => {
-        const child = (client as unknown as { process: ChildProcess | null })
-          .process;
-        child?.stdin?.write(
-          `${JSON.stringify({
-            type: "extension_ui_response",
-            id,
-            cancelled: true,
-          })}\n`
-        );
+      const answerUi = (id: unknown) => {
+        // RpcClient keeps its child process private.
+        const child: unknown = Reflect.get(client, "process");
+        if (child instanceof ChildProcess) {
+          child.stdin?.write(
+            `${JSON.stringify({
+              cancelled: true,
+              id,
+              type: "extension_ui_response",
+            })}\n`
+          );
+        }
       };
       const events = eventQueue();
       let failed = false;
       const unsubscribe = client.onEvent((ev) => {
         opts.onRaw(req.turnId, ev);
         // No one can answer an extension's dialog here, so cancel it rather than let the turn hang.
-        if ((ev as { type: string }).type === "extension_ui_request") {
-          answerUi((ev as unknown as { id: string }).id);
+        const raw: unknown = ev;
+        if (isRecord(raw) && raw.type === "extension_ui_request") {
+          answerUi(raw.id);
         }
         if (
           ev.type === "message_update" &&
           ev.assistantMessageEvent.type === "text_delta"
         ) {
           events.push({
-            type: "text_delta",
             text: ev.assistantMessageEvent.delta,
+            type: "text_delta",
           });
         }
         if (ev.type === "tool_execution_start") {
           events.push({
-            type: "tool_call",
             id: ev.toolCallId,
             name: ev.toolName,
             summary: summarize(ev.args),
+            type: "tool_call",
           });
         }
         if (ev.type === "tool_execution_end") {
           events.push({
-            type: "tool_result",
             id: ev.toolCallId,
             ok: !ev.isError,
+            type: "tool_result",
           });
         }
         if (ev.type === "message_end" && ev.message.role === "assistant") {
@@ -165,8 +181,8 @@ export function piHarness(opts: {
         yield* events;
         if (!failed) {
           const state = await client.getState();
-          if (state.sessionFile) {
-            yield { type: "session", sessionId: state.sessionFile };
+          if (state.sessionFile !== undefined && state.sessionFile !== "") {
+            yield { sessionId: state.sessionFile, type: "session" };
           }
           yield {
             text: (await client.getLastAssistantText()) ?? "",
@@ -181,15 +197,13 @@ export function piHarness(opts: {
         await client.stop();
       }
     },
+    async version() {
+      const result = await execFileAsync(
+        process.execPath,
+        [cliPath, "--version"],
+        { timeout: 10_000 }
+      );
+      return (result.stdout || result.stderr).trim();
+    },
   };
-}
-
-// One line naming what a tool call works on, never its content.
-function summarize(args: unknown): string {
-  if (!args || typeof args !== "object") {
-    return "";
-  }
-  const o = args as Record<string, unknown>;
-  const pick = o.path ?? o.pattern ?? o.command ?? o.query;
-  return typeof pick === "string" ? pick.split("\n")[0]!.slice(0, 200) : "";
-}
+};
