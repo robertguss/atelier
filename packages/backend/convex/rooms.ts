@@ -19,7 +19,14 @@ export const list = query({
       if (room && room.archivedAt === undefined) rooms.push({ room, role: m.role });
     }
     rooms.sort((a, b) => b.room._creationTime - a.room._creationTime);
-    return await Promise.all(rooms.map(async ({ room, role }) => ({ ...room, role, readyReviews: (await ctx.db.query('rituals').withIndex('by_room', q => q.eq('roomId', room._id)).collect()).filter(r => r.status !== 'collecting').length })));
+    // Reviews are the owner's alone, so members get no count.
+    return await Promise.all(rooms.map(async ({ room, role }) => ({
+      ...room,
+      role,
+      readyReviews: role === 'owner'
+        ? (await ctx.db.query('rituals').withIndex('by_room', q => q.eq('roomId', room._id)).collect()).filter(r => r.status !== 'collecting').length
+        : undefined,
+    })));
   },
 });
 

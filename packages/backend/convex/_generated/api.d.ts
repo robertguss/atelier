@@ -20,6 +20,7 @@ import type * as rituals from "../rituals.js";
 import type * as rooms from "../rooms.js";
 import type * as runner from "../runner.js";
 import type * as runners from "../runners.js";
+import type * as team from "../team.js";
 import type * as users from "../users.js";
 
 import type {
@@ -41,6 +42,7 @@ declare const fullApi: ApiFromModules<{
   rooms: typeof rooms;
   runner: typeof runner;
   runners: typeof runners;
+  team: typeof team;
   users: typeof users;
 }>;
 

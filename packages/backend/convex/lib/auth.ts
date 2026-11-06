@@ -109,3 +109,9 @@ function timingSafeEqual(a: string, b: string) {
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
 }
+
+// Whether anyone besides the owner currently belongs to the room.
+export async function hasActiveTeammate(ctx: QueryCtx, roomId: Id<'rooms'>) {
+  const rows = await ctx.db.query('roomMembers').withIndex('by_room', (q) => q.eq('roomId', roomId)).collect();
+  return rows.some((m) => m.role === 'member' && m.removedAt === undefined);
+}

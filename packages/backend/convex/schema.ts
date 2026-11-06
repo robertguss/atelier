@@ -81,9 +81,21 @@ export default defineSchema({
     ritualId: v.optional(v.id('rituals')),
     turnId: v.optional(v.id('turns')),
     visibility: v.union(v.literal('room'), v.literal('sealed')),
+    // Set on a follow-up to an independent review or its decision, and on the
+    // agent's reply. Only the owner sees these.
+    followUpRitualId: v.optional(v.id('rituals')),
   })
     .index('by_room', ['roomId'])
     .index('by_ritual', ['ritualId']),
+
+  // Humans-only chat. A separate table so nothing that reads agent messages
+  // or builds prompts can reach it. Posts cannot be edited or deleted.
+  teamMessages: defineTable({
+    roomId: v.id('rooms'),
+    authorUserId: v.id('users'),
+    authorParticipantId: v.id('participants'),
+    body: v.string(),
+  }).index('by_room', ['roomId']),
 
   turns: defineTable({
     roomId: v.id('rooms'),
@@ -111,6 +123,17 @@ export default defineSchema({
     error: v.optional(v.string()),
     startedAt: v.optional(v.number()),
     endedAt: v.optional(v.number()),
+    // Marks a turn that follows up an independent review or its decision.
+    // Such a turn is owner-only and must never be batched with other
+    // messages. `separateSession` is fixed at claim: true when the room had an
+    // active teammate, so the turn ran on the review's own session.
+    followUp: v.optional(
+      v.object({
+        ritualId: v.id('rituals'),
+        decisionId: v.optional(v.id('decisions')),
+        separateSession: v.optional(v.boolean()),
+      }),
+    ),
   })
     .index('by_room', ['roomId'])
     .index('by_ritual', ['ritualId']),
@@ -126,6 +149,9 @@ export default defineSchema({
     ownerSubject: v.optional(v.string()),
     snapshot: v.optional(v.string()),
     pushStatus: v.optional(v.union(v.literal('queued'), v.literal('sent'), v.literal('skipped'), v.literal('failed'))),
+    // In rooms with a teammate, follow-ups run on these harness sessions, one
+    // per participant, never on the participant's ordinary session.
+    followUpSessions: v.optional(v.array(v.object({ participantId: v.id('participants'), sessionId: v.string() }))),
   }).index('by_room', ['roomId']),
 
   reviewSnapshots: defineTable({

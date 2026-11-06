@@ -1,8 +1,8 @@
 import { reviewFinished } from './lib/review';
 import { v } from 'convex/values';
-import type { Id } from './_generated/dataModel';
+import type { Doc, Id } from './_generated/dataModel';
 import { mutation, query, type MutationCtx } from './_generated/server';
-import { requireRunnerSecret } from './lib/auth';
+import { hasActiveTeammate, requireRunnerSecret } from './lib/auth';
 import { record } from './lib/ledger';
 
 // Functions the runner calls. Each takes the runner secret instead of a Clerk
@@ -40,6 +40,19 @@ export const claim = mutation({
     const room = await ctx.db.get(turn.roomId);
     if (!participant || !room || !participant.harness) return null;
 
+    let sessionId = turn.ritualId ? undefined : participant.harnessSessionId;
+    if (turn.followUp && !turn.ritualId) {
+      // With a teammate in the room, a follow-up must not continue the
+      // ordinary session, or the agent would later repeat the review to them.
+      // The choice is fixed here so finish saves to the session it resumed.
+      const separateSession = await hasActiveTeammate(ctx, room._id);
+      await ctx.db.patch(turn._id, { followUp: { ...turn.followUp, separateSession } });
+      if (separateSession) {
+        const ritual = await ctx.db.get(turn.followUp.ritualId);
+        sessionId = ritual ? followUpSession(ritual, participant._id) : undefined;
+      }
+    }
+
     return {
       commandId,
       type: command.type,
@@ -49,7 +62,7 @@ export const claim = mutation({
         harness: participant.harness,
         model: participant.model,
         reasoning: participant.reasoning,
-        sessionId: turn.ritualId ? undefined : participant.harnessSessionId,
+        sessionId,
       },
       room: { id: room._id, cwd: room.cwd, name: room.name, handbook: room.handbook },
     };
@@ -114,7 +127,10 @@ export const finish = mutation({
       endedAt: Date.now(),
     });
     await ctx.db.patch(args.commandId, { status: 'done', leaseExpiresAt: undefined });
-    if (args.sessionId && !turn.ritualId) await ctx.db.patch(turn.participantId, { harnessSessionId: args.sessionId });
+    if (args.sessionId && !turn.ritualId) {
+      if (turn.followUp?.separateSession) await saveFollowUpSession(ctx, turn.followUp.ritualId, turn.participantId, args.sessionId);
+      else await ctx.db.patch(turn.participantId, { harnessSessionId: args.sessionId });
+    }
 
     const messageId = await ctx.db.insert('messages', {
       roomId: turn.roomId,
@@ -123,6 +139,7 @@ export const finish = mutation({
       turnId: args.turnId,
       ritualId: turn.ritualId,
       visibility: turn.ritualId ? 'sealed' : 'room',
+      followUpRitualId: turn.followUp?.ritualId,
     });
     await reviewFinished(ctx, turn);
     const participant = await ctx.db.get(turn.participantId);
@@ -198,6 +215,17 @@ async function failTurn(
     harnessVersion: turn.harnessVersion,
     payload: { error },
   });
+}
+
+function followUpSession(ritual: Doc<'rituals'>, participantId: Id<'participants'>) {
+  return ritual.followUpSessions?.find((s) => s.participantId === participantId)?.sessionId;
+}
+
+async function saveFollowUpSession(ctx: MutationCtx, ritualId: Id<'rituals'>, participantId: Id<'participants'>, sessionId: string) {
+  const ritual = await ctx.db.get(ritualId);
+  if (!ritual) return;
+  const others = (ritual.followUpSessions ?? []).filter((s) => s.participantId !== participantId);
+  await ctx.db.patch(ritualId, { followUpSessions: [...others, { participantId, sessionId }] });
 }
 
 function providerOf(harness: string | undefined) {
