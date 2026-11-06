@@ -74,4 +74,4 @@ const Textarea = ({
   </span>
 );
 
-export { Textarea, type TextareaProps };
+export { Textarea };

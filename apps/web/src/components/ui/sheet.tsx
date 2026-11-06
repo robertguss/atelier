@@ -194,14 +194,4 @@ const SheetDescription = ({
   />
 );
 
-export {
-  Sheet,
-  SheetPortal,
-  SheetBackdrop,
-  SheetBackdrop as SheetOverlay,
-  SheetPopup,
-  SheetPopup as SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-};
+export { Sheet, SheetPopup, SheetHeader, SheetTitle, SheetDescription };

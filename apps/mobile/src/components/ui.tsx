@@ -2,7 +2,7 @@ import { useTheme } from "expo-router";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import type { TextInputProps, TextStyle } from "react-native";
 
-export const styles = StyleSheet.create({
+const styles = StyleSheet.create({
   body: { fontSize: 16, lineHeight: 22 },
   button: {
     alignItems: "center",

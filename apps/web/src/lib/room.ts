@@ -14,7 +14,7 @@ export type PaneAgent = Pane["agents"][number];
 export type PaneMessage = Pane["messages"][number];
 export type PaneTurn = Pane["turns"][number];
 export type PaneCard = Pane["cards"][number];
-export type RoomData = NonNullable<FunctionReturnType<typeof api.rooms.get>>;
+type RoomData = NonNullable<FunctionReturnType<typeof api.rooms.get>>;
 export type Participant = RoomData["participants"][number];
 
 /**

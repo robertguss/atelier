@@ -49,7 +49,7 @@ const resolvePendingUserInputOptionValue = (
 };
 
 /** The draft's selections that name an offered option, deduplicated, in selection order. */
-export const normalizeSelectedOptionValues = (
+const normalizeSelectedOptionValues = (
   question: PendingUserInputQuestion,
   value: readonly string[] | undefined
 ): readonly string[] => {
@@ -91,7 +91,7 @@ const attachmentsOnlyAnswer = (
     : null;
 
 /** The answer to submit for one question, or null while it is unanswered. */
-export const resolvePendingUserInputAnswer = (
+const resolvePendingUserInputAnswer = (
   question: PendingUserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined
 ): PendingUserInputAnswer | null => {

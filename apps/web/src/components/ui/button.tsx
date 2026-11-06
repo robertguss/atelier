@@ -110,43 +110,4 @@ const Button = ({
   });
 };
 
-export { Button, buttonVariants, type ButtonSize, type ButtonVariant };
-
-const inlineButtonVariants = cva(
-  "focus-visible:outline-ring inline-flex shrink-0 cursor-pointer items-center gap-0.5 [text-align:var(--inline-button-text-align,center)] font-medium [white-space:var(--inline-button-white-space,nowrap)] underline-offset-2 hover:underline focus-visible:outline-2 disabled:pointer-events-none disabled:opacity-64",
-  {
-    defaultVariants: { tone: "default" },
-    variants: {
-      tone: {
-        default: "text-foreground",
-        destructive: "text-destructive/80 hover:text-destructive",
-        muted: "text-muted-foreground hover:text-foreground",
-        picker:
-          "text-foreground gap-1 decoration-from-font underline-offset-4 data-popup-open:underline",
-      },
-      touchTarget: {
-        padded: "pointer-coarse:min-h-11 pointer-coarse:px-1.5",
-      },
-    },
-  }
-);
-
-export const InlineButton = ({
-  className,
-  tone,
-  touchTarget,
-  render,
-  ...props
-}: useRender.ComponentProps<"button"> &
-  VariantProps<typeof inlineButtonVariants>) => {
-  const defaultProps = {
-    className: cn(inlineButtonVariants({ tone, touchTarget }), className),
-    "data-slot": "inline-button",
-    type: render ? undefined : ("button" as const),
-  };
-  return useRender({
-    defaultTagName: "button",
-    props: mergeProps<"button">(defaultProps, props),
-    render,
-  });
-};
+export { Button };
