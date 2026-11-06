@@ -1,8 +1,9 @@
 import type { Id } from '@atelier/backend/dataModel';
 import { BotIcon } from 'lucide-react';
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { StreamingMarkdown } from '~/components/markdown/StreamingMarkdown';
 import { Badge } from '~/components/ui/badge';
+import { Button } from '~/components/ui/button';
 import { composerTarget } from '~/lib/composerTarget';
 import {
   buildTimeline,
@@ -27,9 +28,10 @@ interface AgentPaneProps {
   pane: Pane;
   names: Names;
   offline: boolean;
+  onShowEarlier: () => void;
 }
 
-export function AgentPane({ roomId, pane, names, offline }: AgentPaneProps) {
+export function AgentPane({ roomId, pane, names, offline, onShowEarlier }: AgentPaneProps) {
   const { scrollRef, contentRef } = useStickToBottom<HTMLDivElement, HTMLOListElement>();
   const [picked, setPicked] = useState<Id<'participants'> | null>(null);
   const [lastTarget, setLastTarget] = useState(() => readLastTarget(roomId));
@@ -43,6 +45,22 @@ export function AgentPane({ roomId, pane, names, offline }: AgentPaneProps) {
   const targetId = picked && pane.agents.some((a) => a.participantId === picked) ? picked : defaultTarget;
   const target = pane.agents.find((a) => a.participantId === targetId) ?? null;
   const timeline = buildTimeline(pane);
+
+  // Earlier history arrives above what the reader is looking at; keep their
+  // place by holding the distance from the bottom.
+  const fromBottom = useRef<number | null>(null);
+  const firstKey = timeline[0]?.key;
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    if (fromBottom.current === null || !scroller) return;
+    scroller.scrollTop = scroller.scrollHeight - fromBottom.current;
+    fromBottom.current = null;
+  }, [firstKey, scrollRef]);
+  const showEarlier = () => {
+    const scroller = scrollRef.current;
+    if (scroller) fromBottom.current = scroller.scrollHeight - scroller.scrollTop;
+    onShowEarlier();
+  };
 
   const onSent = (participantId: Id<'participants'>) => {
     writeLastTarget(roomId, participantId);
@@ -61,6 +79,13 @@ export function AgentPane({ roomId, pane, names, offline }: AgentPaneProps) {
       </header>
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]">
         <ol ref={contentRef} className="mx-auto max-w-3xl space-y-5 px-4 py-4">
+          {pane.hasOlder ? (
+            <li className="flex justify-center">
+              <Button variant="ghost" size="sm" onClick={showEarlier}>
+                Show earlier
+              </Button>
+            </li>
+          ) : null}
           {timeline.length === 0 ? (
             <li className="py-6 text-center text-sm text-muted-foreground">Nothing here yet. Ask an agent to get started.</li>
           ) : (

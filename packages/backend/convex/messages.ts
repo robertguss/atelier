@@ -6,12 +6,14 @@ import { answerCard, closeOpenCards, ownerOnlyCard, waitingCard } from './lib/ca
 import { activeOrdinaryTurn, dispatchNext, isActiveTurnStatus, requireRunnerOnline, steerMessage, takesSteer } from './lib/dispatch';
 import { findLedger, record } from './lib/ledger';
 import { reviewFinished } from './lib/review';
+import { streamedText } from './lib/turnActivity';
 import { visibleMessage, visibleTurn } from './lib/visibility';
 
 // The room timeline: visible messages plus every turn that hasn't produced a
 // message yet (queued, running, failed, interrupted), so the phone can show
-// live progress and errors in place. Members never see independent reviews,
-// review answers, or follow-ups to a review or its decision.
+// live progress and errors in place; an active turn's text comes from
+// agent.live. Members never see independent reviews, review answers, or
+// follow-ups to a review or its decision.
 export const timeline = query({
   args: { roomId: v.id('rooms') },
   handler: async (ctx, { roomId }) => {
@@ -35,17 +37,18 @@ export const timeline = query({
           authorParticipantId: m.authorParticipantId,
           body: m.body,
         })),
-      ...turns
+      ...(await Promise.all(turns
         .filter((t) => visibleTurn(t, isOwner) && t.status !== 'done')
-        .map((t) => ({
+        .map(async (t) => ({
           kind: 'turn' as const,
           id: t._id,
           at: t._creationTime,
           authorParticipantId: t.participantId,
           status: t.status,
-          partialText: t.partialText ?? '',
+          // An active turn's text comes from agent.live, so streaming does not rerun this.
+          partialText: isActiveTurnStatus(t.status) ? '' : await streamedText(ctx, t),
           error: t.error ?? null,
-        })),
+        })))),
     ];
     return items.sort((a, b) => a.at - b.at);
   },

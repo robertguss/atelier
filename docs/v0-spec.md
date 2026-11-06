@@ -152,7 +152,8 @@ The ledger is append-only and never edited.
 | `participants` | `roomId`, `kind` (`human` \| `harness`), `harness` (`claude` \| `codex` \| `pi`), `model`, `reasoning`, `displayName`, `harnessSessionId`, `userId` (for a human) |
 | `messages` | `roomId`, `authorParticipantId`, `body`, `ritualId?`, `turnId?` (set on an agent's reply), `visibility` (`room` \| `sealed`), `toParticipantId`, `delivery` (`queued` \| `steering` \| `steered` \| `delivered` \| `answeredCard` \| `cancelled`), `deliveredTurnId`, `steering` (`turnId`, `commandId` while a steer is in flight), `cancelReason`, `followUpRitualId`, `followUpDecisionId`, `followUpReviewTurnId` |
 | `teamMessages` | `roomId`, `authorUserId`, `authorParticipantId`, `body`. Humans only, in its own table so nothing that builds prompts can read it. Never edited or deleted |
-| `turns` | `roomId`, `participantId`, `ritualId?`, `status` (`queued` \| `running` \| `done` \| `failed` \| `interrupted`), `prompt`, `partialText`, `finalText`, `usage`, `transcriptRef`, `harnessVersion`, `error`, `startedAt`, `endedAt`, `followUp` (`ritualId`, `decisionId`, `separateSession`), `requestedByParticipantIds`, `editsEnabled` (the switch at dispatch), `waitingOnHandId`, `stoppedByParticipantId` |
+| `turns` | `roomId`, `participantId`, `ritualId?`, `status` (`queued` \| `running` \| `done` \| `failed` \| `interrupted`), `prompt`, `partialText` (older turns only; see `turnStreams`), `finalText`, `usage`, `transcriptRef`, `harnessVersion`, `error`, `startedAt`, `endedAt`, `followUp` (`ritualId`, `decisionId`, `separateSession`), `requestedByParticipantIds`, `editsEnabled` (the switch at dispatch), `waitingOnHandId`, `stoppedByParticipantId` |
+| `turnStreams` | `turnId`, `text`. A turn's streamed text, apart from the turn so streaming writes only rerun `agent.live`, the small query for active turns |
 | `turnItems` | `turnId`, `callId`, `seq`, `name`, `summary` (one line), `ok`. One row per tool call; raw output stays on the runner |
 | `rituals` | `roomId`, `type` (`independent_review`), `status` (`collecting` \| `revealed` \| `decided`), `request`, `participantIds`, `revealedAt`, `workflowId`, `snapshot`, `pushStatus`, `followUpSessions` (per participant, used in rooms with a teammate) |
 | `reviewSnapshots` | `ritualId`, `text` |
@@ -279,8 +280,8 @@ every prompt.
    `interrupt`) take no lease and are only claimable while their turn is
    running.
 3. **Run.** For `run_turn`, the runner marks the turn `running`, sends
-   `partialText` throttled to about 2 writes a second, which also renews the
-   lease, and finishes with `finalText`, `usage`, `transcriptRef` and
+   its streamed text (to `turnStreams`) throttled to about 2 writes a second,
+   which also renews the lease, and finishes with `finalText`, `usage`, `transcriptRef` and
    `harnessVersion`. That mutation writes `turn.finished` to the ledger and
    starts the agent's next turn if messages are waiting.
 4. **Control.** The runner hands a `steer` to the harness and reports

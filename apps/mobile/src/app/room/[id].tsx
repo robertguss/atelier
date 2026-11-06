@@ -28,6 +28,8 @@ export default function Room() {
   // The agent pane carries what the timeline lacks: each message's delivery
   // state, which turns wait on a question, and each agent's status.
   const pane = useQuery(api.agent.pane, { roomId: id });
+  // Streamed text of the turns still running; the timeline leaves it out.
+  const live = useQuery(api.agent.live, { roomId: id });
   // KeyboardAvoidingView needs the view's distance from the top of the
   // window to size its padding correctly.
   const [offset, setOffset] = useState(0);
@@ -45,6 +47,7 @@ export default function Room() {
   const myUserId = me.signedIn ? me.userId : null;
   const paneMessages = new Map(pane?.messages.map((m) => [m.id, m]));
   const paneTurns = new Map(pane?.turns.map((t) => [t.id, t]));
+  const liveText = new Map(live?.map((l) => [l.id, l.partialText]));
   const waitingAgents = new Set(pane?.agents.filter((a) => a.status === 'waiting').map((a) => a.participantId));
 
   return (
@@ -87,7 +90,7 @@ export default function Room() {
               if (item.kind === 'message') {
                 return <Bubble mine={mine} author={author?.displayName ?? '?'} text={item.body} note={deliveryNote(paneMessages.get(item.id))} />;
               }
-              return <LiveTurn turnId={item.id} author={author?.displayName ?? '?'} status={item.status} waiting={!!paneTurns.get(item.id)?.waitingOnHandId} text={item.partialText} error={item.error} />;
+              return <LiveTurn turnId={item.id} author={author?.displayName ?? '?'} status={item.status} waiting={!!paneTurns.get(item.id)?.waitingOnHandId} text={liveText.get(item.id) ?? item.partialText} error={item.error} />;
             }}
           />
           <Composer

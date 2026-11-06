@@ -1,10 +1,10 @@
 import { api } from '@atelier/backend/api';
 import type { Id } from '@atelier/backend/dataModel';
 import { useQuery } from 'convex/react';
-import { useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import { useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { PageSpinner } from '~/components/page';
 import { Sheet, SheetPopup } from '~/components/ui/sheet';
-import { isOffline, namesFrom, useMediaQuery, useNow } from '~/lib/room';
+import { isOffline, namesFrom, useLastDefined, useMediaQuery, useNow, withLive } from '~/lib/room';
 import { AgentPane } from './AgentPane';
 import { MembersSheet } from './MembersSheet';
 import { RoomHeader } from './RoomHeader';
@@ -12,10 +12,16 @@ import { TeamPane } from './TeamPane';
 
 const TEAM_MIN = 260;
 const TEAM_DEFAULT = 360;
+// Turns per page of agent history; matches PANE_PAGE in the backend.
+const PANE_PAGE = 40;
 
 export function RoomView({ roomId, isOwner }: { roomId: Id<'rooms'>; isOwner: boolean }) {
   const data = useQuery(api.rooms.get, { roomId });
-  const pane = useQuery(api.agent.pane, { roomId });
+  const [paneLimit, setPaneLimit] = useState(PANE_PAGE);
+  // Keeps the shorter history on screen while a longer one loads.
+  const history = useLastDefined(useQuery(api.agent.pane, { roomId, limit: paneLimit }));
+  const live = useQuery(api.agent.live, { roomId });
+  const pane = useMemo(() => (history ? withLive(history, live) : undefined), [history, live]);
   // Ticks so the offline banner appears when heartbeats stop, with no new data.
   const now = useNow(5_000);
   const narrow = useMediaQuery('(max-width: 759px)');
@@ -64,7 +70,13 @@ export function RoomView({ roomId, isOwner }: { roomId: Id<'rooms'>; isOwner: bo
           {pane === undefined ? (
             <PageSpinner />
           ) : (
-            <AgentPane roomId={roomId} pane={pane} names={names} offline={offline} />
+            <AgentPane
+              roomId={roomId}
+              pane={pane}
+              names={names}
+              offline={offline}
+              onShowEarlier={() => setPaneLimit((n) => n + PANE_PAGE)}
+            />
           )}
         </div>
         {narrow ? (

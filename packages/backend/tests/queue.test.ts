@@ -5,6 +5,7 @@ import { beforeEach, afterEach, test, expect, vi } from 'vitest';
 import schema from '../convex/schema';
 import { api, internal } from '../convex/_generated/api';
 import type { Id } from '../convex/_generated/dataModel';
+import { PANE_PAGE } from '../convex/agent';
 const modules = import.meta.glob('../convex/**/*.ts');
 
 const SECRET = 'test-secret';
@@ -453,7 +454,6 @@ test('the agent pane shows members delivery states and kept stream text, but nev
   const { commandId } = await startTurn(t, first);
   await t.mutation(api.runner.progress, { secret: SECRET, turnId: first, commandId, partialText: 'STREAMED-TEXT' });
   await finishTurn(t, first, commandId, 'FINAL-TEXT');
-  expect((await t.run(ctx => ctx.db.get(first)))!.partialText).toBe('STREAMED-TEXT');
 
   const pane = await dana.query(api.agent.pane, { roomId });
   expect(pane.turns.find((x: any) => x.id === first)).toMatchObject({ status: 'done', partialText: 'STREAMED-TEXT' });
@@ -506,4 +506,44 @@ test('a steer the runner accepted but never answered goes back to the queue when
   expect(turns).toHaveLength(2);
   expect(turns[1]!.prompt).toContain('IN-FLIGHT');
   expect(await messageWithBody(t, 'IN-FLIGHT')).toMatchObject({ delivery: 'delivered', deliveredTurnId: turns[1]!._id });
+});
+
+test('an active turn streams through the live query, and its text joins the history when it ends', async () => {
+  const { t, owner, dana, roomId, claude } = await setup();
+  const turnId = (await owner.mutation(api.messages.send, { roomId, body: 'Go', toParticipantId: claude._id }))!;
+  const { commandId } = await startTurn(t, turnId);
+  await t.mutation(api.runner.progress, { secret: SECRET, turnId, commandId, partialText: 'LIVE-TEXT' });
+  await t.mutation(api.runner.recordTurnItems, { secret: SECRET, turnId, items: [{ callId: 'c1', seq: 0, name: 'Read', summary: 'a.md' }] });
+
+  const running = (await dana.query(api.agent.pane, { roomId })).turns.find(x => x.id === turnId)!;
+  expect(running).toMatchObject({ status: 'running', partialText: '', items: [] });
+  expect(await dana.query(api.agent.live, { roomId })).toEqual([{ id: turnId, partialText: 'LIVE-TEXT', items: [{ name: 'Read', summary: 'a.md', ok: null }] }]);
+
+  await finishTurn(t, turnId, commandId);
+  expect(await dana.query(api.agent.live, { roomId })).toEqual([]);
+  expect((await dana.query(api.agent.pane, { roomId })).turns.find(x => x.id === turnId)).toMatchObject({ status: 'done', partialText: 'LIVE-TEXT', items: [{ name: 'Read', summary: 'a.md', ok: null }] });
+});
+
+test('the agent pane shows the latest turns, plus older active turns and waiting messages', async () => {
+  const { t, dana, roomId, claude, pi, robert } = await setup();
+  const insert = async <R>(fn: Parameters<typeof t.run<R>>[0]) => { vi.advanceTimersByTime(1); return await t.run(fn); };
+  const oldRunning = await insert(ctx => ctx.db.insert('turns', { roomId, participantId: claude._id, status: 'running', prompt: 'p' }));
+  const oldQueued = await insert(ctx => ctx.db.insert('messages', { roomId, authorParticipantId: robert._id, body: 'OLD-QUEUED', visibility: 'room', toParticipantId: pi._id, delivery: 'queued' }));
+  const done: Id<'turns'>[] = [];
+  for (let i = 0; i < PANE_PAGE + 5; i++) {
+    const turnId = await insert(ctx => ctx.db.insert('turns', { roomId, participantId: claude._id, status: 'done', prompt: 'p' }));
+    await insert(ctx => ctx.db.insert('messages', { roomId, authorParticipantId: claude._id, body: `reply ${i}`, visibility: 'room', turnId }));
+    done.push(turnId);
+  }
+
+  const pane = await dana.query(api.agent.pane, { roomId });
+  expect(pane.hasOlder).toBe(true);
+  expect(pane.turns.map(x => x.id)).toEqual([oldRunning, ...done.slice(5)]);
+  expect(pane.messages.map(m => m.id)).toContain(oldQueued);
+  expect(pane.messages.some(m => m.body === 'reply 4')).toBe(false);
+  expect(pane.agents.find(a => a.participantId === pi._id)!.queued).toBe(1);
+
+  const all = await dana.query(api.agent.pane, { roomId, limit: PANE_PAGE * 2 });
+  expect(all.hasOlder).toBe(false);
+  expect(all.turns.map(x => x.id)).toEqual([oldRunning, ...done]);
 });

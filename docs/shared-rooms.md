@@ -64,7 +64,8 @@ from **Team chat** in the header.
 
 - **The agent pane** shows each agent's status, the messages people sent to
   agents, the agents' streamed replies and tool activity, question cards, and
-  what is queued. Its composer is labelled with the agent it writes to, for
+  what is queued. It opens on the latest 40 turns; **Show earlier** at the top
+  loads 40 more. Its composer is labelled with the agent it writes to, for
   example "To Claude". With more than one agent, pick the target above the box.
 - **The team pane** is chat between the people only. Its composer reads "To
   team only". Nothing the agents read is built from team chat: not their
@@ -235,15 +236,19 @@ To open it from another machine, use the exe.dev HTTPS proxy
 
 ### After removing a member
 
-Rotate `ATELIER_RUNNER_SECRET`:
+Rotate `ATELIER_RUNNER_SECRET`, then restart the runner:
 
-1. Generate a new random secret.
-2. Set it on Convex: `npx convex env set ATELIER_RUNNER_SECRET <new secret>`.
-3. Put the same value in `runner/.env.local`.
-4. Restart the runner.
+```sh
+pnpm --filter @atelier/runner rotate-secret
+```
 
-Between steps 2 and 4 the runner is refused, so agents look offline for that
-time.
+It generates a new secret, sets it on Convex, and writes it to
+`runner/.env.local`, without printing it. If Convex refuses, nothing changes.
+Until you restart the runner it is refused, so agents look offline.
+
+The runner keeps the secret out of the environment its agents inherit, so an
+agent cannot simply print it. Under full reach an agent can still read
+`runner/.env.local`, which is why removal calls for a new secret.
 
 ### Checking it works
 

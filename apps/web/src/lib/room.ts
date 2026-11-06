@@ -3,12 +3,36 @@ import type { FunctionReturnType } from 'convex/server';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 
 export type Pane = FunctionReturnType<typeof api.agent.pane>;
+export type LiveTurns = FunctionReturnType<typeof api.agent.live>;
 export type PaneAgent = Pane['agents'][number];
 export type PaneMessage = Pane['messages'][number];
 export type PaneTurn = Pane['turns'][number];
 export type PaneCard = Pane['cards'][number];
 export type RoomData = NonNullable<FunctionReturnType<typeof api.rooms.get>>;
 export type Participant = RoomData['participants'][number];
+
+/**
+ * The pane leaves out the text and tool calls of active turns, which stream
+ * through the live query; this puts them back.
+ */
+export function withLive(pane: Pane, live: LiveTurns | undefined): Pane {
+  if (!live?.length) return pane;
+  const byId = new Map<string, LiveTurns[number]>(live.map((l) => [l.id, l]));
+  return {
+    ...pane,
+    turns: pane.turns.map((turn) => {
+      const l = byId.get(turn.id);
+      return l ? { ...turn, partialText: l.partialText, items: l.items } : turn;
+    }),
+  };
+}
+
+/** The last value that wasn't undefined, so a query keeps showing old data while new arguments load. */
+export function useLastDefined<T>(value: T | undefined): T | undefined {
+  const last = useRef(value);
+  if (value !== undefined) last.current = value;
+  return value ?? last.current;
+}
 
 export type Names = (participantId: string | null | undefined) => string;
 

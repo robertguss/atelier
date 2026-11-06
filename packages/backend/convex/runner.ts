@@ -7,6 +7,7 @@ import { dispatchNext, isActiveTurnStatus, steerRejected } from './lib/dispatch'
 import { record } from './lib/ledger';
 import { reviewFinished } from './lib/review';
 import { sessionResetAfter } from './lib/sessions';
+import { setStreamedText } from './lib/turnActivity';
 import { cardQuestion, harnessId } from './schema';
 
 // Functions the runner calls. Each takes the runner secret instead of a Clerk
@@ -121,7 +122,7 @@ export const progress = mutation({
     if (!turn || turn.status !== 'running') return false;
     const command = await ctx.db.get(commandId);
     if (!command || command.turnId !== turnId || command.status !== 'claimed') return false;
-    if (turn.partialText !== partialText) await ctx.db.patch(turnId, { partialText });
+    await setStreamedText(ctx, turnId, partialText);
     const now = Date.now();
     if ((command.leaseExpiresAt ?? 0) < now + LEASE_MS - LEASE_RENEW_AFTER_MS) await ctx.db.patch(commandId, { leaseExpiresAt: now + LEASE_MS });
     return true;

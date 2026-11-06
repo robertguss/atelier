@@ -15,6 +15,7 @@ const CODEX = 'p-codex';
 type Pane = {
   runner: { lastHeartbeatAt: number; offlineAfterMs: number };
   editsEnabled: boolean;
+  hasOlder: boolean;
   agents: Record<string, unknown>[];
   messages: Record<string, unknown>[];
   cards: Record<string, unknown>[];
@@ -123,6 +124,7 @@ beforeEach(() => {
   pane = {
     runner: { lastHeartbeatAt: Date.now(), offlineAfterMs: 45_000 },
     editsEnabled: false,
+    hasOlder: false,
     agents: [agent(CLAUDE, 'claude', 'Claude'), agent(CODEX, 'codex', 'Codex', { canRaiseCards: false })],
     messages: [],
     cards: [],
@@ -353,6 +355,28 @@ describe('queue, delivery and stopping', () => {
     expect(screen.getByText('it')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Stop Claude' }));
     expect(backend.mutations['messages:cancel']).toHaveBeenCalledWith({ turnId: 't1' });
+  });
+
+  it("streams a running turn's text and tool activity from the live query", async () => {
+    pane.agents = [agent(CLAUDE, 'claude', 'Claude', { status: 'running', activeTurnId: 't1' })];
+    pane.turns = [turn({})];
+    backend.queries['agent:live'] = () => [{ id: 't1', partialText: 'Checking **pricing**', items: [{ name: 'Grep', summary: 'price', ok: null }] }];
+    await openRoom();
+    expect(screen.getByText('pricing')).toBeInTheDocument();
+    // A running turn shows its tool activity open.
+    expect(screen.getByText('price')).toBeInTheDocument();
+  });
+
+  it('asks for a longer history from Show earlier', async () => {
+    const limits: unknown[] = [];
+    pane.hasOlder = true;
+    pane.turns = [turn({ status: 'done', partialText: 'Recent work.' })];
+    await openRoom();
+    const handler = backend.queries['agent:pane']!;
+    backend.queries['agent:pane'] = (args) => (limits.push(args.limit), handler(args));
+    fireEvent.click(screen.getByRole('button', { name: 'Show earlier' }));
+    await waitFor(() => expect(limits).toContain(80));
+    expect(screen.getByText('Recent work.')).toBeInTheDocument();
   });
 
   it("keeps a finished turn's streamed text and tool activity next to its answer", async () => {

@@ -164,6 +164,8 @@ export default defineSchema({
       v.literal('interrupted'),
     ),
     prompt: v.string(),
+    // Older turns kept their streamed text here. New text goes to turnStreams,
+    // so streaming does not rewrite the turn every half second.
     partialText: v.optional(v.string()),
     finalText: v.optional(v.string()),
     usage: v.optional(
@@ -200,7 +202,15 @@ export default defineSchema({
     .index('by_room', ['roomId'])
     .index('by_ritual', ['ritualId'])
     .index('by_participant', ['participantId'])
-    .index('by_participant_status', ['participantId', 'status']),
+    .index('by_participant_status', ['participantId', 'status'])
+    .index('by_room_status', ['roomId', 'status']),
+
+  // A turn's streamed text, one row per turn. Kept apart from the turn so the
+  // runner's twice-a-second writes only reach the query for active turns.
+  turnStreams: defineTable({
+    turnId: v.id('turns'),
+    text: v.string(),
+  }).index('by_turn', ['turnId']),
 
   // An agent's tool activity during a turn, one row per tool call: its name
   // and a one-line summary. Raw output stays on the runner's disk.

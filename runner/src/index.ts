@@ -15,6 +15,9 @@ const HEARTBEAT_MS = 15_000;
 
 const convexUrl = mustEnv('CONVEX_URL');
 const secret = mustEnv('ATELIER_RUNNER_SECRET');
+// Agents run as child processes and inherit this environment, so keep the
+// secret out of it. An agent with full reach can still read runner/.env.local.
+delete process.env.ATELIER_RUNNER_SECRET;
 const name = process.env.ATELIER_RUNNER_NAME ?? hostname();
 
 const client = new ConvexClient(convexUrl);

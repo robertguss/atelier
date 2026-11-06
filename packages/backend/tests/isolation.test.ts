@@ -91,6 +91,8 @@ test('a member never sees review answers or follow-ups, while the owner still do
   const danaWhileRunning = JSON.stringify(await dana.query(api.messages.timeline, { roomId }));
   expect(danaWhileRunning).not.toContain('FOLLOWUP');
   expect(danaWhileRunning).not.toContain(followUpId);
+  expect(JSON.stringify(await dana.query(api.agent.live, { roomId }))).not.toContain('FOLLOWUP');
+  expect(JSON.stringify(await owner.query(api.agent.live, { roomId }))).toContain('FOLLOWUP-PARTIAL');
   await t.mutation(api.runner.finish, { secret: SECRET, turnId: followUpId, commandId: command._id, finalText: 'FOLLOWUP-REPLY', sessionId: 'followup-session', transcriptRef: '/f' });
 
   await owner.mutation(api.rituals.recordCrux, { ritualId, statement: 'Tradeoff', options: ['A', 'B'] });

@@ -40,7 +40,7 @@ function RoomGate({ roomId }: { roomId: string }) {
   }
   return (
     <RoomErrorBoundary key={access}>
-      <RoomView roomId={id} isOwner={access === 'owner'} />
+      <RoomView key={id} roomId={id} isOwner={access === 'owner'} />
     </RoomErrorBoundary>
   );
 }
