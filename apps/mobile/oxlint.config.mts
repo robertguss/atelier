@@ -10,5 +10,4 @@ export default defineConfig({
   env: root.env,
   extends: [root, react, reactNative],
   ignorePatterns: root.ignorePatterns,
-  settings: root.settings,
 });

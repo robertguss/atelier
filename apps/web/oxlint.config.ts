@@ -9,5 +9,12 @@ export default defineConfig({
   env: root.env,
   extends: [root, react],
   ignorePatterns: root.ignorePatterns,
-  settings: root.settings,
+  rules: {
+    // React convention: PascalCase component files and camelCase hook and
+    // module files. Kebab-case stays allowed for everything else.
+    "unicorn/filename-case": [
+      "error",
+      { cases: { camelCase: true, kebabCase: true, pascalCase: true } },
+    ],
+  },
 });

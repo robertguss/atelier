@@ -11,4 +11,17 @@ export default defineConfig({
     "apps/web/src/routeTree.gen.ts",
   ],
   options: { typeAware: true },
+  overrides: [
+    {
+      // Convex turns module file names into API paths (api.turnActivity),
+      // and its convention is camelCase.
+      files: ["packages/backend/convex/**"],
+      rules: {
+        "unicorn/filename-case": [
+          "error",
+          { cases: { camelCase: true, kebabCase: true } },
+        ],
+      },
+    },
+  ],
 });

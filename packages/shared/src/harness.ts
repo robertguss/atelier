@@ -80,7 +80,7 @@ export type SteerOutcome = "steered" | "rejected";
  * rejected and a settings change waits for the next turn.
  */
 export interface TurnInput {
-  onQuestion(card: QuestionCard): Promise<QuestionAnswer>;
+  onQuestion: (card: QuestionCard) => Promise<QuestionAnswer>;
   /** Puts a person's message into the running turn without stopping it. */
   steer: (text: string) => Promise<SteerOutcome>;
   setEditsEnabled: (on: boolean) => void;
@@ -109,10 +109,10 @@ export interface HarnessCapabilities {
 export interface Harness {
   id: HarnessId;
   capabilities: HarnessCapabilities;
-  version(): Promise<string>;
-  runTurn(
+  version: () => Promise<string>;
+  runTurn: (
     req: TurnRequest,
     signal: AbortSignal,
     input: TurnInput
-  ): AsyncIterable<HarnessEvent>;
+  ) => AsyncIterable<HarnessEvent>;
 }
