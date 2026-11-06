@@ -57,7 +57,7 @@ export const start = mutation({
   handler: async (ctx, { secret, turnId, harnessVersion }) => {
     requireRunnerSecret(secret);
     const turn = await ctx.db.get(turnId);
-    if (!turn) return;
+    if (!turn || !['queued', 'running'].includes(turn.status)) return;
     await ctx.db.patch(turnId, { status: 'running', startedAt: Date.now(), harnessVersion });
     await record(ctx, {
       roomId: turn.roomId,
@@ -74,8 +74,11 @@ export const progress = mutation({
   args: { secret: v.string(), turnId: v.id('turns'), commandId: v.id('commands'), partialText: v.string() },
   handler: async (ctx, { secret, turnId, commandId, partialText }) => {
     requireRunnerSecret(secret);
+    const turn = await ctx.db.get(turnId);
+    if (!turn || turn.status !== 'running') return false;
     await ctx.db.patch(turnId, { partialText });
     await ctx.db.patch(commandId, { leaseExpiresAt: Date.now() + LEASE_MS });
+    return true;
   },
 });
 
@@ -93,7 +96,7 @@ export const finish = mutation({
   handler: async (ctx, args) => {
     requireRunnerSecret(args.secret);
     const turn = await ctx.db.get(args.turnId);
-    if (!turn) return;
+    if (!turn || !['queued', 'running'].includes(turn.status)) return;
     await ctx.db.patch(args.turnId, {
       status: 'done',
       finalText: args.finalText,
@@ -167,7 +170,7 @@ async function failTurn(
 ) {
   const turn = await ctx.db.get(turnId);
   await ctx.db.patch(commandId, { status: 'failed', error, leaseExpiresAt: undefined });
-  if (!turn) return;
+  if (!turn || !['queued', 'running'].includes(turn.status)) return;
   await ctx.db.patch(turnId, {
     status: interrupted ? 'interrupted' : 'failed',
     error,

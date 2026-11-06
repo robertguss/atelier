@@ -1,17 +1,16 @@
 // Atelier runner: registers with Convex, sends heartbeats, and runs the turns
 // Convex assigns to it (docs/v0-spec.md, "Runner ↔ Convex protocol").
 
-import { execFile } from 'node:child_process';
 import { hostname } from 'node:os';
-import { promisify } from 'node:util';
 import { ConvexClient } from 'convex/browser';
 import { api } from '@atelier/backend/api';
 import type { Id } from '@atelier/backend/dataModel';
 import { HARNESS_IDS, type Harness, type HarnessId } from '@atelier/shared';
+import { codexHarness } from './adapters/codex.ts';
+import { piHarness } from './adapters/pi.ts';
 import { claudeHarness } from './adapters/claude.ts';
 import { appendTranscript, transcriptPath } from './transcripts.ts';
 
-const exec = promisify(execFile);
 const HEARTBEAT_MS = 15_000;
 const PROGRESS_MS = 500;
 
@@ -22,6 +21,8 @@ const name = process.env.ATELIER_RUNNER_NAME ?? hostname();
 const client = new ConvexClient(convexUrl);
 
 const harnesses: Partial<Record<HarnessId, Harness>> = {
+  codex: codexHarness({ executable: process.env.ATELIER_CODEX_PATH ?? 'codex', onRaw: appendTranscript }),
+  pi: piHarness({ cliPath: process.env.ATELIER_PI_CLI_PATH, onRaw: appendTranscript }),
   claude: claudeHarness({
     executable: process.env.ATELIER_CLAUDE_PATH ?? 'claude',
     onRaw: (turnId, msg) => appendTranscript(turnId, msg),
@@ -30,8 +31,7 @@ const harnesses: Partial<Record<HarnessId, Harness>> = {
 
 async function cliVersion(id: HarnessId): Promise<string | null> {
   try {
-    const { stdout } = await exec(id, ['--version'], { timeout: 10_000 });
-    return stdout.trim().split('\n')[0] ?? null;
+    return await harnesses[id]?.version() ?? null;
   } catch {
     return null;
   }
@@ -70,17 +70,18 @@ async function handle(commandId: Id<'commands'>) {
   let error: string | null = null;
   let sessionId = job.participant.sessionId;
   let usage: { inputTokens: number; outputTokens: number; costUsd?: number } | undefined;
-  let lastSent = '';
 
   const flush = async () => {
-    if (text === lastSent) return;
-    lastSent = text;
-    await client.mutation(api.runner.progress, { secret, turnId, commandId, partialText: text });
+
+    const active = await client.mutation(api.runner.progress, { secret, turnId, commandId, partialText: text });
+    if (!active) abort.abort();
   };
-  const timer = setInterval(() => flush().catch((e) => console.error('progress failed:', e)), PROGRESS_MS);
+  let timer: ReturnType<typeof setInterval> | undefined;
 
   try {
     await client.mutation(api.runner.start, { secret, turnId, harnessVersion: await harness.version() });
+    // Start polling only after start commits: a queued turn is not cancelled.
+    timer = setInterval(() => flush().catch((e) => console.error('progress failed:', e)), PROGRESS_MS);
     console.log(`turn ${turnId}: ${harness.id} in ${job.room.cwd}`);
     appendTranscript(turnId, { atelier: 'request', prompt: job.turn.prompt, cwd: job.room.cwd, resume: sessionId });
 
@@ -89,7 +90,8 @@ async function handle(commandId: Id<'commands'>) {
         turnId,
         cwd: job.room.cwd,
         prompt: job.turn.prompt,
-        model: job.participant.model,
+        model: job.participant.model ?? (harness.id === 'pi' ? process.env.ATELIER_PI_MODEL : undefined),
+        reasoning: parseReasoning(job.participant.reasoning),
         resumeSessionId: sessionId,
         readOnly: true,
         mcpServers: [],
@@ -156,4 +158,9 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
     await client.close();
     process.exit(0);
   });
+}
+
+function parseReasoning(value: string | undefined) {
+  if (value === undefined || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh') return value;
+  throw new Error(`Unsupported reasoning level: ${value}`);
 }

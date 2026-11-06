@@ -63,3 +63,20 @@ export const create = mutation({
     return roomId;
   },
 });
+
+export const addParticipant = mutation({
+  args: { roomId: v.id('rooms'), harness: v.union(v.literal('claude'), v.literal('codex'), v.literal('pi')) },
+  handler: async (ctx, { roomId, harness }) => {
+    await requireOwner(ctx);
+    const room = await ctx.db.get(roomId);
+    if (!room) throw new Error('Unknown room');
+    const existing = await ctx.db.query('participants').withIndex('by_room', q => q.eq('roomId', roomId)).collect();
+    const found = existing.find(p => p.harness === harness);
+    if (found) return found._id;
+    const runner = await ctx.db.get(room.runnerId);
+    if (!runner?.harnesses.some(h => h.id === harness)) throw new Error('Harness unavailable on this runner');
+    const id = await ctx.db.insert('participants', { roomId, kind: 'harness', harness, displayName: { claude: 'Claude', codex: 'Codex', pi: 'Pi' }[harness] });
+    await record(ctx, { roomId, type: 'participant.joined', subjectId: id, payload: { kind: 'harness', harness } });
+    return id;
+  },
+});

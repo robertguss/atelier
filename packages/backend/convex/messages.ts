@@ -98,3 +98,21 @@ export const send = mutation({
     return turnId;
   },
 });
+
+export const cancel = mutation({
+  args: { turnId: v.id('turns') },
+  handler: async (ctx, { turnId }) => {
+    await requireOwner(ctx);
+    const turn = await ctx.db.get(turnId);
+    if (!turn || !['queued', 'running'].includes(turn.status)) return;
+    await ctx.db.patch(turnId, { status: 'interrupted', error: 'Cancelled by you', endedAt: Date.now() });
+    const room = await ctx.db.get(turn.roomId);
+    if (room) {
+      for (const status of ['pending', 'claimed'] as const) {
+        const commands = await ctx.db.query('commands').withIndex('by_runner_status', q => q.eq('runnerId', room.runnerId).eq('status', status)).collect();
+        for (const command of commands.filter(c => c.turnId === turnId)) await ctx.db.patch(command._id, { status: 'failed', error: 'Cancelled by owner', leaseExpiresAt: undefined });
+      }
+    }
+    await record(ctx, { roomId: turn.roomId, type: 'turn.interrupted', subjectId: turnId, payload: { error: 'Cancelled by owner' } });
+  },
+});

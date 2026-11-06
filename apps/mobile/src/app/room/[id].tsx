@@ -69,7 +69,7 @@ export default function Room() {
               if (stickToBottom.current) listRef.current?.scrollToEnd({ animated: false });
             }}
             ListEmptyComponent={
-              <Muted style={styles.empty}>Say something to start. Claude reads the project at {data.room.cwd}.</Muted>
+              <Muted style={styles.empty}>Say something to start. Participants read the project at {data.room.cwd}.</Muted>
             }
             renderItem={({ item }) => {
               const author = names.get(item.authorParticipantId);
@@ -77,11 +77,12 @@ export default function Room() {
               if (item.kind === 'message') {
                 return <Bubble mine={mine} author={author?.displayName ?? '?'} text={item.body} />;
               }
-              return <LiveTurn author={author?.displayName ?? '?'} status={item.status} text={item.partialText} error={item.error} />;
+              return <LiveTurn turnId={item.id} author={author?.displayName ?? '?'} status={item.status} text={item.partialText} error={item.error} />;
             }}
           />
           <Composer
             roomId={id}
+            participants={data.participants.filter(p => p.kind === 'harness')}
             onSent={() => {
               stickToBottom.current = true;
             }}
@@ -104,9 +105,11 @@ function Bubble({ mine, author, text }: { mine: boolean; author: string; text: s
   );
 }
 
-function LiveTurn({ author, status, text, error }: { author: string; status: string; text: string; error: string | null }) {
+function LiveTurn({ turnId, author, status, text, error }: { turnId: Id<'turns'>; author: string; status: string; text: string; error: string | null }) {
   const { colors } = useTheme();
   const active = status === 'queued' || status === 'running';
+  const cancel = useMutation(api.messages.cancel);
+  const [cancelError, setCancelError] = useState('');
   return (
     <View style={[styles.bubbleWrap, styles.left]}>
       <Muted style={styles.author}>
@@ -115,14 +118,20 @@ function LiveTurn({ author, status, text, error }: { author: string; status: str
       <View style={[styles.bubble, { backgroundColor: colors.card }]}>
         {text ? <Text selectable style={[styles.bubbleText, { color: colors.text }]}>{text}</Text> : null}
         {active && !text && <ActivityIndicator style={{ alignSelf: 'flex-start' }} />}
+        {active && <Pressable accessibilityRole="button" onPress={() => { void cancel({ turnId }).catch(e => setCancelError(String(e))); }}><Text style={{ color: colors.primary }}>Cancel</Text></Pressable>}
+        {cancelError ? <Text>{cancelError}</Text> : null}
         {error && <Text style={[styles.bubbleText, { color: '#d33' }]}>{error}</Text>}
       </View>
     </View>
   );
 }
 
-function Composer({ roomId, onSent }: { roomId: Id<'rooms'>; onSent: () => void }) {
+function Composer({ roomId, onSent, participants }: { roomId: Id<'rooms'>; onSent: () => void; participants: { _id: Id<'participants'>; displayName: string; harness?: string }[] }) {
   const send = useMutation(api.messages.send);
+  const add = useMutation(api.rooms.addParticipant);
+  const [selected, setSelected] = useState<Id<'participants'>>();
+  const [error, setError] = useState('');
+  const target = participants.find(p => p._id === selected) ?? participants[0];
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const [text, setText] = useState('');
@@ -135,19 +144,26 @@ function Composer({ roomId, onSent }: { roomId: Id<'rooms'>; onSent: () => void 
     setSending(true);
     try {
       onSent();
-      await send({ roomId, body });
+      await send({ roomId, body, toParticipantId: target?._id });
       setText('');
-    } finally {
+      setError('');
+    } catch (e) { setError(String(e)); } finally {
       setSending(false);
     }
   };
 
   return (
+    <View>
+      <View style={{ flexDirection: 'row', gap: 16, padding: 12 }}>
+        {participants.map(p => <Pressable key={p._id} onPress={() => setSelected(p._id)}><Body style={{ fontWeight: target?._id === p._id ? '700' : '400' }}>{p.displayName}</Body></Pressable>)}
+        {(['claude', 'codex', 'pi'] as const).filter(h => !participants.some(p => p.harness === h)).map(h => <Pressable key={h} onPress={async () => { try { setSelected(await add({ roomId, harness: h })); setError(''); } catch (e) { setError(String(e)); } }}><Muted>+ {h}</Muted></Pressable>)}
+      </View>
+      {error ? <Body>{error}</Body> : null}
     <View style={[styles.composer, { borderTopColor: colors.border, paddingBottom: keyboardOpen ? 10 : Math.max(insets.bottom, 10) }]}>
       <TextInput
         value={text}
         onChangeText={setText}
-        placeholder="Message Claude"
+        placeholder={`Message ${target?.displayName ?? "participant"}`}
         placeholderTextColor={PLACEHOLDER}
         multiline
         style={[styles.input, { color: colors.text, backgroundColor: colors.card }]}
@@ -158,6 +174,7 @@ function Composer({ roomId, onSent }: { roomId: Id<'rooms'>; onSent: () => void 
         style={({ pressed }) => [styles.send, { backgroundColor: colors.primary, opacity: !text.trim() || sending || pressed ? 0.4 : 1 }]}>
         <Text style={styles.sendLabel}>↑</Text>
       </Pressable>
+    </View>
     </View>
   );
 }
