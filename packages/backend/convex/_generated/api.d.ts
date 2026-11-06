@@ -8,16 +8,19 @@
  * @module
  */
 
+import type * as invites from "../invites.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_ledger from "../lib/ledger.js";
 import type * as lib_review from "../lib/review.js";
 import type * as me from "../me.js";
+import type * as members from "../members.js";
 import type * as messages from "../messages.js";
 import type * as push from "../push.js";
 import type * as rituals from "../rituals.js";
 import type * as rooms from "../rooms.js";
 import type * as runner from "../runner.js";
 import type * as runners from "../runners.js";
+import type * as users from "../users.js";
 
 import type {
   ApiFromModules,
@@ -26,16 +29,19 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  invites: typeof invites;
   "lib/auth": typeof lib_auth;
   "lib/ledger": typeof lib_ledger;
   "lib/review": typeof lib_review;
   me: typeof me;
+  members: typeof members;
   messages: typeof messages;
   push: typeof push;
   rituals: typeof rituals;
   rooms: typeof rooms;
   runner: typeof runner;
   runners: typeof runners;
+  users: typeof users;
 }>;
 
 /**

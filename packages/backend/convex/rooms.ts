@@ -1,23 +1,48 @@
 import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
-import { requireOwner } from './lib/auth';
+import { ensureUser, getMembership, getOwner, getUser, requireMember, requireOwner } from './lib/auth';
 import { record } from './lib/ledger';
 
+// The caller's rooms, newest first, with their role in each.
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    await requireOwner(ctx);
-    const rooms = await ctx.db.query('rooms').order('desc').collect();
-    return await Promise.all(rooms.filter(r => r.archivedAt === undefined).map(async room => ({ ...room, readyReviews: (await ctx.db.query('rituals').withIndex('by_room', q => q.eq('roomId', room._id)).collect()).filter(r => r.status !== 'collecting').length })));
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error('Not signed in');
+    const user = await getUser(ctx);
+    if (!user) return [];
+    const memberships = (await ctx.db.query('roomMembers').withIndex('by_user', q => q.eq('userId', user._id)).collect())
+      .filter(m => m.removedAt === undefined);
+    const rooms = [];
+    for (const m of memberships) {
+      const room = await ctx.db.get(m.roomId);
+      if (room && room.archivedAt === undefined) rooms.push({ room, role: m.role });
+    }
+    rooms.sort((a, b) => b.room._creationTime - a.room._creationTime);
+    return await Promise.all(rooms.map(async ({ room, role }) => ({ ...room, role, readyReviews: (await ctx.db.query('rituals').withIndex('by_room', q => q.eq('roomId', room._id)).collect()).filter(r => r.status !== 'collecting').length })));
+  },
+});
+
+// Where the caller stands in a room, for routing. Never throws.
+export const access = query({
+  args: { roomId: v.string() },
+  handler: async (ctx, { roomId }): Promise<'owner' | 'member' | 'removed' | 'none'> => {
+    const id = ctx.db.normalizeId('rooms', roomId);
+    if (!id) return 'none';
+    const found = await getMembership(ctx, id);
+    if (!found) return 'none';
+    if (found.member.removedAt !== undefined) return 'removed';
+    if (found.member.role === 'owner') return (await getOwner(ctx)) ? 'owner' : 'none';
+    return 'member';
   },
 });
 
 export const get = query({
   args: { roomId: v.id('rooms') },
   handler: async (ctx, { roomId }) => {
-    await requireOwner(ctx);
     const room = await ctx.db.get(roomId);
     if (!room) return null;
+    await requireMember(ctx, roomId);
     const participants = await ctx.db
       .query('participants')
       .withIndex('by_room', (q) => q.eq('roomId', roomId))
@@ -32,6 +57,7 @@ export const create = mutation({
   args: { name: v.string(), runnerId: v.id('runners'), cwd: v.string() },
   handler: async (ctx, { name, runnerId, cwd }) => {
     const owner = await requireOwner(ctx);
+    const user = await ensureUser(ctx);
     const runner = await ctx.db.get(runnerId);
     if (!runner) throw new Error('Unknown runner');
 
@@ -42,7 +68,9 @@ export const create = mutation({
       roomId,
       kind: 'human',
       displayName: owner.name ?? owner.email ?? 'You',
+      userId: user._id,
     });
+    await ctx.db.insert('roomMembers', { roomId, userId: user._id, role: 'owner', participantId: humanId });
     await record(ctx, { roomId, type: 'participant.joined', subjectId: humanId, parentLedgerId: created, payload: { kind: 'human' } });
 
     const claudeId = await ctx.db.insert('participants', {

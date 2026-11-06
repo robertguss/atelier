@@ -15,6 +15,45 @@ export default defineSchema({
     harnesses: v.array(v.object({ id: harnessId, version: v.string() })),
   }).index('by_name', ['name']),
 
+  // One row per signed-in person, keyed on Clerk's tokenIdentifier so a
+  // changed email address does not split or merge accounts.
+  users: defineTable({
+    tokenIdentifier: v.string(),
+    email: v.optional(v.string()),
+    name: v.optional(v.string()),
+  }).index('by_token', ['tokenIdentifier']),
+
+  // Room membership is separate from participants, so removing someone ends
+  // their access without touching the authorship of what they wrote.
+  roomMembers: defineTable({
+    roomId: v.id('rooms'),
+    userId: v.id('users'),
+    role: v.union(v.literal('owner'), v.literal('member')),
+    participantId: v.id('participants'),
+    noticeVersion: v.optional(v.number()),
+    noticeAcceptedAt: v.optional(v.number()),
+    removedAt: v.optional(v.number()),
+  })
+    .index('by_room', ['roomId'])
+    .index('by_user', ['userId'])
+    .index('by_room_user', ['roomId', 'userId']),
+
+  // An invite is for one room and one email address. Only a hash of the
+  // token is stored; the token itself lives in the invite link.
+  roomInvites: defineTable({
+    roomId: v.id('rooms'),
+    email: v.string(),
+    tokenHash: v.string(),
+    expiresAt: v.number(),
+    status: v.union(v.literal('pending'), v.literal('accepted'), v.literal('revoked'), v.literal('expired')),
+    clerkInvitationId: v.optional(v.string()),
+    acceptedByUserId: v.optional(v.id('users')),
+    acceptedAt: v.optional(v.number()),
+    revokedAt: v.optional(v.number()),
+  })
+    .index('by_room', ['roomId'])
+    .index('by_token_hash', ['tokenHash']),
+
   rooms: defineTable({
     name: v.string(),
     runnerId: v.id('runners'),
@@ -31,6 +70,8 @@ export default defineSchema({
     reasoning: v.optional(v.string()),
     displayName: v.string(),
     harnessSessionId: v.optional(v.string()),
+    // The signed-in person behind a human participant.
+    userId: v.optional(v.id('users')),
   }).index('by_room', ['roomId']),
 
   messages: defineTable({
