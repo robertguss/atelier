@@ -183,3 +183,21 @@ Claude Code 2.1.318 through Agent SDK 0.3.318 (Haiku and Sonnet), Codex CLI
   built-in `llama` and `mcp` extension commands were listed. His herdr
   extension reports only in TUI mode, so it is silent under RPC either way.
 - Consequence: the Pi edit guard is feasible as a runner-shipped extension.
+
+## Shared rooms build pitfalls
+
+How to set up and run shared rooms is in [docs/shared-rooms.md](docs/shared-rooms.md).
+
+- `convex codegen` contacts the dev deployment, but it only regenerates
+  `packages/backend/convex/_generated`. It does not push functions, so the live
+  deployment keeps running the old code. Push with `npx convex dev --once` (or
+  a running `convex dev`) from `packages/backend` before testing against it.
+- pnpm here enforces a minimum release age. It refused packages published the
+  same day, so a fresh version failed to install. Pin the previous release, or
+  wait, rather than loosening the setting.
+- Legend List lagged behind streaming text in the web agent pane. The pane uses
+  a plain scroller that sticks to the bottom while you are at the bottom.
+- In live Claude steering checks, Haiku sometimes ignored a folded steer that
+  Sonnet followed. Test steering with Sonnet before concluding it is broken,
+  and keep sending the person's text as typed (see the Claude probe notes
+  above).

@@ -53,6 +53,21 @@ These restrictions mean review-time executable plugins/extensions and MCP tools
 are unavailable. Text instructions and native harness configuration still load.
 This step does not add Atelier MCP (step 5).
 
+## Shared rooms
+
+Reviews stay owner-only when a room has a teammate. Only the owner can start,
+cancel or follow up a review, record a takeaway, crux or decision for one, or
+answer a question card raised during a follow-up. A teammate's timeline and
+agent pane never show review turns, revealed answers, follow-up messages or
+follow-up turns. Review and follow-up turns also stay out of the agent queue:
+a follow-up always runs as its own turn and never takes a steer.
+
+A follow-up normally continues the participant's ordinary session. In a room
+with an active teammate it runs on a separate session kept with the review
+instead, one per participant, so the agent cannot repeat the review to the
+teammate in a later ordinary turn. The choice is fixed when the runner claims
+the follow-up turn. See [shared rooms](shared-rooms.md).
+
 ## Push readiness
 
 The backend accepts owner-authenticated Expo tokens and sends generic reveal
