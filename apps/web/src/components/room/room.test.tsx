@@ -19,7 +19,6 @@ type Pane = {
   messages: Record<string, unknown>[];
   cards: Record<string, unknown>[];
   turns: Record<string, unknown>[];
-  turnItems?: Record<string, unknown>[];
 };
 
 let pane: Pane;
@@ -56,6 +55,7 @@ function turn(overrides: Record<string, unknown>) {
     stoppedByParticipantId: null,
     startedAt: 2_000,
     endedAt: null,
+    items: [],
     ...overrides,
   };
 }
@@ -195,6 +195,40 @@ describe('composers', () => {
     expect(backend.mutations['agent:steer']).not.toHaveBeenCalled();
   });
 
+  it('keeps the target while the person is typing, even when another agent raises a card', async () => {
+    await openRoom();
+    const toClaude = screen.getByRole('textbox', { name: 'To Claude' });
+    toClaude.focus();
+    fireEvent.change(toClaude, { target: { value: 'Keep the plan small' } });
+
+    pane.agents = [agent(CLAUDE, 'claude', 'Claude'), agent(CODEX, 'codex', 'Codex', { status: 'waiting', activeTurnId: 't1' })];
+    pane.turns = [turn({ participantId: CODEX, waitingOnHandId: 'h1' })];
+    pane.cards = [card({ participantId: CODEX })];
+    act(() => pushBackend());
+    await screen.findByRole('group', { name: /Codex asks/ });
+
+    const composer = screen.getByRole('textbox', { name: 'To Claude' });
+    expect(composer).toHaveValue('Keep the plan small');
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    await waitFor(() =>
+      expect(backend.mutations['messages:send']).toHaveBeenCalledWith({ roomId: ROOM, body: 'Keep the plan small', toParticipantId: CLAUDE }),
+    );
+  });
+
+  it('keeps text typed while a message is still sending', async () => {
+    let finish = () => {};
+    backend.mutations['messages:send'] = vi.fn(() => new Promise<null>((resolve) => (finish = () => resolve(null))));
+    await openRoom();
+    const toClaude = screen.getByRole('textbox', { name: 'To Claude' });
+    fireEvent.change(toClaude, { target: { value: 'Draft the plan' } });
+    fireEvent.keyDown(toClaude, { key: 'Enter' });
+    await waitFor(() => expect(backend.mutations['messages:send']).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(toClaude, { target: { value: 'Draft the plan. Also list the risks' } });
+    await act(async () => finish());
+    expect(screen.getByRole('textbox', { name: 'To Claude' })).toHaveValue('Draft the plan. Also list the risks');
+  });
+
   it('offers only "Send" while the target agent is idle', async () => {
     await openRoom();
     expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
@@ -322,9 +356,10 @@ describe('queue, delivery and stopping', () => {
   });
 
   it("keeps a finished turn's streamed text and tool activity next to its answer", async () => {
-    pane.turns = [turn({ status: 'done', partialText: 'Looking at the files first.' })];
+    pane.turns = [
+      turn({ status: 'done', partialText: 'Looking at the files first.', items: [{ name: 'Read', summary: 'docs/plan.md', ok: true }] }),
+    ];
     pane.messages = [message({ id: 'm-r', at: 9_000, authorParticipantId: CLAUDE, toParticipantId: null, turnId: 't1', delivery: null, body: 'Here is the plan.' })];
-    pane.turnItems = [{ turnId: 't1', name: 'Read', summary: 'docs/plan.md', ok: true, sequence: 1 }];
     await openRoom();
     expect(screen.getByText('Looking at the files first.')).toBeInTheDocument();
     expect(screen.getByText('Here is the plan.')).toBeInTheDocument();
@@ -365,6 +400,20 @@ describe('room header and access', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Invite' }));
     expect(await screen.findByText('https://atelier.example/invite/tok')).toBeInTheDocument();
     expect(backend.actions['invites:create']).toHaveBeenCalledWith({ roomId: ROOM, email: 'dana@example.com' });
+  });
+
+  it('keeps the one-time invite link after the members sheet is closed and reopened', async () => {
+    backend.actions['invites:create'] = vi.fn(async () => ({ inviteId: 'i1', url: 'https://atelier.example/invite/tok', emailed: false }));
+    await openRoom('owner');
+    fireEvent.click(screen.getByRole('button', { name: 'Members' }));
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Email' }), { target: { value: 'dana@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Invite' }));
+    expect(await screen.findByText('https://atelier.example/invite/tok')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Email' })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Members' }));
+    expect(await screen.findByText('https://atelier.example/invite/tok')).toBeInTheDocument();
   });
 
   it("swaps a removed member's open room for the no-access page", async () => {

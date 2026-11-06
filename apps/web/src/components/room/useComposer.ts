@@ -14,7 +14,8 @@ export function useComposer(send: (body: string, steer: boolean) => Promise<unkn
     setError(null);
     try {
       await send(body, steer);
-      setDraft('');
+      // Keep anything typed while the send was in flight.
+      setDraft((current) => (current.trim() === body ? '' : current));
     } catch (e) {
       setError(errorText(e));
     }

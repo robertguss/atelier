@@ -25,7 +25,15 @@ interface MembersSheetProps {
   onOpenChange: (open: boolean) => void;
 }
 
+interface SentInvite {
+  email: string;
+  url: string;
+  emailed: boolean;
+}
+
 export function MembersSheet({ roomId, participants, open, onOpenChange }: MembersSheetProps) {
+  // The invite link can't be fetched again, so it outlives the panel until the next invite.
+  const [sent, setSent] = useState<SentInvite | null>(null);
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetPopup side="right" className="overflow-y-auto">
@@ -33,17 +41,24 @@ export function MembersSheet({ roomId, participants, open, onOpenChange }: Membe
           <SheetTitle>Members</SheetTitle>
           <SheetDescription>Only you can invite or remove people and choose the room's agents.</SheetDescription>
         </SheetHeader>
-        {open ? <MembersPanel roomId={roomId} participants={participants} /> : null}
+        {open ? <MembersPanel roomId={roomId} participants={participants} sent={sent} onSent={setSent} /> : null}
       </SheetPopup>
     </Sheet>
   );
 }
 
-function MembersPanel({ roomId, participants }: { roomId: Id<'rooms'>; participants: Participant[] }) {
+interface MembersPanelProps {
+  roomId: Id<'rooms'>;
+  participants: Participant[];
+  sent: SentInvite | null;
+  onSent: (sent: SentInvite) => void;
+}
+
+function MembersPanel({ roomId, participants, sent, onSent }: MembersPanelProps) {
   const data = useQuery(api.members.list, { roomId });
   return (
     <div className="space-y-6 px-6 pb-6 text-sm">
-      <InviteForm roomId={roomId} />
+      <InviteForm roomId={roomId} sent={sent} onSent={onSent} />
       {data === undefined ? (
         <Spinner size="md" tone="muted" />
       ) : (
@@ -73,12 +88,11 @@ function MembersPanel({ roomId, participants }: { roomId: Id<'rooms'>; participa
   );
 }
 
-function InviteForm({ roomId }: { roomId: Id<'rooms'> }) {
+function InviteForm({ roomId, sent, onSent }: { roomId: Id<'rooms'>; sent: SentInvite | null; onSent: (sent: SentInvite) => void }) {
   const create = useAction(api.invites.create);
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sent, setSent] = useState<{ email: string; url: string; emailed: boolean } | null>(null);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -88,7 +102,7 @@ function InviteForm({ roomId }: { roomId: Id<'rooms'> }) {
     setError(null);
     try {
       const result = await create({ roomId, email: address });
-      setSent({ email: address, url: result.url, emailed: result.emailed });
+      onSent({ email: address, url: result.url, emailed: result.emailed });
       setEmail('');
     } catch (err) {
       setError(errorText(err));

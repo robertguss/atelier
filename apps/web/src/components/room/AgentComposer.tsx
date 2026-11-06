@@ -64,7 +64,11 @@ export function AgentComposer({ roomId, agents, target, onPickTarget, onSent, of
         placeholder={`To ${target.displayName}`}
         rows={2}
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => {
+          // Starting a draft pins the target, so a card raised mid-typing can't redirect it.
+          if (!draft && e.target.value) onPickTarget(target.participantId);
+          setDraft(e.target.value);
+        }}
         onKeyDown={onKeyDown}
       />
       <div className="flex flex-wrap items-center justify-end gap-2">

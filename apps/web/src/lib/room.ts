@@ -57,34 +57,9 @@ export interface ToolItem {
   ok: boolean | null;
 }
 
-interface RawToolItem {
-  _id?: string;
-  id?: string;
-  turnId?: string;
-  name?: string;
-  summary?: string;
-  ok?: boolean | null;
-  sequence?: number;
-  seq?: number;
-}
-
-/**
- * A turn's tool activity, when the pane carries it: either on the turn as
- * `items`, or room-wide as `turnItems` keyed by `turnId`. Older backends send
- * neither, and the turn then shows no tool activity.
- */
-export function toolItemsFor(pane: Pane, turn: PaneTurn): ToolItem[] {
-  const onTurn = (turn as { items?: RawToolItem[] }).items;
-  const raw = onTurn ?? (pane as { turnItems?: RawToolItem[] }).turnItems?.filter((i) => i.turnId === turn.id) ?? [];
-  return raw
-    .map((item, index) => ({ item, order: item.sequence ?? item.seq ?? index }))
-    .sort((a, b) => a.order - b.order)
-    .map(({ item, order }) => ({
-      key: item._id ?? item.id ?? `${turn.id}:${order}`,
-      name: item.name ?? 'Tool',
-      summary: item.summary ?? '',
-      ok: item.ok ?? null,
-    }));
+/** A turn's tool activity, oldest first, as the pane already orders it. */
+export function toolItemsFor(turn: PaneTurn): ToolItem[] {
+  return turn.items.map((item, index) => ({ key: `${turn.id}:${index}`, ...item }));
 }
 
 export function isOffline(pane: Pane, now: number) {

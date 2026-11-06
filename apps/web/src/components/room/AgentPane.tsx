@@ -72,7 +72,7 @@ export function AgentPane({ roomId, pane, names, offline }: AgentPaneProps) {
                     turn={item.turn}
                     replies={item.replies}
                     cards={item.cards}
-                    tools={toolItemsFor(pane, item.turn)}
+                    tools={toolItemsFor(item.turn)}
                     names={names}
                     offline={offline}
                   />
