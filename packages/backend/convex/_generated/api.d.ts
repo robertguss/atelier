@@ -10,8 +10,10 @@
 
 import type * as agent from "../agent.js";
 import type * as crons from "../crons.js";
+import type * as hands from "../hands.js";
 import type * as invites from "../invites.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_cards from "../lib/cards.js";
 import type * as lib_dispatch from "../lib/dispatch.js";
 import type * as lib_ledger from "../lib/ledger.js";
 import type * as lib_prompt from "../lib/prompt.js";
@@ -36,8 +38,10 @@ import type {
 declare const fullApi: ApiFromModules<{
   agent: typeof agent;
   crons: typeof crons;
+  hands: typeof hands;
   invites: typeof invites;
   "lib/auth": typeof lib_auth;
+  "lib/cards": typeof lib_cards;
   "lib/dispatch": typeof lib_dispatch;
   "lib/ledger": typeof lib_ledger;
   "lib/prompt": typeof lib_prompt;

@@ -251,7 +251,15 @@ test('a turn waiting on a card for ten minutes, renewed by progress, is not recl
   const first = (await owner.mutation(api.messages.send, { roomId, body: 'Ask me', toParticipantId: claude._id }))!;
   const { commandId } = await startTurn(t, first);
   await t.run(async ctx => {
-    const handId = await ctx.db.insert('hands', { roomId, turnId: first, participantId: claude._id, question: 'Which?', options: ['A', 'B'], status: 'raised' });
+    const handId = await ctx.db.insert('hands', {
+      roomId,
+      turnId: first,
+      participantId: claude._id,
+      requestId: 'req-1',
+      questions: [{ id: 'which', header: 'Which', text: 'Which?', options: [{ label: 'A' }, { label: 'B' }], multiSelect: false, allowFreeText: true }],
+      status: 'raised',
+      raisedAt: Date.now(),
+    });
     await ctx.db.patch(first, { waitingOnHandId: handId });
   });
   for (let minute = 0; minute < 10; minute++) {

@@ -29,12 +29,33 @@ export const commandType = v.union(
   v.literal('settings'),
 );
 
+// One question on a card. `id` is the harness's own question id, or any id
+// the runner chooses that is unique on the card.
+export const cardQuestion = v.object({
+  id: v.string(),
+  header: v.string(),
+  text: v.string(),
+  options: v.array(v.object({ label: v.string(), description: v.optional(v.string()) })),
+  multiSelect: v.boolean(),
+  allowFreeText: v.boolean(),
+});
+
+// The answer to one question: the chosen option labels, free text, or both.
+export const cardAnswer = v.object({
+  questionId: v.string(),
+  labels: v.array(v.string()),
+  freeText: v.optional(v.string()),
+});
+
 export default defineSchema({
   runners: defineTable({
     name: v.string(),
     machine: v.string(),
     lastHeartbeatAt: v.number(),
     harnesses: v.array(v.object({ id: harnessId, version: v.string() })),
+    // What each harness can do on this runner, as the runner last reported.
+    // Kept apart from `harnesses`, which every heartbeat replaces.
+    harnessCapabilities: v.optional(v.array(v.object({ id: harnessId, canRaiseCards: v.boolean() }))),
   }).index('by_name', ['name']),
 
   // One row per signed-in person, keyed on Clerk's tokenIdentifier so a
@@ -226,17 +247,33 @@ export default defineSchema({
     ritualId: v.optional(v.id('rituals')),
     choice: v.string(),
     rationale: v.optional(v.string()),
+    // Set on a decision recorded by answering one question on a card.
+    handId: v.optional(v.id('hands')),
+    questionId: v.optional(v.string()),
+    answeredByParticipantId: v.optional(v.id('participants')),
   }).index('by_room', ['roomId']),
 
+  // A question card: one to four questions an agent asked through its
+  // harness's own question prompt. Answered whole, once, by whoever is first.
   hands: defineTable({
     roomId: v.id('rooms'),
     turnId: v.id('turns'),
     participantId: v.id('participants'),
-    question: v.string(),
-    options: v.array(v.string()),
-    status: v.union(v.literal('raised'), v.literal('answered')),
-    answer: v.optional(v.string()),
-  }).index('by_room_status', ['roomId', 'status']),
+    // The harness's id for the pending request, so the runner can route the answer.
+    requestId: v.string(),
+    questions: v.array(cardQuestion),
+    status: v.union(v.literal('raised'), v.literal('answered'), v.literal('cancelled'), v.literal('expired')),
+    answers: v.optional(v.array(cardAnswer)),
+    answeredByParticipantId: v.optional(v.id('participants')),
+    answeredAt: v.optional(v.number()),
+    via: v.optional(v.union(v.literal('card'), v.literal('chat'))),
+    raisedAt: v.number(),
+    // When a card closed without an answer, and why.
+    closedAt: v.optional(v.number()),
+    closeReason: v.optional(v.string()),
+  })
+    .index('by_room_status', ['roomId', 'status'])
+    .index('by_turn', ['turnId']),
 
   commands: defineTable({
     runnerId: v.id('runners'),

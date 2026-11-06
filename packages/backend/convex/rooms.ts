@@ -115,3 +115,29 @@ export const addParticipant = mutation({
     return id;
   },
 });
+
+// The owner's "agents may edit files in this folder" switch. Running turns
+// get the new value as a settings command. Codex and Pi fix their
+// permissions when a turn starts, so turning edits off also interrupts them.
+export const setEditsEnabled = mutation({
+  args: { roomId: v.id('rooms'), on: v.boolean() },
+  handler: async (ctx, { roomId, on }) => {
+    await requireOwner(ctx);
+    const { participant: owner } = await requireMember(ctx, roomId);
+    const room = await ctx.db.get(roomId);
+    if (!room) throw new Error('Unknown room');
+    if ((room.editsEnabled === true) === on) return;
+    await ctx.db.patch(roomId, { editsEnabled: on });
+    await record(ctx, { roomId, type: 'room.edits_changed', actorParticipantId: owner._id, subjectId: roomId, payload: { editsEnabled: on } });
+
+    const running = (await ctx.db.query('turns').withIndex('by_room', q => q.eq('roomId', roomId)).collect())
+      .filter(t => t.status === 'running' && !t.ritualId);
+    for (const turn of running) {
+      await ctx.db.insert('commands', { runnerId: room.runnerId, type: 'settings', turnId: turn._id, status: 'pending', payload: { editsEnabled: on } });
+      const agent = await ctx.db.get(turn.participantId);
+      if (!on && (agent?.harness === 'codex' || agent?.harness === 'pi')) {
+        await ctx.db.insert('commands', { runnerId: room.runnerId, type: 'interrupt', turnId: turn._id, status: 'pending', payload: { reason: 'File edits were turned off' } });
+      }
+    }
+  },
+});

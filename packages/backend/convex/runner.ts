@@ -3,8 +3,10 @@ import { v } from 'convex/values';
 import type { Doc, Id } from './_generated/dataModel';
 import { internalMutation, mutation, query, type MutationCtx } from './_generated/server';
 import { hasActiveTeammate, requireRunnerSecret } from './lib/auth';
+import { closeOpenCards, expireUnanswered } from './lib/cards';
 import { dispatchNext, steerRejected } from './lib/dispatch';
 import { record } from './lib/ledger';
+import { cardQuestion, harnessId } from './schema';
 
 // Functions the runner calls. Each takes the runner secret instead of a Clerk
 // session. See docs/v0-spec.md, "Runner ↔ Convex protocol".
@@ -53,6 +55,10 @@ export const claim = mutation({
     const room = await ctx.db.get(turn.roomId);
     if (!participant || !room || !participant.harness) return null;
 
+    // The turn runs with the switch as it is now, not as it was at dispatch.
+    const editsEnabled = room.editsEnabled === true;
+    if (turn.editsEnabled !== editsEnabled) await ctx.db.patch(turn._id, { editsEnabled });
+
     let sessionId = turn.ritualId ? undefined : participant.harnessSessionId;
     if (turn.followUp && !turn.ritualId) {
       // With a teammate in the room, a follow-up must not continue the
@@ -77,18 +83,22 @@ export const claim = mutation({
         reasoning: participant.reasoning,
         sessionId,
       },
-      room: { id: room._id, cwd: room.cwd, name: room.name, handbook: room.handbook },
+      room: { id: room._id, cwd: room.cwd, name: room.name, handbook: room.handbook, editsEnabled },
     };
   },
 });
 
+// Returns the room's edit switch as it is now. A change made between claim
+// and start reached no running turn, so the runner applies this value.
 export const start = mutation({
   args: { secret: v.string(), turnId: v.id('turns'), harnessVersion: v.string() },
   handler: async (ctx, { secret, turnId, harnessVersion }) => {
     requireRunnerSecret(secret);
     const turn = await ctx.db.get(turnId);
-    if (!turn || !['queued', 'running'].includes(turn.status)) return;
-    await ctx.db.patch(turnId, { status: 'running', startedAt: Date.now(), harnessVersion });
+    if (!turn || !['queued', 'running'].includes(turn.status)) return null;
+    const room = await ctx.db.get(turn.roomId);
+    const editsEnabled = room?.editsEnabled === true;
+    await ctx.db.patch(turnId, { status: 'running', startedAt: Date.now(), harnessVersion, editsEnabled });
     await record(ctx, {
       roomId: turn.roomId,
       type: 'turn.started',
@@ -96,6 +106,7 @@ export const start = mutation({
       subjectId: turnId,
       harnessVersion,
     });
+    return { editsEnabled };
   },
 });
 
@@ -140,6 +151,7 @@ export const finish = mutation({
       endedAt: Date.now(),
     });
     await ctx.db.patch(args.commandId, { status: 'done', leaseExpiresAt: undefined });
+    await closeOpenCards(ctx, args.turnId, 'cancelled', 'The turn ended before anyone answered');
     if (args.sessionId && !turn.ritualId) await saveSession(ctx, turn, args.sessionId);
 
     const messageId = await ctx.db.insert('messages', {
@@ -280,6 +292,61 @@ export const sessionStarted = mutation({
   },
 });
 
+// The agent asked a question through its harness's question prompt. The card
+// shows in the agent pane, and the turn stays running while it waits.
+export const raiseHand = mutation({
+  args: { secret: v.string(), turnId: v.id('turns'), requestId: v.string(), questions: v.array(cardQuestion) },
+  handler: async (ctx, { secret, turnId, requestId, questions }) => {
+    requireRunnerSecret(secret);
+    if (questions.length < 1 || questions.length > 4) throw new Error('A card holds one to four questions');
+    if (new Set(questions.map((q) => q.id)).size !== questions.length) throw new Error('Question ids must be unique on a card');
+    const turn = await ctx.db.get(turnId);
+    if (!turn || turn.status !== 'running') throw new Error('Turn is not running');
+    const handId = await ctx.db.insert('hands', {
+      roomId: turn.roomId,
+      turnId,
+      participantId: turn.participantId,
+      requestId,
+      questions,
+      status: 'raised',
+      raisedAt: Date.now(),
+    });
+    if (!turn.waitingOnHandId) await ctx.db.patch(turnId, { waitingOnHandId: handId });
+    await record(ctx, {
+      roomId: turn.roomId,
+      type: 'hand.raised',
+      actorParticipantId: turn.participantId,
+      subjectId: handId,
+      payload: { turnId, requestId, questionCount: questions.length },
+    });
+    return handId;
+  },
+});
+
+// The runner's 2-hour timer for an unanswered card ran out.
+export const handTimedOut = mutation({
+  args: { secret: v.string(), handId: v.id('hands') },
+  handler: async (ctx, { secret, handId }) => {
+    requireRunnerSecret(secret);
+    const hand = await ctx.db.get(handId);
+    if (hand) await expireUnanswered(ctx, hand);
+  },
+});
+
+// What each harness on this runner can do, such as whether it can raise
+// question cards. The room shows it next to each agent.
+export const reportCapabilities = mutation({
+  args: {
+    secret: v.string(),
+    runnerId: v.id('runners'),
+    harnesses: v.array(v.object({ id: harnessId, canRaiseCards: v.boolean() })),
+  },
+  handler: async (ctx, { secret, runnerId, harnesses }) => {
+    requireRunnerSecret(secret);
+    await ctx.db.patch(runnerId, { harnessCapabilities: harnesses });
+  },
+});
+
 async function saveSession(ctx: MutationCtx, turn: Doc<'turns'>, sessionId: string) {
   if (turn.followUp?.separateSession) await saveFollowUpSession(ctx, turn.followUp.ritualId, turn.participantId, sessionId);
   else await ctx.db.patch(turn.participantId, { harnessSessionId: sessionId });
@@ -300,6 +367,9 @@ async function failTurn(
   if (!command || command.turnId !== turnId || !['pending', 'claimed'].includes(command.status)) throw new Error('Invalid turn command');
   await ctx.db.patch(commandId, { status: 'failed', error, leaseExpiresAt: undefined });
   if (runnerLost) await abandonControlCommands(ctx, turn, command.runnerId, error);
+  // A runner that went away expires the turn's open cards; any other failure
+  // stopped the turn, which cancels them. Neither records a decision.
+  await closeOpenCards(ctx, turnId, runnerLost ? 'expired' : 'cancelled', error);
   await ctx.db.patch(turnId, {
     status: interrupted && !turn.ritualId ? 'interrupted' : 'failed',
     error,

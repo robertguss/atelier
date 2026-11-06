@@ -40,10 +40,13 @@ export const steer = mutation({
   },
 });
 
+const RECENT_CARDS = 20;
+
 // Everything a member needs to draw the agent pane: messages to agents with
 // their delivery state, agent replies, turns with their streamed text, each
-// agent's status, the edit switch and the runner's last heartbeat. Members
-// never see reviews, follow-ups to them, or any turn's prompt.
+// agent's status and whether it can raise question cards, open and recent
+// cards, the edit switch and the runner's last heartbeat. Members never see
+// reviews, follow-ups to them, or any turn's prompt.
 export const pane = query({
   args: { roomId: v.id('rooms') },
   handler: async (ctx, { roomId }) => {
@@ -67,8 +70,17 @@ export const pane = query({
         status,
         activeTurnId: active && (isOwner || !active.followUp) ? active._id : null,
         queued: messages.filter((m) => m.toParticipantId === p._id && (m.delivery === 'queued' || m.delivery === 'steering')).length,
+        // Null until the runner reports it. An agent that cannot raise cards asks in plain text.
+        canRaiseCards: runner?.harnessCapabilities?.find((c) => c.id === p.harness)?.canRaiseCards ?? null,
       });
     }
+
+    // Open cards, then the most recent closed ones, only on turns the caller can see.
+    const visibleTurnIds = new Set(turns.map((t) => t._id));
+    const hands = (await ctx.db.query('hands').withIndex('by_room_status', (q) => q.eq('roomId', roomId)).collect())
+      .filter((h) => visibleTurnIds.has(h.turnId))
+      .sort((a, b) => a.raisedAt - b.raisedAt);
+    const cards = [...hands.filter((h) => h.status === 'raised'), ...hands.filter((h) => h.status !== 'raised').slice(-RECENT_CARDS)];
 
     return {
       runner: { lastHeartbeatAt: runner?.lastHeartbeatAt ?? 0, offlineAfterMs: OFFLINE_AFTER_MS },
@@ -85,6 +97,20 @@ export const pane = query({
         delivery: m.delivery ?? null,
         deliveredTurnId: m.deliveredTurnId ?? null,
         cancelReason: m.cancelReason ?? null,
+      })),
+      cards: cards.map((h) => ({
+        id: h._id,
+        turnId: h.turnId,
+        participantId: h.participantId,
+        questions: h.questions,
+        status: h.status,
+        answers: h.answers ?? null,
+        answeredByParticipantId: h.answeredByParticipantId ?? null,
+        answeredAt: h.answeredAt ?? null,
+        via: h.via ?? null,
+        raisedAt: h.raisedAt,
+        closedAt: h.closedAt ?? null,
+        closeReason: h.closeReason ?? null,
       })),
       turns: turns.map((t) => ({
         id: t._id,

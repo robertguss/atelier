@@ -3,6 +3,7 @@ import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel';
 import { mutation, query, type QueryCtx } from './_generated/server';
 import { requireMember } from './lib/auth';
+import { answerCard, closeOpenCards, ownerOnlyCard, waitingCard } from './lib/cards';
 import { dispatchNext, offlineReason, runnerOnline } from './lib/dispatch';
 import { record } from './lib/ledger';
 
@@ -52,7 +53,8 @@ export const timeline = query({
 // Post a message to one agent (Claude by default). An idle agent starts a
 // turn at once; a busy one gets it, with anything else waiting, when its
 // current turn ends. Returns the new turn, or null when the message waits.
-// Following up a review or decision is the owner's alone.
+// Following up a review or decision is the owner's alone. A message to an
+// agent waiting on its own question card answers that card instead.
 export const send = mutation({
   args: { roomId: v.id('rooms'), body: v.string(), toParticipantId: v.optional(v.id('participants')), decisionId: v.optional(v.id('decisions')), reviewTurnId: v.optional(v.id('turns')) },
   handler: async (ctx, { roomId, body, toParticipantId, decisionId, reviewTurnId }): Promise<Id<'turns'> | null> => {
@@ -73,6 +75,23 @@ export const send = mutation({
       ? participants.find((p) => p._id === toParticipantId)
       : participants.find((p) => p.harness === 'claude');
     if (!target || target.kind !== 'harness') throw new Error('Room has no one to reply');
+
+    const card = decisionId || reviewTurnId ? null : await waitingCard(ctx, target._id);
+    if (card && (isOwner || !(await ownerOnlyCard(ctx, card)))) {
+      const messageId = await ctx.db.insert('messages', {
+        roomId,
+        authorParticipantId: human._id,
+        body: text,
+        visibility: 'room',
+        toParticipantId: target._id,
+        delivery: 'answeredCard',
+        deliveredTurnId: card.turnId,
+      });
+      await record(ctx, { roomId, type: 'message.posted', actorParticipantId: human._id, subjectId: messageId, payload: { to: target._id, handId: card._id } });
+      const answers = card.questions.map((q) => ({ questionId: q.id, labels: [], freeText: text }));
+      await answerCard(ctx, card, human, answers, 'chat', messageId);
+      return null;
+    }
 
     let parentLedgerId: Id<'ledger'> | undefined;
     let followUpRitualId: Id<'rituals'> | undefined;
@@ -139,6 +158,7 @@ export const cancel = mutation({
       endedAt: Date.now(),
       stoppedByParticipantId: participant._id,
     });
+    await closeOpenCards(ctx, turnId, 'cancelled', reason);
     await reviewFinished(ctx, turn);
     const room = await ctx.db.get(turn.roomId);
     if (room) {

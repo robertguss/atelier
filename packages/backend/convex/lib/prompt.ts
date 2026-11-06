@@ -130,20 +130,34 @@ export async function loadRoomContext(ctx: QueryCtx, room: Doc<'rooms'>): Promis
 
 // The only view of decisions an agent gets: question, choice, who answered
 // and when. Never the rationale or linked team messages, and never a decision
-// made on an independent review, which stays the owner's.
+// made on an independent review or on a card raised by a review or its
+// follow-up, which stay the owner's.
 export async function agentDecisions(ctx: QueryCtx, roomId: Id<'rooms'>): Promise<AgentDecision[]> {
-  const recent = (await ctx.db.query('decisions').withIndex('by_room', (q) => q.eq('roomId', roomId)).collect())
-    .filter((d) => d.ritualId === undefined)
-    .slice(-RECENT_DECISIONS);
+  const shown = [];
+  for (const d of await ctx.db.query('decisions').withIndex('by_room', (q) => q.eq('roomId', roomId)).collect()) {
+    if (d.ritualId !== undefined) continue;
+    const hand = d.handId ? await ctx.db.get(d.handId) : null;
+    if (hand) {
+      const turn = await ctx.db.get(hand.turnId);
+      if (!turn || turn.ritualId || turn.followUp) continue;
+    }
+    shown.push({ decision: d, hand });
+  }
   const out: AgentDecision[] = [];
-  for (const d of recent) {
+  for (const { decision: d, hand } of shown.slice(-RECENT_DECISIONS)) {
     const crux = d.cruxId ? await ctx.db.get(d.cruxId) : null;
-    const recorded = await ctx.db
-      .query('ledger')
-      .withIndex('by_room_type', (q) => q.eq('roomId', roomId).eq('type', 'decision.recorded').eq('subjectId', d._id))
-      .first();
-    const answerer = recorded?.actorParticipantId ? await ctx.db.get(recorded.actorParticipantId) : null;
-    out.push({ question: crux?.statement ?? '', choice: d.choice, answeredBy: answerer?.displayName ?? 'someone', at: d._creationTime });
+    const question = hand ? hand.questions.find((q) => q.id === d.questionId)?.text : crux?.statement;
+    const answererId = d.answeredByParticipantId ?? (await recordedBy(ctx, roomId, d._id));
+    const answerer = answererId ? await ctx.db.get(answererId) : null;
+    out.push({ question: question ?? '', choice: d.choice, answeredBy: answerer?.displayName ?? 'someone', at: d._creationTime });
   }
   return out;
+}
+
+async function recordedBy(ctx: QueryCtx, roomId: Id<'rooms'>, decisionId: Id<'decisions'>) {
+  const recorded = await ctx.db
+    .query('ledger')
+    .withIndex('by_room_type', (q) => q.eq('roomId', roomId).eq('type', 'decision.recorded').eq('subjectId', decisionId))
+    .first();
+  return recorded?.actorParticipantId;
 }
