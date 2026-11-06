@@ -14,12 +14,14 @@ export function codexHarness(opts: { executable: string; onRaw: (id: string, eve
       const child = spawn(opts.executable, ['app-server'], { cwd: req.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
       const events = eventQueue();
       let sequence = 0;
-      const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+      const privateResponses = new Set<number>();
+      const pending = new Map<number, { method: string; resolve: (value: any) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
       const send = (value: unknown) => child.stdin.write(JSON.stringify(value) + '\n');
       const call = (method: string, params: unknown): Promise<any> => new Promise((resolve, reject) => {
         const id = ++sequence;
+        if (method === 'config/read') privateResponses.add(id);
         const timer = setTimeout(() => { pending.delete(id); reject(new Error(`${method} timed out`)); }, 30_000);
-        pending.set(id, { resolve, reject, timer }); send({ id, method, params });
+        pending.set(id, { method, resolve, reject, timer }); send({ id, method, params });
       });
       const fail = (error: Error) => {
         for (const p of pending.values()) { clearTimeout(p.timer); p.reject(error); }
@@ -35,7 +37,9 @@ export function codexHarness(opts: { executable: string; onRaw: (id: string, eve
       const lines = createInterface({ input: child.stdout });
       lines.on('line', (line) => {
         try {
-          const msg = JSON.parse(line); opts.onRaw(req.turnId, msg);
+          const msg = JSON.parse(line);
+          // config/read can contain secrets; never put that response in a transcript.
+          if (!privateResponses.has(msg.id)) opts.onRaw(req.turnId, msg);
           if (msg.id !== undefined && !msg.method) {
             const p = pending.get(msg.id); if (!p) return;
             clearTimeout(p.timer); pending.delete(msg.id);
@@ -59,8 +63,35 @@ export function codexHarness(opts: { executable: string; onRaw: (id: string, eve
       try {
         await call('initialize', { clientInfo: { name: 'atelier', version: '0.0.0' } });
         send({ method: 'initialized', params: {} });
-        const { thread } = await call(req.resumeSessionId ? 'thread/resume' : 'thread/start', {
-          ...(req.resumeSessionId ? { threadId: req.resumeSessionId } : {}),
+        let reviewConfig: Record<string, unknown> | undefined;
+        if (req.independentReview) {
+          const { config } = await call('config/read', { cwd: req.cwd, includeLayers: false });
+          reviewConfig = {
+            'features.shell_tool': false, 'features.unified_exec': false,
+            'features.apps': false, 'features.plugins': false, 'features.hooks': false,
+            'features.multi_agent': false, 'features.multi_agent_v2': false,
+            'features.goals': false, 'features.runtime_agent_instances': false,
+            'features.js_repl': false,
+            'features.code_mode': false, 'features.code_mode_host': false,
+            'features.computer_use': false, 'features.browser_use': false,
+            'features.image_generation': false, 'features.view_image': false,
+            'features.memory_tool': false, 'features.skill_mcp_dependency_install': false,
+            web_search: 'disabled',
+            'plugins._default.enabled': false,
+          };
+          for (const section of ['mcp_servers', 'plugins'] as const) {
+            for (const name of Object.keys(config[section] ?? {})) {
+              // Config override keys use dotted paths. Never accidentally leave
+              // an unusual server name enabled by addressing a different key.
+              if (!/^[A-Za-z0-9_@-]+$/.test(name)) throw new Error(`Cannot safely disable ${section} entry for review: ${name}`);
+              reviewConfig[`${section}.${name}.enabled`] = false;
+            }
+          }
+        }
+        const resume = req.independentReview ? undefined : req.resumeSessionId;
+        const { thread } = await call(resume ? 'thread/resume' : 'thread/start', {
+          ...(resume ? { threadId: resume } : {}),
+          ...(req.independentReview ? { config: reviewConfig, ephemeral: true } : {}),
           cwd: req.cwd, model: req.model, approvalPolicy: 'never', sandbox: 'read-only',
         });
         yield { type: 'session', sessionId: thread.id };

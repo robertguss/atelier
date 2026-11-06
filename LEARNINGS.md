@@ -67,3 +67,25 @@ failing redirect. Merely checking that the built-in page loads is insufficient.
 - `runner/.env.local` sets `ATELIER_PI_MODEL=openai/gpt-6-astra`. The runner
   uses this default only for Pi participants without an explicit model. It
   leaves the user's global Pi configuration unchanged.
+
+## Independent review (step 4)
+
+- Review turns must never reuse or replace ordinary participant session ids.
+  Owner queries must omit partials, final text, errors and transcript references
+  while collecting; hiding only sealed `messages` is insufficient.
+- Workflow completion events are sent in the same transaction as terminal turn
+  transitions. Cancellation and restart recovery count as failed review turns.
+- Pi 1.4.0's `--tools read,grep,find,ls` does **not** exclude MCP tools. Its CLI
+  explicitly says MCP tools remain enabled. Reviews use `--no-tools`,
+  `--no-extensions`, `--no-mcp`, and `--no-session`, with a shared tracked-file
+  snapshot. See [independent review](docs/independent-review.md) for limits.
+- Codex app-server `thread/start.config` dotted keys must not contain TOML-style
+  quotes around an MCP name. `mcp_servers."tinyfish".enabled` produced an invalid
+  transport error; `mcp_servers.tinyfish.enabled` worked. Config responses can
+  contain secrets and are excluded from raw transcripts, including late replies.
+- Live probes showed Codex can still expose `apply_patch` despite shell tools
+  being disabled. The read-only sandbox rejected its attempted write. Do not
+  claim that Codex exposes zero tools. Claude and Pi review probes exposed none.
+- The step 4 live verification room completed Claude, Codex and Pi turns, kept
+  early answers hidden, revealed all three, then persisted a crux and decision.
+  Push was skipped because the verification identity has no registered device.

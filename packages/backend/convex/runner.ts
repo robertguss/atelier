@@ -1,3 +1,4 @@
+import { reviewFinished } from './lib/review';
 import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel';
 import { mutation, query, type MutationCtx } from './_generated/server';
@@ -31,7 +32,10 @@ export const claim = mutation({
     await ctx.db.patch(commandId, { status: 'claimed', leaseExpiresAt: Date.now() + LEASE_MS });
 
     const turn = await ctx.db.get(command.turnId);
-    if (!turn) return null;
+    if (!turn || turn.status !== 'queued') {
+      await ctx.db.patch(commandId, { status: 'failed', error: 'Turn is no longer queued', leaseExpiresAt: undefined });
+      return null;
+    }
     const participant = await ctx.db.get(turn.participantId);
     const room = await ctx.db.get(turn.roomId);
     if (!participant || !room || !participant.harness) return null;
@@ -39,13 +43,13 @@ export const claim = mutation({
     return {
       commandId,
       type: command.type,
-      turn: { id: turn._id, prompt: turn.prompt },
+      turn: { id: turn._id, prompt: turn.prompt, independentReview: !!turn.ritualId, ritualId: turn.ritualId },
       participant: {
         id: participant._id,
         harness: participant.harness,
         model: participant.model,
         reasoning: participant.reasoning,
-        sessionId: participant.harnessSessionId,
+        sessionId: turn.ritualId ? undefined : participant.harnessSessionId,
       },
       room: { id: room._id, cwd: room.cwd, name: room.name, handbook: room.handbook },
     };
@@ -76,6 +80,8 @@ export const progress = mutation({
     requireRunnerSecret(secret);
     const turn = await ctx.db.get(turnId);
     if (!turn || turn.status !== 'running') return false;
+    const command = await ctx.db.get(commandId);
+    if (!command || command.turnId !== turnId || command.status !== 'claimed') return false;
     await ctx.db.patch(turnId, { partialText });
     await ctx.db.patch(commandId, { leaseExpiresAt: Date.now() + LEASE_MS });
     return true;
@@ -97,6 +103,8 @@ export const finish = mutation({
     requireRunnerSecret(args.secret);
     const turn = await ctx.db.get(args.turnId);
     if (!turn || !['queued', 'running'].includes(turn.status)) return;
+    const command = await ctx.db.get(args.commandId);
+    if (!command || command.turnId !== args.turnId || command.status !== 'claimed') throw new Error('Invalid turn command');
     await ctx.db.patch(args.turnId, {
       status: 'done',
       finalText: args.finalText,
@@ -106,15 +114,17 @@ export const finish = mutation({
       endedAt: Date.now(),
     });
     await ctx.db.patch(args.commandId, { status: 'done', leaseExpiresAt: undefined });
-    if (args.sessionId) await ctx.db.patch(turn.participantId, { harnessSessionId: args.sessionId });
+    if (args.sessionId && !turn.ritualId) await ctx.db.patch(turn.participantId, { harnessSessionId: args.sessionId });
 
     const messageId = await ctx.db.insert('messages', {
       roomId: turn.roomId,
       authorParticipantId: turn.participantId,
       body: args.finalText,
       turnId: args.turnId,
-      visibility: 'room',
+      ritualId: turn.ritualId,
+      visibility: turn.ritualId ? 'sealed' : 'room',
     });
+    await reviewFinished(ctx, turn);
     const participant = await ctx.db.get(turn.participantId);
     await record(ctx, {
       roomId: turn.roomId,
@@ -169,14 +179,17 @@ async function failTurn(
   transcriptRef?: string,
 ) {
   const turn = await ctx.db.get(turnId);
-  await ctx.db.patch(commandId, { status: 'failed', error, leaseExpiresAt: undefined });
   if (!turn || !['queued', 'running'].includes(turn.status)) return;
+  const command = await ctx.db.get(commandId);
+  if (!command || command.turnId !== turnId || !['pending', 'claimed'].includes(command.status)) throw new Error('Invalid turn command');
+  await ctx.db.patch(commandId, { status: 'failed', error, leaseExpiresAt: undefined });
   await ctx.db.patch(turnId, {
-    status: interrupted ? 'interrupted' : 'failed',
+    status: interrupted && !turn.ritualId ? 'interrupted' : 'failed',
     error,
     transcriptRef,
     endedAt: Date.now(),
   });
+  await reviewFinished(ctx, turn);
   await record(ctx, {
     roomId: turn.roomId,
     type: interrupted ? 'turn.interrupted' : 'turn.failed',
@@ -192,3 +205,18 @@ function providerOf(harness: string | undefined) {
   if (harness === 'codex') return 'openai';
   return harness;
 }
+
+export const prepareReview = mutation({
+  args: { secret: v.string(), ritualId: v.id('rituals'), snapshot: v.string() },
+  handler: async (ctx, { secret, ritualId, snapshot }) => {
+    requireRunnerSecret(secret);
+    const ritual = await ctx.db.get(ritualId);
+    if (!ritual || ritual.status !== 'collecting') throw new Error('Review is no longer collecting');
+    const existing = await ctx.db.query('reviewSnapshots').withIndex('by_ritual', q => q.eq('ritualId', ritualId)).unique();
+    if (existing) return existing.text;
+    if (ritual.snapshot !== undefined) return ritual.snapshot; // Early development rituals.
+    if (snapshot.length > 400_000) throw new Error('Review snapshot too large');
+    await ctx.db.insert('reviewSnapshots', { ritualId, text: snapshot });
+    return snapshot;
+  },
+});

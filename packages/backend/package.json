@@ -9,13 +9,17 @@
   },
   "scripts": {
     "dev": "convex dev",
-    "typecheck": "tsc --noEmit -p convex"
+    "typecheck": "tsc --noEmit -p convex",
+    "test": "vitest run tests"
   },
   "dependencies": {
+    "@convex-dev/workflow": "^0.4.10",
     "convex": "^1.49.0"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
-    "typescript": "~6.0.3"
+    "convex-test": "^0.0.67",
+    "typescript": "~6.0.3",
+    "vitest": "^5.1.0"
   }
 }

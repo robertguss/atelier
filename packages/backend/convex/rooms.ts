@@ -8,7 +8,7 @@ export const list = query({
   handler: async (ctx) => {
     await requireOwner(ctx);
     const rooms = await ctx.db.query('rooms').order('desc').collect();
-    return rooms.filter((r) => r.archivedAt === undefined);
+    return await Promise.all(rooms.filter(r => r.archivedAt === undefined).map(async room => ({ ...room, readyReviews: (await ctx.db.query('rituals').withIndex('by_room', q => q.eq('roomId', room._id)).collect()).filter(r => r.status !== 'collecting').length })));
   },
 });
 

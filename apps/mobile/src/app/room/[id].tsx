@@ -1,3 +1,4 @@
+import { Reviews } from '@/components/reviews';
 import { api } from '@atelier/backend/api';
 import type { Id } from '@atelier/backend/dataModel';
 import { useMutation, useQuery } from 'convex/react';
@@ -20,7 +21,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Body, Centered, Muted } from '@/components/ui';
 
 export default function Room() {
-  const { id } = useLocalSearchParams<{ id: Id<'rooms'> }>();
+  const { id, decisionId, participantId, reviewTurnId } = useLocalSearchParams<{ id: Id<'rooms'>; decisionId?: Id<'decisions'>; participantId?: Id<'participants'>; reviewTurnId?: Id<'turns'> }>();
   const data = useQuery(api.rooms.get, { roomId: id });
   const timeline = useQuery(api.messages.timeline, { roomId: id });
   // KeyboardAvoidingView needs the view's distance from the top of the
@@ -52,6 +53,7 @@ export default function Room() {
           <FlatList
             ref={listRef}
             data={timeline}
+            ListHeaderComponent={<Reviews roomId={id} participants={data.participants.filter(p => p.kind === 'harness')} />}
             keyExtractor={(item) => item.id}
             contentInsetAdjustmentBehavior="automatic"
             contentContainerStyle={styles.list}
@@ -81,7 +83,12 @@ export default function Room() {
             }}
           />
           <Composer
+            key={`${id}:${reviewTurnId ?? decisionId ?? "ordinary"}`}
             roomId={id}
+            initialParticipantId={participantId}
+            reviewTurnId={reviewTurnId}
+            decisionId={decisionId}
+            onReview={() => { stickToBottom.current = false; listRef.current?.scrollToOffset({ offset: 0, animated: true }); }}
             participants={data.participants.filter(p => p.kind === 'harness')}
             onSent={() => {
               stickToBottom.current = true;
@@ -126,10 +133,10 @@ function LiveTurn({ turnId, author, status, text, error }: { turnId: Id<'turns'>
   );
 }
 
-function Composer({ roomId, onSent, participants }: { roomId: Id<'rooms'>; onSent: () => void; participants: { _id: Id<'participants'>; displayName: string; harness?: string }[] }) {
+function Composer({ roomId, onSent, participants, decisionId, onReview, initialParticipantId, reviewTurnId }: { initialParticipantId?: Id<'participants'>; reviewTurnId?: Id<'turns'>; onReview: () => void; decisionId?: Id<'decisions'>; roomId: Id<'rooms'>; onSent: () => void; participants: { _id: Id<'participants'>; displayName: string; harness?: string }[] }) {
   const send = useMutation(api.messages.send);
   const add = useMutation(api.rooms.addParticipant);
-  const [selected, setSelected] = useState<Id<'participants'>>();
+  const [selected, setSelected] = useState<Id<'participants'> | undefined>(initialParticipantId);
   const [error, setError] = useState('');
   const target = participants.find(p => p._id === selected) ?? participants[0];
   const { colors } = useTheme();
@@ -144,7 +151,7 @@ function Composer({ roomId, onSent, participants }: { roomId: Id<'rooms'>; onSen
     setSending(true);
     try {
       onSent();
-      await send({ roomId, body, toParticipantId: target?._id });
+      await send({ roomId, body, toParticipantId: target?._id, decisionId, reviewTurnId: target?._id === initialParticipantId ? reviewTurnId : undefined });
       setText('');
       setError('');
     } catch (e) { setError(String(e)); } finally {
@@ -155,9 +162,12 @@ function Composer({ roomId, onSent, participants }: { roomId: Id<'rooms'>; onSen
   return (
     <View>
       <View style={{ flexDirection: 'row', gap: 16, padding: 12 }}>
+        <Pressable accessibilityRole="button" onPress={onReview}><Body>Review</Body></Pressable>
         {participants.map(p => <Pressable key={p._id} onPress={() => setSelected(p._id)}><Body style={{ fontWeight: target?._id === p._id ? '700' : '400' }}>{p.displayName}</Body></Pressable>)}
         {(['claude', 'codex', 'pi'] as const).filter(h => !participants.some(p => p.harness === h)).map(h => <Pressable key={h} onPress={async () => { try { setSelected(await add({ roomId, harness: h })); setError(''); } catch (e) { setError(String(e)); } }}><Muted>+ {h}</Muted></Pressable>)}
       </View>
+      {reviewTurnId && target?._id === initialParticipantId ? <Muted style={{ paddingHorizontal: 12 }}>Following up on this review</Muted> : null}
+      {decisionId ? <Muted style={{ paddingHorizontal: 12 }}>Following up on your decision</Muted> : null}
       {error ? <Body>{error}</Body> : null}
     <View style={[styles.composer, { borderTopColor: colors.border, paddingBottom: keyboardOpen ? 10 : Math.max(insets.bottom, 10) }]}>
       <TextInput

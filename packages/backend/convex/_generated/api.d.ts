@@ -10,8 +10,11 @@
 
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_ledger from "../lib/ledger.js";
+import type * as lib_review from "../lib/review.js";
 import type * as me from "../me.js";
 import type * as messages from "../messages.js";
+import type * as push from "../push.js";
+import type * as rituals from "../rituals.js";
 import type * as rooms from "../rooms.js";
 import type * as runner from "../runner.js";
 import type * as runners from "../runners.js";
@@ -25,8 +28,11 @@ import type {
 declare const fullApi: ApiFromModules<{
   "lib/auth": typeof lib_auth;
   "lib/ledger": typeof lib_ledger;
+  "lib/review": typeof lib_review;
   me: typeof me;
   messages: typeof messages;
+  push: typeof push;
+  rituals: typeof rituals;
   rooms: typeof rooms;
   runner: typeof runner;
   runners: typeof runners;
@@ -58,4 +64,6 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {};
+export declare const components: {
+  workflow: import("@convex-dev/workflow/_generated/component.js").ComponentApi<"workflow">;
+};

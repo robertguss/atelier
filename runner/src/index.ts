@@ -1,3 +1,4 @@
+import { reviewSnapshot } from './review.ts';
 // Atelier runner: registers with Convex, sends heartbeats, and runs the turns
 // Convex assigns to it (docs/v0-spec.md, "Runner ↔ Convex protocol").
 
@@ -63,7 +64,9 @@ async function handle(commandId: Id<'commands'>) {
     return;
   }
 
+  const effectiveModel = job.participant.model ?? (harness.id === 'pi' ? process.env.ATELIER_PI_MODEL : undefined);
   const abort = new AbortController();
+  const deadline = setTimeout(() => abort.abort(), 30 * 60_000);
   running.set(turnId, abort);
   let text = '';
   let finalText: string | null = null;
@@ -89,8 +92,9 @@ async function handle(commandId: Id<'commands'>) {
       {
         turnId,
         cwd: job.room.cwd,
-        prompt: job.turn.prompt,
-        model: job.participant.model ?? (harness.id === 'pi' ? process.env.ATELIER_PI_MODEL : undefined),
+        prompt: job.turn.prompt + (job.turn.ritualId ? await client.mutation(api.runner.prepareReview, { secret, ritualId: job.turn.ritualId, snapshot: await reviewSnapshot(job.room.cwd) }) : ''),
+        independentReview: job.turn.independentReview,
+        model: effectiveModel,
         reasoning: parseReasoning(job.participant.reasoning),
         resumeSessionId: sessionId,
         readOnly: true,
@@ -108,12 +112,13 @@ async function handle(commandId: Id<'commands'>) {
     error = abort.signal.aborted ? 'Interrupted' : e instanceof Error ? e.message : String(e);
   } finally {
     clearInterval(timer);
+    clearTimeout(deadline);
     running.delete(turnId);
   }
 
   if (finalText !== null && !error) {
     await client.mutation(api.runner.finish, {
-      secret, turnId, commandId, finalText: finalText || text, sessionId, usage, transcriptRef,
+      secret, turnId, commandId, finalText: finalText || text, sessionId, usage, transcriptRef, model: effectiveModel,
     });
     console.log(`turn ${turnId}: done${usage?.costUsd ? ` ($${usage.costUsd.toFixed(4)})` : ''}`);
   } else {

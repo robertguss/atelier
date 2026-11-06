@@ -81,7 +81,22 @@ export default defineSchema({
     request: v.string(),
     participantIds: v.array(v.id('participants')),
     revealedAt: v.optional(v.number()),
+    workflowId: v.optional(v.string()),
+    ownerSubject: v.optional(v.string()),
+    snapshot: v.optional(v.string()),
+    pushStatus: v.optional(v.union(v.literal('queued'), v.literal('sent'), v.literal('skipped'), v.literal('failed'))),
   }).index('by_room', ['roomId']),
+
+  reviewSnapshots: defineTable({
+    ritualId: v.id('rituals'),
+    text: v.string(),
+  }).index('by_ritual', ['ritualId']),
+
+  takeaways: defineTable({
+    ritualId: v.id('rituals'),
+    body: v.string(),
+    authorParticipantId: v.id('participants'),
+  }).index('by_ritual', ['ritualId']),
 
   cruxes: defineTable({
     ritualId: v.id('rituals'),

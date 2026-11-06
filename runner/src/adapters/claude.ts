@@ -32,7 +32,13 @@ export function claudeHarness(opts: { executable: string; onRaw: (turnId: string
         // phone message can read and search but can't edit or run commands.
         permissionMode: 'dontAsk',
         ...(req.model ? { model: req.model } : {}),
-        ...(req.resumeSessionId ? { resume: req.resumeSessionId } : {}),
+        ...(req.resumeSessionId && !req.independentReview ? { resume: req.resumeSessionId } : {}),
+        ...(req.independentReview ? {
+          tools: [], strictMcpConfig: true, mcpServers: {}, persistSession: false,
+          settings: { disableAllHooks: true },
+          hooks: { PreToolUse: [{ hooks: [async () => ({ hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision: 'deny' as const, permissionDecisionReason: 'Independent reviews cannot execute tools' } })] }] },
+          canUseTool: async () => ({ behavior: 'deny' as const, message: 'Independent reviews cannot execute tools' }),
+        } : {}),
       };
 
       let sawText = false;
