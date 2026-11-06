@@ -177,7 +177,7 @@ export function codexHarness(opts: { executable: string; onRaw: (id: string, eve
 
 // Harness and repository control files. Writing one could grant the agent
 // commands, hooks or extensions on its next turn.
-const PROTECTED_DIRS = new Set(['.git', '.codex', '.agents', '.claude', '.pi']);
+const PROTECTED = new Set(['.git', '.codex', '.agents', '.claude', '.pi', '.mcp.json']);
 
 /** Whether every path lands inside `cwd`, once symlinks resolve, and outside control files. */
 async function editAllowed(cwd: string, paths: string[]) {
@@ -189,7 +189,7 @@ async function editAllowed(cwd: string, paths: string[]) {
     const rel = relative(root, target);
     if (!rel || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) return false;
     const parts = rel.split(sep);
-    if (parts.some((part) => PROTECTED_DIRS.has(part)) || parts.at(-1) === '.mcp.json') return false;
+    if (parts.some((part) => PROTECTED.has(part))) return false;
   }
   return true;
 }

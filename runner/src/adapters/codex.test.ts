@@ -192,6 +192,8 @@ test('Codex with edits on declines commands and accepts file changes only inside
     claude: [change(join(dir, '.claude/settings.json'))],
     pi: [change(join(dir, '.pi/extensions/x.ts'))],
     mcp: [change(join(dir, '.mcp.json'))],
+    nestedGit: [change(join(dir, 'sub/.git/config'))],
+    underMcp: [change(join(dir, '.mcp.json/x'))],
     movedIntoGit: [change(join(dir, 'notes.md'), { type: 'update', move_path: join(dir, '.git/notes.md') })],
     mixed: [change(join(dir, 'ok.md')), change(join(dir, '.git/config'))],
     throughLink: [change(join(dir, 'linked/plan.md'))],
@@ -235,7 +237,7 @@ test('Codex with edits on declines commands and accepts file changes only inside
     assert.equal(decision('cmd'), 'decline');
     assert.equal(decision('inside'), 'accept');
     assert.equal(decision('relative'), 'accept');
-    for (const id of ['outside', 'parent', 'git', 'codex', 'agents', 'claude', 'pi', 'mcp', 'movedIntoGit', 'mixed', 'throughLink', 'throughDangling', 'unknown']) {
+    for (const id of ['outside', 'parent', 'git', 'codex', 'agents', 'claude', 'pi', 'mcp', 'nestedGit', 'underMcp', 'movedIntoGit', 'mixed', 'throughLink', 'throughDangling', 'unknown']) {
       assert.equal(decision(id), 'decline', id);
     }
 
