@@ -4,15 +4,22 @@
 
 import type { ReactNode } from "react";
 
-import { hasContent } from "~/lib/utils";
+import { cn, hasContent } from "~/lib/utils";
 
 export const StandalonePage = ({
+  align = "center",
   children,
 }: {
+  readonly align?: "center" | "top";
   readonly children: ReactNode;
 }) => (
   // The page owns scrolling because root cannot scroll; safe centering keeps oversized cards top-aligned.
-  <div className="bg-background text-foreground flex h-full items-center-safe justify-center overflow-y-auto px-4 py-10 sm:px-6">
+  <div
+    className={cn(
+      "bg-background text-foreground flex h-full justify-center overflow-y-auto px-4 py-10 sm:px-6",
+      align === "top" ? "items-start" : "items-center-safe"
+    )}
+  >
     <section className="dialog-glass w-full max-w-xl rounded-2xl border p-6">
       {children}
     </section>

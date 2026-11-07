@@ -119,7 +119,7 @@ const Templates = () => {
   const [editing, setEditing] = useState<Id<"templates"> | "new" | null>(null);
 
   return (
-    <StandalonePage>
+    <StandalonePage align="top">
       <StandalonePageHeader
         context={
           <Link to="/" className="hover:text-foreground">

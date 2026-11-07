@@ -406,13 +406,13 @@ export const DocumentPane = ({
       aria-label="Room document"
       className="flex h-full min-h-0 flex-col"
     >
-      <header className="flex items-center gap-2 border-b px-4 py-2.5">
+      <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b px-4 py-2.5">
         <FileTextIcon className="text-muted-foreground size-4" />
         <h2 className="text-sm font-medium">Document</h2>
-        <span className="text-muted-foreground text-xs">
+        <span className="text-muted-foreground hidden text-xs sm:inline">
           Shared with everyone in the room, agents included.
         </span>
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex flex-wrap items-center gap-1">
           <ScribeControl roomId={roomId} models={models} locked={locked} />
           <HistoryControl
             roomId={roomId}
