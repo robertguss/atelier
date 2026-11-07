@@ -60,8 +60,9 @@ export const remove = mutation({
     if (member.removedAt !== undefined) return;
     await ctx.db.patch(memberId, { removedAt: Date.now() });
     // Whatever the removed person left waiting for an agent is never delivered,
-    // including a steer the runner has not yet answered: a late rejection would
-    // otherwise put it back in the queue.
+    // including the thread deliveries of their comments' @mentions, and a
+    // steer the runner has not yet answered: a late rejection would otherwise
+    // put it back in the queue.
     const waiting = (await ctx.db.query('messages').withIndex('by_room', (q) => q.eq('roomId', member.roomId)).collect())
       .filter((m) => m.authorParticipantId === member.participantId && (m.delivery === 'queued' || m.delivery === 'steering'));
     for (const m of waiting) {

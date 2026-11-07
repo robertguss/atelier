@@ -68,6 +68,21 @@ export const version = query({
   },
 });
 
+// The document as it stood just before this change set's first revision. A
+// thread detached by a change set links here, to its original passage.
+export const versionBefore = query({
+  args: { changeSetId: v.id('changeSets') },
+  handler: async (ctx, { changeSetId }) => {
+    const { changeSet } = await loadChangeSet(ctx, changeSetId);
+    const first = await ctx.db
+      .query('blockRevisions')
+      .withIndex('by_change_set', (q) => q.eq('changeSetId', changeSetId))
+      .first();
+    const rev = (first?.rev ?? changeSet.lastRev + 1) - 1;
+    return { changeSetId, rev, blocks: await versionAt(ctx, changeSet.documentId, rev) };
+  },
+});
+
 // What one change set changed, in order.
 export const diff = query({
   args: { changeSetId: v.id('changeSets') },

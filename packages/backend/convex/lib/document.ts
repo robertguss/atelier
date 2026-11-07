@@ -5,9 +5,11 @@ import type { MutationCtx, QueryCtx } from '../_generated/server';
 import type { blockState, changeSetKind, templateSection } from '../schema';
 import { getUser } from './auth';
 import { record } from './ledger';
+import { detachThreads, reanchorThreads } from './threads';
 
 // Every write to a room document goes through this file: it keeps the block
-// row, its revision, the document rev, the change set and checkpoints in step.
+// row, its revision, the document rev, the change set, checkpoints and the
+// anchors of the block's comment threads in step.
 
 export type TemplateSection = Infer<typeof templateSection>;
 type BlockState = Infer<typeof blockState>;
@@ -128,6 +130,7 @@ export async function patchBlock(ctx: MutationCtx, changeSetId: Id<'changeSets'>
   const { rev, document } = await nextRev(ctx, changeSetId);
   await ctx.db.patch(blockId, { ...fields, rev, ...(textChanged ? { fromTemplate: undefined } : {}) });
   await recordRevision(ctx, { documentId: document._id, changeSetId, blockId, rev, op, before, after });
+  if (textChanged) await reanchorThreads(ctx, blockId, after.text, changeSetId);
 }
 
 export async function deleteBlock(ctx: MutationCtx, changeSetId: Id<'changeSets'>, blockId: Id<'blocks'>) {
@@ -135,6 +138,7 @@ export async function deleteBlock(ctx: MutationCtx, changeSetId: Id<'changeSets'
   const { rev, document } = await nextRev(ctx, changeSetId);
   await ctx.db.patch(blockId, { rev, deletedAt: Date.now() });
   await recordRevision(ctx, { documentId: document._id, changeSetId, blockId, rev, op: 'delete', before: stateOf(block) });
+  await detachThreads(ctx, blockId, changeSetId);
 }
 
 // Brings a deleted block back under its own id, as a restore does.
@@ -148,6 +152,7 @@ export async function reviveBlock(
   const { rev, document } = await nextRev(ctx, changeSetId);
   await ctx.db.patch(blockId, { ...state, ...fields, rev, deletedAt: undefined });
   await recordRevision(ctx, { documentId: document._id, changeSetId, blockId, rev, op: 'insert', after: state });
+  await reanchorThreads(ctx, blockId, state.text, changeSetId);
 }
 
 // The document as it stood at `rev`: the nearest checkpoint at or before it,

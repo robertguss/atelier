@@ -137,7 +137,9 @@ export default defineSchema({
     archivedAt: v.optional(v.number()),
     // Whether agents may edit files in the room's folder. Missing means off.
     editsEnabled: v.optional(v.boolean()),
-  }),
+  })
+    // A runner's rooms, to deliver what waited while it was offline.
+    .index('by_runner', ['runnerId']),
 
   participants: defineTable({
     roomId: v.id('rooms'),
@@ -172,10 +174,17 @@ export default defineSchema({
     // Set while a steer is in flight to a running turn.
     steering: v.optional(v.object({ turnId: v.id('turns'), commandId: v.id('commands') })),
     cancelReason: v.optional(v.string()),
+    // A thread delivery: a person's comment that @mentions this agent. It
+    // waits in the agent's queue like a message, but runs as its own turn,
+    // whose reply goes into the thread. Never shown as a chat message.
+    threadId: v.optional(v.id('threads')),
+    commentId: v.optional(v.id('comments')),
   })
     .index('by_room', ['roomId'])
     .index('by_ritual', ['ritualId'])
-    .index('by_to_delivery', ['toParticipantId', 'delivery']),
+    .index('by_to_delivery', ['toParticipantId', 'delivery'])
+    // The deliveries a comment's mentions created.
+    .index('by_comment', ['commentId']),
 
   // Humans-only chat. A separate table so nothing that reads agent messages
   // or builds prompts can reach it. Posts cannot be edited or deleted.
@@ -232,6 +241,9 @@ export default defineSchema({
     waitingOnHandId: v.optional(v.id('hands')),
     // The person who stopped the turn, so the agent's next prompt can say so.
     stoppedByParticipantId: v.optional(v.id('participants')),
+    // Set on a turn that answers an @mention in a comment thread. It runs
+    // alone, takes no steer, and its final text becomes a reply in the thread.
+    threadId: v.optional(v.id('threads')),
   })
     .index('by_room', ['roomId'])
     .index('by_ritual', ['ritualId'])
@@ -495,6 +507,8 @@ export default defineSchema({
     roomId: v.id('rooms'),
     authorParticipantId: v.id('participants'),
     body: v.string(),
+    // The model participants a person's comment @mentions; each was sent a
+    // thread delivery. Always empty on a model's comment, which summons no one.
     mentions: v.array(v.id('participants')),
     // The model turn that wrote it, for a model's comment.
     turnId: v.optional(v.id('turns')),

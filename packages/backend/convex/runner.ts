@@ -7,6 +7,7 @@ import { dispatchNext, isActiveTurnStatus, steerRejected } from './lib/dispatch'
 import { record } from './lib/ledger';
 import { reviewFinished } from './lib/review';
 import { sessionResetAfter } from './lib/sessions';
+import { postComment } from './lib/threads';
 import { setStreamedText } from './lib/turnActivity';
 import { cardQuestion, harnessId } from './schema';
 
@@ -158,17 +159,23 @@ export const finish = mutation({
     await closeOpenCards(ctx, args.turnId, 'cancelled', 'The turn ended before anyone answered');
     if (args.sessionId && !turn.ritualId) await saveSession(ctx, turn, args.sessionId);
 
-    const messageId = await ctx.db.insert('messages', {
-      roomId: turn.roomId,
-      authorParticipantId: turn.participantId,
-      body: args.finalText,
-      turnId: args.turnId,
-      ritualId: turn.ritualId,
-      visibility: turn.ritualId ? 'sealed' : 'room',
-      followUpRitualId: turn.followUp?.ritualId,
-    });
-    await reviewFinished(ctx, turn);
+    // A turn answering a thread mention replies in the thread, not the chat.
     const participant = await ctx.db.get(turn.participantId);
+    const thread = turn.threadId ? await ctx.db.get(turn.threadId) : null;
+    const posted = thread && participant
+      ? { commentId: await postComment(ctx, thread, participant, args.finalText, args.turnId) }
+      : {
+          messageId: await ctx.db.insert('messages', {
+            roomId: turn.roomId,
+            authorParticipantId: turn.participantId,
+            body: args.finalText,
+            turnId: args.turnId,
+            ritualId: turn.ritualId,
+            visibility: turn.ritualId ? 'sealed' : 'room',
+            followUpRitualId: turn.followUp?.ritualId,
+          }),
+        };
+    await reviewFinished(ctx, turn);
     await record(ctx, {
       roomId: turn.roomId,
       type: 'turn.finished',
@@ -177,7 +184,7 @@ export const finish = mutation({
       provider: providerOf(participant?.harness),
       model: args.model,
       harnessVersion: turn.harnessVersion,
-      payload: { messageId, usage: args.usage, transcriptRef: args.transcriptRef },
+      payload: { ...posted, usage: args.usage, transcriptRef: args.transcriptRef },
     });
     if (!turn.ritualId) await dispatchNext(ctx, turn.participantId);
   },

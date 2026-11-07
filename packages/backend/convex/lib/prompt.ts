@@ -29,7 +29,7 @@ export type Envelope = {
 
 // Tags that delimit agent-facing structure. A body or name that contains one
 // is escaped so nobody can forge another author's message or the room block.
-const STRUCTURE_TAG = /<(\/?)(message|room_context)\b/gi;
+const STRUCTURE_TAG = /<(\/?)(message|room_context|comment)\b/gi;
 
 function neutralize(text: string) {
   return text.replace(STRUCTURE_TAG, (_m, slash: string, name: string) => `&lt;${slash}${name}`);
@@ -116,6 +116,35 @@ export async function renderMessage(
     if (source && ritual) followUp = reviewFollowUpContext(ritual.request, source.finalText);
   }
   return followUp ? `${text}\n\n${followUp}` : text;
+}
+
+export const MENTION_NOTE =
+  'You were @mentioned in a comment thread on the room document. Your final answer in this turn is posted as your reply in that thread, not in the chat.';
+
+// A thread delivery: the commented passage and the thread up to the comment
+// that mentions the agent, each comment attributed to its author.
+export async function renderMention(ctx: QueryCtx, message: Doc<'messages'>, members?: Doc<'roomMembers'>[]) {
+  const thread = message.threadId ? await ctx.db.get(message.threadId) : null;
+  const mention = message.commentId ? await ctx.db.get(message.commentId) : null;
+  if (!thread || !mention) return MENTION_NOTE;
+  members ??= await roomMembers(ctx, message.roomId);
+  const comments = (await ctx.db.query('comments').withIndex('by_thread', (q) => q.eq('threadId', thread._id)).collect()).filter(
+    (c) => c._creationTime <= mention._creationTime,
+  );
+  const lines = [
+    MENTION_NOTE,
+    thread.detachedBeforeChangeSetId ? 'The thread is on this passage, since removed from the document:' : 'The thread is on this passage:',
+    neutralize(thread.exact),
+    'The thread so far; the last comment mentions you:',
+  ];
+  for (const c of comments) {
+    const author = await ctx.db.get(c.authorParticipantId);
+    const role = author?.kind === 'harness' ? 'agent' : roleIn(members, c.authorParticipantId);
+    lines.push(
+      `<comment from="${attr(agentName(author?.displayName))}" role="${role}" sent="${formatTime(c._creationTime)}">\n${neutralize(c.body)}\n</comment>`,
+    );
+  }
+  return lines.join('\n');
 }
 
 export function turnPrompt(p: { context: string; stoppedBy?: string; messages: string[] }) {

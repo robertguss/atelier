@@ -15,6 +15,7 @@ import type * as documents from "../documents.js";
 import type * as hands from "../hands.js";
 import type * as history from "../history.js";
 import type * as invites from "../invites.js";
+import type * as lib_anchor from "../lib/anchor.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_cards from "../lib/cards.js";
 import type * as lib_dispatch from "../lib/dispatch.js";
@@ -23,6 +24,7 @@ import type * as lib_ledger from "../lib/ledger.js";
 import type * as lib_prompt from "../lib/prompt.js";
 import type * as lib_review from "../lib/review.js";
 import type * as lib_sessions from "../lib/sessions.js";
+import type * as lib_threads from "../lib/threads.js";
 import type * as lib_turnActivity from "../lib/turnActivity.js";
 import type * as lib_visibility from "../lib/visibility.js";
 import type * as me from "../me.js";
@@ -35,6 +37,7 @@ import type * as runner from "../runner.js";
 import type * as runners from "../runners.js";
 import type * as team from "../team.js";
 import type * as templates from "../templates.js";
+import type * as threads from "../threads.js";
 import type * as users from "../users.js";
 
 import type {
@@ -51,6 +54,7 @@ declare const fullApi: ApiFromModules<{
   hands: typeof hands;
   history: typeof history;
   invites: typeof invites;
+  "lib/anchor": typeof lib_anchor;
   "lib/auth": typeof lib_auth;
   "lib/cards": typeof lib_cards;
   "lib/dispatch": typeof lib_dispatch;
@@ -59,6 +63,7 @@ declare const fullApi: ApiFromModules<{
   "lib/prompt": typeof lib_prompt;
   "lib/review": typeof lib_review;
   "lib/sessions": typeof lib_sessions;
+  "lib/threads": typeof lib_threads;
   "lib/turnActivity": typeof lib_turnActivity;
   "lib/visibility": typeof lib_visibility;
   me: typeof me;
@@ -71,6 +76,7 @@ declare const fullApi: ApiFromModules<{
   runners: typeof runners;
   team: typeof team;
   templates: typeof templates;
+  threads: typeof threads;
   users: typeof users;
 }>;
 

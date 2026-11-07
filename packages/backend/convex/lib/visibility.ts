@@ -7,7 +7,8 @@ import type { Doc } from '../_generated/dataModel';
 // The timeline shows the owner review answers; the agent pane shows them to
 // no one, so it passes `ownerSeesReviewAnswers: false`.
 export function visibleMessage(m: Doc<'messages'>, isOwner: boolean, { ownerSeesReviewAnswers }: { ownerSeesReviewAnswers: boolean }) {
-  if (m.visibility !== 'room') return false;
+  // A thread delivery is a comment, shown in its thread, never in the chat.
+  if (m.visibility !== 'room' || m.threadId) return false;
   if (m.ritualId) return isOwner && ownerSeesReviewAnswers;
   return isOwner || !m.followUpRitualId;
 }

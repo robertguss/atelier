@@ -17,6 +17,7 @@ export const steer = mutation({
     const { participant } = await requireMember(ctx, message.roomId);
     if (message.delivery !== 'queued' || !message.toParticipantId) throw new Error('This message is no longer waiting');
     if (message.followUpRitualId) throw new Error('A follow-up runs as its own turn');
+    if (message.threadId) throw new Error('A mention in a thread runs as its own turn');
     const room = await requireRunnerOnline(ctx, await ctx.db.get(message.roomId));
 
     const active = await activeOrdinaryTurn(ctx, message.toParticipantId);
@@ -138,6 +139,8 @@ export const pane = query({
           requestedByParticipantIds: t.requestedByParticipantIds ?? [],
           waitingOnHandId: t.waitingOnHandId ?? null,
           stoppedByParticipantId: t.stoppedByParticipantId ?? null,
+          // Set on a turn answering a thread mention; its reply is in that thread.
+          threadId: t.threadId ?? null,
           startedAt: t.startedAt ?? null,
           endedAt: t.endedAt ?? null,
           items: ended ? await toolItems(ctx, t._id) : [],
