@@ -149,6 +149,7 @@ const roomTools = {
 const atelierConfig = {
   "mcp_servers.atelier.bearer_token_env_var": "ATELIER_ROOM_TOKEN",
   "mcp_servers.atelier.default_tools_approval_mode": "approve",
+  "mcp_servers.atelier.tool_timeout_sec": 7500,
   "mcp_servers.atelier.url": "http://127.0.0.1:40123/mcp",
 };
 

@@ -285,6 +285,34 @@ describe(piHarness, () => {
     });
   });
 
+  it("Pi keeps a run going past 30 minutes while a tool call is pending", async () => {
+    await withFakePi(async (fake) => {
+      vi.useFakeTimers({
+        shouldAdvanceTime: true,
+        toFake: ["setTimeout", "clearTimeout"],
+      });
+      try {
+        const events = await fake.run(
+          { prompt: "steer" },
+          turnInput(),
+          async (ev, input) => {
+            if (ev.type === "tool_call") {
+              await vi.advanceTimersByTimeAsync(31 * 60_000);
+              await input.steer("answer");
+            }
+          }
+        );
+        expect(events.some((ev) => ev.type === "error")).toBeFalsy();
+        expect(events.at(-1)).toStrictEqual({
+          text: "steered by answer",
+          type: "final",
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("Pi with edits on adds edit and write plus the guard extension; with edits off its arguments are unchanged", async () => {
     await withFakePi(async (fake) => {
       await fake.run({

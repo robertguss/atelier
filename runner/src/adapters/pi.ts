@@ -191,8 +191,9 @@ export const piHarness = (opts: {
         events.end();
         void client.stop();
       };
+      // The runner's turn deadline aborts the signal. It pauses while a
+      // question card waits, which a timer of Pi's own could not.
       signal.addEventListener("abort", abort, { once: true });
-      const timeout = setTimeout(abort, 30 * 60_000);
       try {
         await client.start();
         signal.throwIfAborted();
@@ -219,7 +220,6 @@ export const piHarness = (opts: {
         }
       } finally {
         running = false;
-        clearTimeout(timeout);
         signal.removeEventListener("abort", abort);
         unsubscribe();
         await client.stop();

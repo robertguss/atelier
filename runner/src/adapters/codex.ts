@@ -201,6 +201,8 @@ const reviewConfigFor = (read: unknown): Record<string, unknown> => {
 };
 
 const ROOM_TOKEN_ENV = "ATELIER_ROOM_TOKEN";
+// Above the 2-hour question card ceiling, so the card closes first.
+const TOOL_TIMEOUT_SEC = 2 * 60 * 60 + 5 * 60;
 
 export const codexHarness = (opts: {
   executable: string;
@@ -222,6 +224,8 @@ export const codexHarness = (opts: {
       ? {
           "mcp_servers.atelier.bearer_token_env_var": ROOM_TOKEN_ENV,
           "mcp_servers.atelier.default_tools_approval_mode": "approve",
+          // A question card waits up to 2 hours; the default is 60 seconds.
+          "mcp_servers.atelier.tool_timeout_sec": TOOL_TIMEOUT_SEC,
           "mcp_servers.atelier.url": room.url,
         }
       : undefined;
