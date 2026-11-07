@@ -37,7 +37,7 @@ interface MembersSheetProps {
 interface SentInvite {
   email: string;
   url: string;
-  emailed: boolean;
+  signsUp: boolean;
 }
 
 interface MembersPanelProps {
@@ -75,7 +75,7 @@ const InviteForm = ({
     setError(null);
     try {
       const result = await create({ email: address, roomId });
-      onSent({ email: address, emailed: result.emailed, url: result.url });
+      onSent({ email: address, signsUp: result.signsUp, url: result.url });
       setEmail("");
     } catch (error_) {
       setError(errorText(error_));
@@ -117,8 +117,8 @@ const InviteForm = ({
           <p className="text-muted-foreground text-xs">
             Send {sent.email} this link. It works once, for that address, for 7
             days.
-            {sent.emailed
-              ? " They have no account yet, so they were also emailed a sign-up invitation."
+            {sent.signsUp
+              ? " They have no account yet; the link lets them create one."
               : null}
           </p>
           <div className="flex items-center gap-2">

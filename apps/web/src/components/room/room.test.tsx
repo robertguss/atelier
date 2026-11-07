@@ -960,8 +960,8 @@ describe("room screen", () => {
 
     it("lets the owner invite by email and shows the link to share", async () => {
       action("invites:create").mockResolvedValue({
-        emailed: true,
         inviteId: "i1",
+        signsUp: true,
         url: "https://atelier.example/invite/tok",
       });
       await openRoom("owner");
@@ -982,8 +982,8 @@ describe("room screen", () => {
 
     it("keeps the one-time invite link after the members sheet is closed and reopened", async () => {
       action("invites:create").mockResolvedValue({
-        emailed: false,
         inviteId: "i1",
+        signsUp: false,
         url: "https://atelier.example/invite/tok",
       });
       await openRoom("owner");
