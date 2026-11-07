@@ -274,7 +274,7 @@ const streamEvents = (
   }
   if (ev.type === "content_block_delta" && ev.delta.type === "text_delta") {
     state.sawText = true;
-    state.messages[Math.max(state.messages.length - 1, 0)] += ev.delta.text;
+    state.messages.push((state.messages.pop() ?? "") + ev.delta.text);
     events.push({ text: ev.delta.text, type: "text_delta" });
   }
   return events;

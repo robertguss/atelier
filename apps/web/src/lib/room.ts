@@ -78,6 +78,14 @@ export type TimelineItem =
  * into it and its closed cards. Open cards are pinned above the composer and
  * queued messages sit in the queue strip, so neither appears here.
  */
+const append = (
+  map: Map<string, PaneMessage[]>,
+  id: string,
+  message: PaneMessage
+) => {
+  map.set(id, [...(map.get(id) ?? []), message]);
+};
+
 export const buildTimeline = (pane: Pane): TimelineItem[] => {
   const turnIds = new Set<string>(pane.turns.map((t) => t.id));
   const replies = new Map<string, PaneMessage[]>();
@@ -85,19 +93,13 @@ export const buildTimeline = (pane: Pane): TimelineItem[] => {
   const items: TimelineItem[] = [];
   for (const message of pane.messages) {
     if (message.turnId && turnIds.has(message.turnId)) {
-      replies.set(message.turnId, [
-        ...(replies.get(message.turnId) ?? []),
-        message,
-      ]);
+      append(replies, message.turnId, message);
     } else if (
       (message.delivery === "steered" || message.delivery === "answeredCard") &&
       message.deliveredTurnId &&
       turnIds.has(message.deliveredTurnId)
     ) {
-      delivered.set(message.deliveredTurnId, [
-        ...(delivered.get(message.deliveredTurnId) ?? []),
-        message,
-      ]);
+      append(delivered, message.deliveredTurnId, message);
     } else if (!isWaiting(message)) {
       items.push({ at: message.at, key: message.id, kind: "message", message });
     }

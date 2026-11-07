@@ -537,8 +537,6 @@ export const finish = mutation({
     ) {
       throw new Error("Invalid turn command");
     }
-    // The streamed text stays on the turn, so the pane can keep showing it;
-    // narration, when sent, replaces it so the answer is not shown twice.
     if (args.narration !== undefined) {
       await setStreamedText(ctx, args.turnId, args.narration);
     }
