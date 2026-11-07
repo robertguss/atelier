@@ -15,11 +15,12 @@ import { record } from "./lib/ledger";
 import { agentName } from "./lib/prompt";
 import { resetSoloFollowUpSessions } from "./lib/sessions";
 
-// Room invites. A Convex row per room and email decides access; a Clerk
-// invitation is sent only when the email has no Clerk account yet, so the
-// person can sign up while Clerk sign-up is restricted.
+// Room invites. A Convex row per room and email decides access. When the email
+// has no Clerk account yet, the owner shares a Clerk invitation link instead,
+// so the person can sign up while Clerk sign-up is restricted.
 
-const INVITE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
+const INVITE_DAYS = 7;
+const INVITE_LIFETIME_MS = INVITE_DAYS * 24 * 60 * 60 * 1000;
 const CLERK_API = "https://api.clerk.com/v1";
 
 const hashToken = async (token: string) => {
@@ -93,16 +94,18 @@ const clerk = async (
   return json;
 };
 
-const invitationIdOf = (invitation: unknown) => {
+const invitationOf = (invitation: unknown) => {
   if (
     typeof invitation === "object" &&
     invitation !== null &&
     "id" in invitation &&
-    typeof invitation.id === "string"
+    typeof invitation.id === "string" &&
+    "url" in invitation &&
+    typeof invitation.url === "string"
   ) {
-    return invitation.id;
+    return { id: invitation.id, url: invitation.url };
   }
-  throw new Error("Clerk returned an invitation without an id");
+  throw new Error("Clerk returned an invitation without an id and link");
 };
 
 export const create = action({
@@ -113,7 +116,7 @@ export const create = action({
   ): Promise<{
     inviteId: Id<"roomInvites">;
     url: string;
-    emailed: boolean;
+    signsUp: boolean;
   }> => {
     await requireOwner(ctx);
     const webUrl = process.env.ATELIER_WEB_URL ?? "";
@@ -141,26 +144,32 @@ export const create = action({
       "GET",
       `/users?email_address=${encodeURIComponent(email)}`
     );
-    let clerkInvitationId: string | undefined;
+    let clerkInvitation: { id: string; url: string } | undefined;
     if (Array.isArray(users) && users.length === 0) {
-      const invitation = await clerk("POST", "/invitations", {
-        email_address: email,
-        ignore_existing: true,
-        notify: true,
-        redirect_url: url,
-      });
-      clerkInvitationId = invitationIdOf(invitation);
+      clerkInvitation = invitationOf(
+        await clerk("POST", "/invitations", {
+          email_address: email,
+          expires_in_days: INVITE_DAYS,
+          ignore_existing: true,
+          notify: false,
+          redirect_url: url,
+        })
+      );
     }
     const inviteId: Id<"roomInvites"> = await ctx.runMutation(
       internal.invites.insert,
       {
-        clerkInvitationId,
+        clerkInvitationId: clerkInvitation?.id,
         email,
         roomId,
         tokenHash: await hashToken(token),
       }
     );
-    return { emailed: clerkInvitationId !== undefined, inviteId, url };
+    return {
+      inviteId,
+      signsUp: clerkInvitation !== undefined,
+      url: clerkInvitation?.url ?? url,
+    };
   },
 });
 

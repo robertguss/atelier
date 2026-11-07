@@ -36,6 +36,17 @@ const rejectionOf = async (call: Promise<unknown>) => {
   return "resolved";
 };
 
+const redirectOf = (body: unknown) => {
+  assert(
+    typeof body === "object" &&
+      body !== null &&
+      "redirect_url" in body &&
+      typeof body.redirect_url === "string",
+    "the Clerk invitation names a redirect"
+  );
+  return body.redirect_url;
+};
+
 // A fake Clerk Backend API. `existing` lists emails that already have accounts.
 const mockClerk = (existing: string[] = []) => {
   const calls: { method: string; url: string; body?: unknown }[] = [];
@@ -66,7 +77,10 @@ const mockClerk = (existing: string[] = []) => {
     }
     if (method === "POST" && url === "https://api.clerk.com/v1/invitations") {
       return await Promise.resolve(
-        Response.json({ id: `inv_${calls.length}` })
+        Response.json({
+          id: `inv_${calls.length}`,
+          url: `https://clerk.example.com/accept?redirect_url=${encodeURIComponent(redirectOf(calls.at(-1)?.body))}`,
+        })
       );
     }
     if (method === "POST" && /\/v1\/invitations\/[^/]+\/revoke$/u.test(url)) {
@@ -119,7 +133,8 @@ const setup = async () => {
 };
 
 const tokenOf = (url: string) => {
-  const [, token] = url.split("/invite/");
+  const link = new URL(url).searchParams.get("redirect_url") ?? url;
+  const [, token] = link.split("/invite/");
   assert(token !== undefined, "invite url has a token");
   return token;
 };
@@ -155,7 +170,8 @@ describe("room membership", () => {
     });
     const clerkInvite = calls.find((c) => c.method === "POST");
     assert(clerkInvite, "a Clerk invitation was created");
-    const token = tokenOf(invite.url);
+    const inviteLink = redirectOf(clerkInvite.body);
+    const token = tokenOf(inviteLink);
     const storedRow = await t.run(async (ctx) => {
       const [row] = await ctx.db.query("roomInvites").collect();
       assert(row, "the invite is stored");
@@ -167,21 +183,26 @@ describe("room membership", () => {
     expect({
       before: { access: accessBefore, rooms: roomsBefore },
       clerkBody: clerkInvite.body,
-      emailed: invite.emailed,
-      storedRow,
-      urlIsInviteLink:
+      inviteLinkIsAtelier:
         /^https:\/\/atelier\.example\.com\/invite\/[\w-]{40,}$/u.test(
-          invite.url
+          inviteLink
         ),
-    }).toMatchObject({
+      signsUp: invite.signsUp,
+      storedRow,
+      url: invite.url,
+    }).toStrictEqual({
       before: { access: "none", rooms: [] },
       clerkBody: {
         email_address: "dana@example.com",
-        redirect_url: invite.url,
+        expires_in_days: 7,
+        ignore_existing: true,
+        notify: false,
+        redirect_url: inviteLink,
       },
-      emailed: true,
+      inviteLinkIsAtelier: true,
+      signsUp: true,
       storedRow: { expiresIn: 7 * DAY, leaksToken: false },
-      urlIsInviteLink: true,
+      url: `https://clerk.example.com/accept?redirect_url=${encodeURIComponent(inviteLink)}`,
     });
 
     const lookupBefore = await dana.query(api.invites.lookup, { token });
@@ -449,8 +470,8 @@ describe("room membership", () => {
       roomId: otherRoomId,
     });
     expect({
-      first: first.emailed,
-      second: second.emailed,
+      first: first.signsUp,
+      second: second.signsUp,
     }).toStrictEqual({ first: false, second: false });
     expect(calls.filter((c) => c.method === "POST")).toHaveLength(0);
     await dana.mutation(api.invites.accept, { token: tokenOf(first.url) });

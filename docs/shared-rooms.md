@@ -24,10 +24,11 @@ rooms you belong to.
 3. Copy the link it shows and send it to them yourself.
 
 An invite is for that one room and that one email address. It works once and
-lasts 7 days. If the address has no Atelier account yet, Clerk also emails
-them a sign-up invitation that leads back to the same link; sign-up is
-otherwise closed. If they already have an account, Clerk sends nothing, so the
-link you send is the only way in.
+lasts 7 days. Clerk never emails anyone: the link you send is the only way in.
+If the address has no Atelier account yet, the link is a Clerk invitation that
+lets them create the account and then brings them to the invite; sign-up is
+otherwise closed. Anyone holding that link can create the account, so send it
+privately, such as in a Slack DM.
 
 Whoever opens the link must be signed in with the invited address. Someone
 signed in with another address sees which address the invite was for, partly
