@@ -36,6 +36,8 @@ interface FakeRun {
   events: ReturnType<typeof eventQueue>;
   steers: string[];
   edits: boolean[];
+  /** Thrown by the adapter once its events run out. */
+  crash?: Error;
 }
 
 // A harness the test drives by pushing events into the running turn.
@@ -56,6 +58,7 @@ function fakeHarness() {
       });
       runs.push(run);
       yield* events;
+      if (run.crash) throw run.crash;
     },
   };
   return { harness, runs };
@@ -71,17 +74,38 @@ function runJob(turnId: string) {
   };
 }
 
+// Issues one token per turn and records what is still live.
+function fakeRoomTools() {
+  const live = new Map<string, string>();
+  const issued: { turnId: string; token: string }[] = [];
+  let next = 0;
+  return {
+    live,
+    issued,
+    async issue(turnId: string) {
+      const token = `room-token-${++next}`;
+      live.set(token, turnId);
+      issued.push({ turnId, token });
+      return { url: 'http://127.0.0.1:40123/mcp', token };
+    },
+    revoke(token: string) { live.delete(token); },
+  };
+}
+
 function setup(extraJobs: Record<string, unknown> = {}) {
   const convex = fakeConvex({ 'c-run': runJob('t1'), ...extraJobs });
   const { harness, runs } = fakeHarness();
+  const roomTools = fakeRoomTools();
+  const transcript: unknown[] = [];
   const turns = createTurns({
     client: convex.client,
     secret: 's3cret',
     harnesses: { claude: harness },
-    appendTranscript() {},
+    roomTools,
+    appendTranscript(_turnId, record) { transcript.push(record); },
     transcriptPath: (turnId) => `/tmp/${turnId}.ndjson`,
   });
-  return { ...convex, runs, turns };
+  return { ...convex, runs, turns, roomTools, transcript };
 }
 
 async function until(condition: () => unknown) {
@@ -252,4 +276,91 @@ test('the session id is saved as soon as it arrives, before the turn finishes', 
   const names = s.calls.map((c) => c.name);
   assert.deepEqual(s.named('runner:sessionStarted'), [{ secret: 's3cret', turnId: 't1', sessionId: 'sess-1' }]);
   assert.ok(names.indexOf('runner:sessionStarted') < names.indexOf('runner:finish'));
+});
+
+test('an ordinary turn gets a room tools token, and it is revoked before the turn finishes', async () => {
+  const s = setup();
+  const turn = s.turns.handle('c-run');
+  await until(() => s.runs[0]);
+  const [issued] = s.roomTools.issued;
+  assert.equal(issued!.turnId, 't1');
+  assert.deepEqual(s.runs[0]!.req.roomTools, { url: 'http://127.0.0.1:40123/mcp', token: issued!.token });
+  s.replies['runner:finish'] = () => { assert.equal(s.roomTools.live.size, 0, 'revoked before Convex hears the turn finished'); };
+  end(s.runs[0]!, { type: 'final', text: 'done' });
+  await turn;
+  assert.equal(s.named('runner:finish').length, 1);
+  assert.equal(s.roomTools.live.size, 0);
+});
+
+test('a failed turn revokes its room tools token', async () => {
+  const s = setup();
+  const turn = s.turns.handle('c-run');
+  await until(() => s.runs[0]);
+  assert.equal(s.roomTools.live.size, 1);
+  end(s.runs[0]!, { type: 'error', message: 'Model overloaded', retryable: true });
+  await turn;
+  assert.equal(s.named('runner:fail')[0].error, 'Model overloaded');
+  assert.equal(s.roomTools.live.size, 0);
+});
+
+test('a cancelled turn revokes its room tools token', async () => {
+  const s = setup({ 'c-stop': { commandId: 'c-stop', type: 'interrupt', turn: { id: 't1' }, payload: { reason: 'Stopped by Robert' } } });
+  const turn = s.turns.handle('c-run');
+  await until(() => s.runs[0]);
+  assert.equal(s.roomTools.live.size, 1);
+  await s.turns.handle('c-stop');
+  await turn;
+  assert.equal(s.named('runner:fail')[0].interrupted, true);
+  assert.equal(s.roomTools.live.size, 0);
+});
+
+test('an adapter that throws still has its room tools token revoked', async () => {
+  const s = setup();
+  const turn = s.turns.handle('c-run');
+  await until(() => s.runs[0]);
+  assert.equal(s.roomTools.live.size, 1);
+  s.runs[0]!.crash = new Error('claude exited with code 1');
+  s.runs[0]!.events.end();
+  await turn;
+  assert.equal(s.named('runner:fail')[0].error, 'claude exited with code 1');
+  assert.equal(s.roomTools.live.size, 0);
+});
+
+test('an independent review gets no room tools token', async () => {
+  const review = { ...runJob('t-review'), commandId: 'c-review', turn: { id: 't-review', prompt: 'Review', independentReview: true } };
+  const s = setup({ 'c-review': review });
+  const turn = s.turns.handle('c-review');
+  await until(() => s.runs[0]);
+  assert.equal(s.runs[0]!.req.roomTools, undefined);
+  assert.equal(s.roomTools.issued.length, 0);
+  end(s.runs[0]!, { type: 'final', text: 'Looks fine' });
+  await turn;
+});
+
+test('the room tools token never reaches Convex, the transcript or the logs', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] });
+  const logged: unknown[] = [];
+  const log = mock.method(console, 'log', (...args: unknown[]) => { logged.push(args); });
+  const error = mock.method(console, 'error', (...args: unknown[]) => { logged.push(args); });
+  try {
+    const s = setup();
+    const turn = s.turns.handle('c-run');
+    await until(() => s.runs[0]);
+    const run = s.runs[0]!;
+    run.events.push({ type: 'tool_call', id: 'call-1', name: 'mcp__atelier__add_block', summary: 'add_block paragraph' });
+    run.events.push({ type: 'tool_result', id: 'call-1', ok: true });
+    await idle();
+    mock.timers.tick(500);
+    await until(() => s.named('runner:recordTurnItems').length);
+    end(run, { type: 'final', text: 'done' });
+    await turn;
+    const { token } = s.roomTools.issued[0]!;
+    assert.ok(logged.length > 0);
+    for (const [where, value] of [['Convex', s.calls], ['the transcript', s.transcript], ['the logs', logged]] as const) {
+      assert.ok(!JSON.stringify(value).includes(token), `token found in ${where}`);
+    }
+  } finally {
+    log.mock.restore();
+    error.mock.restore();
+  }
 });

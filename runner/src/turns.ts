@@ -7,6 +7,7 @@ import type { Id } from '@atelier/backend/dataModel';
 import type { Harness, HarnessId, QuestionAnswer, QuestionCard, SteerOutcome, TurnInput } from '@atelier/shared';
 import { turnInput } from './adapters/events.ts';
 import { reviewSnapshot } from './review.ts';
+import type { RoomToolsServer } from './roomToolsServer.ts';
 
 const PROGRESS_MS = 500;
 const TURN_DEADLINE_MS = 30 * 60_000;
@@ -18,6 +19,8 @@ export interface TurnsOptions {
   client: TurnsClient;
   secret: string;
   harnesses: Partial<Record<HarnessId, Harness>>;
+  /** Issues each ordinary turn a token for the room document tools. */
+  roomTools: Pick<RoomToolsServer, 'issue' | 'revoke'>;
   appendTranscript(turnId: string, record: unknown): void;
   transcriptPath(turnId: string): string;
   /** Used when a participant has no model of its own. */
@@ -39,7 +42,7 @@ type ControlJob = Exclude<Claimed, { type: 'run_turn' }>;
 
 interface ToolItem { callId: string; seq: number; name: string; summary: string; ok?: boolean }
 
-export function createTurns({ client, secret, harnesses, appendTranscript, transcriptPath, defaultModels = {} }: TurnsOptions) {
+export function createTurns({ client, secret, harnesses, roomTools, appendTranscript, transcriptPath, defaultModels = {} }: TurnsOptions) {
   const running = new Map<string, RunningTurn>();
 
   async function handle(commandId: string) {
@@ -170,9 +173,13 @@ export function createTurns({ client, secret, harnesses, appendTranscript, trans
       await flushItems();
     };
     let timer: ReturnType<typeof setInterval> | undefined;
+    // Reviews never see the room document. The token is a secret: it goes to
+    // the adapter only, never into logs, transcripts or turn items.
+    let route: Awaited<ReturnType<typeof roomTools.issue>> | undefined;
 
     try {
       const started = await client.mutation(api.runner.start, { secret, turnId, harnessVersion: await harness.version() });
+      if (!job.turn.independentReview) route = await roomTools.issue(turnId);
       // Start polling only after start commits: a queued turn is not cancelled.
       timer = setInterval(() => flush().catch((e) => console.error('progress failed:', e)), PROGRESS_MS);
       console.log(`turn ${turnId}: ${harness.id} in ${job.room.cwd}`);
@@ -189,6 +196,7 @@ export function createTurns({ client, secret, harnesses, appendTranscript, trans
           resumeSessionId: sessionId,
           editsEnabled: !job.turn.independentReview && started?.editsEnabled === true,
           mcpServers: [],
+          ...(route ? { roomTools: route } : {}),
         },
         abort.signal,
         turn.input,
@@ -215,6 +223,7 @@ export function createTurns({ client, secret, harnesses, appendTranscript, trans
       error = abort.signal.aborted ? 'Interrupted' : e instanceof Error ? e.message : String(e);
     } finally {
       ended = true;
+      if (route) roomTools.revoke(route.token);
       clearInterval(timer);
       deadline.clear();
       for (const requestId of [...questions.keys()]) settle(requestId)?.reject(new Error('The turn ended'));

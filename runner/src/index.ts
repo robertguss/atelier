@@ -8,6 +8,7 @@ import { HARNESS_IDS, type Harness, type HarnessId } from '@atelier/shared';
 import { codexHarness } from './adapters/codex.ts';
 import { piHarness } from './adapters/pi.ts';
 import { claudeHarness } from './adapters/claude.ts';
+import { createRoomToolsServer } from './roomToolsServer.ts';
 import { appendTranscript, transcriptPath } from './transcripts.ts';
 import { createTurns } from './turns.ts';
 
@@ -31,10 +32,14 @@ const harnesses: Partial<Record<HarnessId, Harness>> = {
   }),
 };
 
+// Starts listening when the first turn needs it.
+const roomTools = createRoomToolsServer({ client, secret });
+
 const turns = createTurns({
   client,
   secret,
   harnesses,
+  roomTools,
   appendTranscript,
   transcriptPath,
   defaultModels: { pi: process.env.ATELIER_PI_MODEL },
@@ -94,6 +99,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, async () => {
     turns.abortAll();
     await new Promise((r) => setTimeout(r, 1000));
+    await roomTools.close();
     await client.close();
     process.exit(0);
   });
