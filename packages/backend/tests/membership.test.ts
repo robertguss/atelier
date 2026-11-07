@@ -470,6 +470,58 @@ describe("room membership", () => {
     });
   });
 
+  it("refuses an invite that cannot work before any Clerk call", async () => {
+    const { owner, dana, roomId } = await setup();
+    const calls = mockClerk();
+    const ownerInvite = await rejectionOf(
+      owner.action(api.invites.create, { email: "Owner@Example.com", roomId })
+    );
+    const first = await owner.action(api.invites.create, {
+      email: "dana@example.com",
+      roomId,
+    });
+    const pending = await rejectionOf(
+      owner.action(api.invites.create, {
+        email: "DANA@example.com",
+        roomId,
+      })
+    );
+    await dana.mutation(api.invites.accept, { token: tokenOf(first.url) });
+    const member = await rejectionOf(
+      owner.action(api.invites.create, { email: "dana@example.com", roomId })
+    );
+    expect(member).toContain("already in this room");
+    expect(ownerInvite).toContain("already in this room");
+    expect(pending).toContain("already has a pending invite");
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("allows a new invite once the pending one has expired", async () => {
+    const { owner, roomId } = await setup();
+    mockClerk();
+    await owner.action(api.invites.create, {
+      email: "dana@example.com",
+      roomId,
+    });
+    vi.setSystemTime(Date.now() + 8 * DAY);
+    const again = await rejectionOf(
+      owner.action(api.invites.create, { email: "dana@example.com", roomId })
+    );
+    expect(again).toBe("resolved");
+  });
+
+  it("says invites are not set up when the Clerk key is missing", async () => {
+    const { owner, roomId } = await setup();
+    const calls = mockClerk();
+    delete process.env.CLERK_SECRET_KEY;
+    const message = await rejectionOf(
+      owner.action(api.invites.create, { email: "dana@example.com", roomId })
+    );
+    expect(message).toContain("Invites aren't set up on this server yet.");
+    expect(calls).toHaveLength(0);
+  });
+
   it("removing a member ends access at once and keeps their messages", async () => {
     const { t, owner, dana, roomId } = await setup();
     mockClerk();
