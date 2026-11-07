@@ -3,15 +3,18 @@
 A shared room is an Atelier room with a second person in it. Robert invites a
 teammate to one room. Both sign in to the web app with their own accounts and
 work with the same agents (Claude Code, Codex and Pi) on Robert's runner. Either
-person can message an agent, steer it, stop it and answer its questions. The two
-people also have a team chat that the agents never see.
+person can message an agent, steer it, stop it and answer its questions. They
+also share the room document with the agents (see [the room
+document](room-document.md)), and have a team chat that the agents never see.
 
 Robert is the owner. Only he creates rooms, invites and removes people, chooses
 the room's agents, sets the edit switch and runs independent reviews. A teammate
 sees only the rooms they were invited to.
 
-Rooms are still created from the phone app. The web app opens the rooms you
-belong to.
+Robert creates rooms from the phone app, or from the web app with **New room**
+on the room list (see [creating a room on the web
+app](room-document.md#creating-a-room-on-the-web-app)). The web app opens the
+rooms you belong to.
 
 ## Inviting a teammate
 
@@ -39,7 +42,8 @@ that says:
 - team chat and agent activity in the room are recorded permanently;
 - the agents run on Robert's machine;
 - their prompts can reach anything Robert's agents can, including files outside
-  the room's folder and Robert's connected tools.
+  the room's folder and Robert's connected tools;
+- the room document is shared with the agents and kept permanently.
 
 The agents keep their full reach in shared rooms. They load Robert's skills,
 MCP servers, connectors and extensions as usual. Invite only people you would
@@ -50,17 +54,22 @@ it again. The owner does not see the notice.
 
 In **Members**, select **Remove** next to the person, then confirm. They lose
 access to the room at once. Messages they left waiting for an agent are
-cancelled and never delivered. What they already wrote stays, with their name
-on it.
+cancelled and never delivered, including @mentions in their comments that no
+model has answered yet. Any block they were editing is released. What they
+already wrote stays, with their name on it.
 
 Then rotate the runner secret (see [Operator setup](#after-removing-a-member)).
 Under full reach, a teammate's prompt can have an agent read
 `runner/.env.local`, and removing them cannot revoke a copy they already took.
 
-## The two panes
+## The room layout
 
-The room has two panes side by side. On a narrow window the team pane opens
-from **Team chat** in the header.
+The room opens on the document, with the agent pane to its left and the team
+pane to its right. Either side panel folds away with **Hide agents** or **Hide
+team chat** and shows a badge while folded: open questions or "Working" for the
+agents, unread messages for team chat. On a narrow window the document fills
+the room, and **Agents** and **Team chat** in the header open the panels. See
+[the room layout](room-document.md#the-room-layout).
 
 - **The agent pane** shows each agent's status, the messages people sent to
   agents, the agents' streamed replies and tool activity, question cards, and
@@ -149,19 +158,23 @@ it off stops a running Codex or Pi turn.
 ## Independent reviews
 
 Reviews stay owner-only in shared rooms. A teammate never sees review turns,
-answers or follow-ups. In a room that is just Robert, a follow-up to a review
-continues the agent's session. In a room with a teammate, it runs on a separate
-session kept with the review, so the agent cannot repeat the review to the
-teammate later. When the first teammate joins, agents that ran follow-ups while
-Robert was alone start a fresh session. See
+answers or follow-ups. Every follow-up to a review runs on a separate session
+kept with the review, even when Robert is alone in the room, so the agent
+cannot later repeat the review to a teammate or write it into the room
+document. Follow-ups can read the document but never change it, and reviews
+never see it at all (see [what the agents
+see](room-document.md#what-the-agents-see)). Follow-ups that ran on the agent's
+ordinary session before rooms had a document are still covered: when the first
+teammate joins, those agents start a fresh session. See
 [independent review](independent-review.md).
 
 ## When the runner is offline
 
 The runner sends a heartbeat every 15 seconds. After 45 seconds without one,
 the room shows a banner and messages to agents are refused with an error. Team
-chat still works. Messages that were waiting in a queue are cancelled as
-"runner offline" rather than held.
+chat and the document still work. Messages that were waiting in a queue are
+cancelled as "runner offline" rather than held. An @mention in a comment is the
+exception: it waits and runs when the runner is back.
 
 If the runner stops in the middle of a turn, a backend job fails the turn within
 about 6 minutes, once its 5-minute lease runs out, and closes its open cards
@@ -256,4 +269,6 @@ Sign in to the web app in two browsers, as Robert and as a second account you
 invited. Check that the teammate sees the notice, that team chat never shows in
 an agent's reply, that both of you can queue, steer and stop a turn, that a
 Claude card can be answered from either browser, and that the edit switch
-allows an edit in the folder and blocks one to `.git`.
+allows an edit in the folder and blocks one to `.git`. In the document, check
+that one browser sees "is editing" while the other edits a block, and that an
+@mention in a comment gets a reply in its thread.
