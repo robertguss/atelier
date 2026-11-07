@@ -297,6 +297,17 @@ describe("comment threads", () => {
       },
     });
 
+    await t.run(async (ctx) => {
+      await ctx.db.patch(defined(turn)._id, { status: "running" });
+    });
+    const mentionPane = await owner.query(api.agent.pane, { roomId });
+    expect(
+      mentionPane.agents.find((x) => x.participantId === pi._id)
+    ).toMatchObject({ status: "running", takesSteer: false });
+    await t.run(async (ctx) => {
+      await ctx.db.patch(defined(turn)._id, { status: "queued" });
+    });
+
     await runAndFinish(
       t,
       defined(turn)._id,

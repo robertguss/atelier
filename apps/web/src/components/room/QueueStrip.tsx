@@ -26,6 +26,9 @@ export const QueueStrip = ({
   const [errors, setErrors] = useState<Record<string, string>>({});
   // Messages this tab has seen being steered. One that is queued again was rejected.
   const seenSteering = useRef(new Set<string>());
+  const steerable = new Set(
+    pane.agents.filter((a) => a.takesSteer).map((a) => a.participantId)
+  );
   const waiting = pane.messages
     .filter(isWaiting)
     .toSorted((a, b) => a.at - b.at);
@@ -93,7 +96,10 @@ export const QueueStrip = ({
                 </p>
               )}
             </div>
-            {m.delivery === "queued" ? (
+            {m.delivery === "queued" &&
+            m.maySteer &&
+            m.toParticipantId !== null &&
+            steerable.has(m.toParticipantId) ? (
               <Button
                 size="xs"
                 variant="outline"

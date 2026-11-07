@@ -291,8 +291,10 @@ every prompt.
    running.
 3. **Run.** For `run_turn`, the runner marks the turn `running`, sends
    its streamed text (to `turnStreams`) throttled to about 2 writes a second,
-   which also renews the lease, and finishes with `finalText`, `usage`, `transcriptRef` and
-   `harnessVersion`. That mutation writes `turn.finished` to the ledger and
+   which also renews the lease, and finishes with `finalText`, `narration`, `usage`,
+   `transcriptRef` and `harnessVersion`. `narration` is the text the harness
+   streamed before its answer; when sent, it replaces the turn's streamed text so
+   the pane shows the answer once. That mutation writes `turn.finished` to the ledger and
    starts the agent's next turn if messages are waiting.
 4. **Control.** The runner hands a `steer` to the harness and reports
    `steered` or `rejected`; a rejected steer goes back to the queue. `answer`

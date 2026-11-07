@@ -65,7 +65,7 @@ const NewRoom = () => {
   };
 
   return (
-    <StandalonePage>
+    <StandalonePage align="top">
       <StandalonePageHeader
         title="New room"
         description="The room's agents work in its project folder on the runner."

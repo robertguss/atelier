@@ -69,6 +69,7 @@ const agent = (
   participantId,
   queued: 0,
   status: "idle",
+  takesSteer: false,
   ...overrides,
 });
 
@@ -80,6 +81,7 @@ const message = (overrides: Record<string, unknown>) => ({
   deliveredTurnId: null,
   delivery: "delivered",
   id: "m1",
+  maySteer: true,
   toParticipantId: CLAUDE,
   turnId: null,
   ...overrides,
@@ -377,6 +379,7 @@ describe("room screen", () => {
         agent(CLAUDE, "claude", "Claude", {
           activeTurnId: "t1",
           status: "running",
+          takesSteer: true,
         }),
       ];
       pane.turns = [turn({})];
@@ -459,6 +462,65 @@ describe("room screen", () => {
       expect(screen.getByRole("textbox", { name: "To Claude" })).toHaveValue(
         "Draft the plan. Also list the risks"
       );
+    });
+
+    it('offers only "Send" while the target agent works on a turn that takes no steer', async () => {
+      pane.agents = [
+        agent(CLAUDE, "claude", "Claude", {
+          activeTurnId: "t1",
+          status: "running",
+        }),
+      ];
+      pane.turns = [turn({})];
+      await openRoom();
+      expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Send and steer now" })
+      ).not.toBeInTheDocument();
+    });
+
+    it('offers only "Send" while the target agent waits on its question card', async () => {
+      pane.agents = [
+        agent(CLAUDE, "claude", "Claude", {
+          activeTurnId: "t1",
+          status: "waiting",
+          takesSteer: true,
+        }),
+      ];
+      pane.turns = [turn({})];
+      await openRoom();
+      expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Send and steer now" })
+      ).not.toBeInTheDocument();
+    });
+
+    it("pins the pane to the newest message after a send from mid-history", async () => {
+      pane.turns = [turn({ partialText: "History.", status: "done" })];
+      await openRoom();
+      const scroller = screen
+        .getByRole("region", { name: "Agents" })
+        .querySelector("ol")?.parentElement;
+      assert(scroller);
+      Object.defineProperty(scroller, "scrollHeight", { value: 1000 });
+      Object.defineProperty(scroller, "clientHeight", { value: 400 });
+      Object.defineProperty(scroller, "scrollTop", {
+        configurable: true,
+        value: 100,
+        writable: true,
+      });
+      fireEvent.scroll(scroller);
+
+      fireEvent.change(screen.getByRole("textbox", { name: "To Claude" }), {
+        target: { value: "One more thing" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      await waitFor(() => {
+        expect(mutation("messages:send")).toHaveBeenCalledOnce();
+      });
+      await waitFor(() => {
+        expect(scroller.scrollTop).toBe(1000);
+      });
     });
 
     it('offers only "Send" while the target agent is idle', async () => {
@@ -599,6 +661,7 @@ describe("room screen", () => {
           activeTurnId: "t1",
           queued: 1,
           status: "running",
+          takesSteer: true,
         }),
       ];
       pane.turns = [turn({})];
@@ -622,12 +685,95 @@ describe("room screen", () => {
       });
     });
 
+    it("offers Steer now only for a message that may steer, while the turn takes steers", async () => {
+      pane.agents = [
+        agent(CLAUDE, "claude", "Claude", {
+          activeTurnId: "t1",
+          queued: 2,
+          status: "running",
+          takesSteer: true,
+        }),
+      ];
+      pane.turns = [turn({})];
+      pane.messages = [
+        message({
+          at: 3000,
+          body: "Ordinary",
+          delivery: "queued",
+          id: "m-a",
+        }),
+        message({
+          at: 3100,
+          body: "Follow-up",
+          delivery: "queued",
+          id: "m-b",
+          maySteer: false,
+        }),
+      ];
+      await openRoom();
+      const queue = screen.getByRole("list", { name: "Queued messages" });
+      expect(
+        within(queue).getAllByRole("button", { name: "Steer now" })
+      ).toHaveLength(1);
+
+      pane.agents = [
+        agent(CLAUDE, "claude", "Claude", {
+          activeTurnId: "t1",
+          queued: 2,
+          status: "running",
+        }),
+      ];
+      act(() => {
+        pushBackend();
+      });
+      await waitFor(() => {
+        expect(
+          screen.queryByRole("button", { name: "Steer now" })
+        ).not.toBeInTheDocument();
+      });
+    });
+
+    it("shows a steered message inside its turn, before the answer", async () => {
+      pane.turns = [
+        turn({ partialText: "Looking at the files.", status: "done" }),
+      ];
+      pane.messages = [
+        message({
+          at: 2500,
+          body: "STEERED",
+          deliveredTurnId: "t1",
+          delivery: "steered",
+          id: "m-s",
+        }),
+        message({
+          at: 9000,
+          authorParticipantId: CLAUDE,
+          body: "Here is the plan.",
+          delivery: null,
+          id: "m-r",
+          toParticipantId: null,
+          turnId: "t1",
+        }),
+      ];
+      await openRoom();
+      const article = screen.getByRole("article", { name: "Claude's turn" });
+      const text = article.textContent ?? "";
+      expect(text).toContain("Steered into the running turn");
+      expect(text.indexOf("Looking at the files.")).toBeLessThan(
+        text.indexOf("STEERED")
+      );
+      expect(text.indexOf("STEERED")).toBeLessThan(
+        text.indexOf("Here is the plan.")
+      );
+    });
+
     it("shows a rejected steer back in the queue", async () => {
       pane.agents = [
         agent(CLAUDE, "claude", "Claude", {
           activeTurnId: "t1",
           queued: 1,
           status: "running",
+          takesSteer: true,
         }),
       ];
       pane.turns = [turn({})];

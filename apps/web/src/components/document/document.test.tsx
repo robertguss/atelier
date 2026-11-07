@@ -166,6 +166,12 @@ describe("reading the document", () => {
     expect(mutation("documents:ensure")).toHaveBeenCalledOnce();
   });
 
+  it("renders a line break inside a block", async () => {
+    patchBlock(1, { text: "one\ntwo" });
+    await openRoom();
+    expect(blockWith("one two").querySelector(".block-text")).not.toBeNull();
+  });
+
   it("shows each block's text, author and open thread count", async () => {
     await openRoom();
     expect(

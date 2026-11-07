@@ -53,7 +53,6 @@ export const AgentComposer = ({
     );
   }
 
-  const working = target.status === "running";
   const canSend = draft.trim().length > 0 && !busy && !offline;
 
   return (
@@ -111,7 +110,7 @@ export const AgentComposer = ({
             {error}
           </p>
         ) : null}
-        {working ? (
+        {target.status === "running" && target.takesSteer ? (
           <Button
             size="sm"
             variant="outline"

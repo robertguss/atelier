@@ -437,7 +437,7 @@ export const codexHarness = (opts: {
     };
     const turnEnded = (turn: Record<string, unknown>): HarnessEvent => {
       if (turn.status === "completed") {
-        return { text: final, type: "final" };
+        return { narration: "", text: final, type: "final" };
       }
       const status = typeof turn.status === "string" ? turn.status : "";
       const reason = isRecord(turn.error) ? turn.error.message : undefined;

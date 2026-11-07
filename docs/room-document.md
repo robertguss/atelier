@@ -40,8 +40,8 @@ template**.
 
 People can edit any block, whoever wrote it.
 
-- **Edit** opens a block for editing. Enter saves, Shift+Enter adds a line, and
-  clicking away also saves.
+- **Edit** opens a block for editing. Enter saves, Shift+Enter adds a line
+  break that shows in the block, and clicking away also saves.
 - **Add below** adds a block after this one. **Add to** _section name_ at the
   end of each section adds one there. Pick **Heading**, **Paragraph** or
   **List item**; the new block opens for editing and you are its author.

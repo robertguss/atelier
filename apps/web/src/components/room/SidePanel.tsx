@@ -48,7 +48,10 @@ const PanelHandle = ({
   >
     <Icon className="size-4" />
     {hasContent(badge) ? (
-      <Badge variant="info" className="[writing-mode:vertical-rl]">
+      <Badge
+        variant="info"
+        className="h-auto py-1 [writing-mode:vertical-rl] sm:h-auto"
+      >
         {badge}
       </Badge>
     ) : null}

@@ -230,6 +230,11 @@
   --contrast-accent-foreground: var(--accent-foreground);
 }
 
+.block-text p,
+.block-text li {
+  white-space: pre-line;
+}
+
 /* Chat markdown, trimmed from T3 Code's .chat-markdown rules. */
 .chat-markdown > :first-child {
   margin-top: 0;

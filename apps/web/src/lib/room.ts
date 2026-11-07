@@ -68,25 +68,38 @@ export type TimelineItem =
       at: number;
       turn: PaneTurn;
       replies: PaneMessage[];
+      delivered: PaneMessage[];
       cards: PaneCard[];
     };
 
+const append = (
+  map: Map<string, PaneMessage[]>,
+  id: string,
+  message: PaneMessage
+) => {
+  map.set(id, [...(map.get(id) ?? []), message]);
+};
+
 /**
  * The agent pane's timeline, oldest first: people's messages to agents that
- * have left the queue, and each turn with its replies and closed cards. Open
- * cards are pinned above the composer and queued messages sit in the queue
- * strip, so neither appears here.
+ * have left the queue, and each turn with its replies, the messages delivered
+ * into it and its closed cards. Open cards are pinned above the composer and
+ * queued messages sit in the queue strip, so neither appears here.
  */
 export const buildTimeline = (pane: Pane): TimelineItem[] => {
   const turnIds = new Set<string>(pane.turns.map((t) => t.id));
   const replies = new Map<string, PaneMessage[]>();
+  const delivered = new Map<string, PaneMessage[]>();
   const items: TimelineItem[] = [];
   for (const message of pane.messages) {
     if (message.turnId && turnIds.has(message.turnId)) {
-      replies.set(message.turnId, [
-        ...(replies.get(message.turnId) ?? []),
-        message,
-      ]);
+      append(replies, message.turnId, message);
+    } else if (
+      (message.delivery === "steered" || message.delivery === "answeredCard") &&
+      message.deliveredTurnId &&
+      turnIds.has(message.deliveredTurnId)
+    ) {
+      append(delivered, message.deliveredTurnId, message);
     } else if (!isWaiting(message)) {
       items.push({ at: message.at, key: message.id, kind: "message", message });
     }
@@ -98,6 +111,7 @@ export const buildTimeline = (pane: Pane): TimelineItem[] => {
     items.push({
       at: turn.at,
       cards,
+      delivered: delivered.get(turn.id) ?? [],
       key: turn.id,
       kind: "turn",
       replies: replies.get(turn.id) ?? [],
@@ -212,7 +226,15 @@ export const useStickToBottom = <
     }
   });
 
-  return { contentRef, scrollRef };
+  const jumpToEnd = () => {
+    atEnd.current = true;
+    const scroller = scrollRef.current;
+    if (scroller) {
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+  };
+
+  return { contentRef, jumpToEnd, scrollRef };
 };
 
 const readStored = (key: string): string | null => {

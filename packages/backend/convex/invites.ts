@@ -116,6 +116,16 @@ export const create = action({
     emailed: boolean;
   }> => {
     await requireOwner(ctx);
+    const webUrl = process.env.ATELIER_WEB_URL ?? "";
+    for (const [name, value] of [
+      ["CLERK_SECRET_KEY", process.env.CLERK_SECRET_KEY],
+      ["ATELIER_WEB_URL", webUrl],
+    ]) {
+      if (value === undefined || value === "") {
+        console.error(`${name} is not set`);
+        throw new Error("Invites aren't set up on this server yet.");
+      }
+    }
     const email = rawEmail.trim().toLowerCase();
     if (!/^[^@\s]+@[^@\s]+$/u.test(email)) {
       throw new Error("Enter an email address");
@@ -123,10 +133,7 @@ export const create = action({
     if (!(await ctx.runQuery(internal.invites.roomExists, { roomId }))) {
       throw new Error("Unknown room");
     }
-    const webUrl = process.env.ATELIER_WEB_URL;
-    if (webUrl === undefined || webUrl === "") {
-      throw new Error("ATELIER_WEB_URL is not set");
-    }
+    await ctx.runQuery(internal.invites.assertInvitable, { email, roomId });
 
     const token = randomToken();
     const url = `${webUrl.replace(/\/+$/u, "")}/invite/${token}`;
@@ -160,6 +167,39 @@ export const create = action({
 export const roomExists = internalQuery({
   args: { roomId: v.id("rooms") },
   handler: async (ctx, { roomId }) => (await ctx.db.get(roomId)) !== null,
+});
+
+export const assertInvitable = internalQuery({
+  args: { email: v.string(), roomId: v.id("rooms") },
+  handler: async (ctx, { email, roomId }) => {
+    const members = await ctx.db
+      .query("roomMembers")
+      .withIndex("by_room", (q) => q.eq("roomId", roomId))
+      .collect();
+    const emails = await Promise.all(
+      members
+        .filter((m) => m.removedAt === undefined)
+        .map(async (m) => {
+          const user = await ctx.db.get(m.userId);
+          return user?.email?.toLowerCase();
+        })
+    );
+    if (emails.includes(email)) {
+      throw new Error(`${email} is already in this room.`);
+    }
+    const now = Date.now();
+    const invites = await ctx.db
+      .query("roomInvites")
+      .withIndex("by_room", (q) => q.eq("roomId", roomId))
+      .collect();
+    if (
+      invites.some(
+        (i) => i.status === "pending" && i.expiresAt > now && i.email === email
+      )
+    ) {
+      throw new Error(`${email} already has a pending invite.`);
+    }
+  },
 });
 
 export const insert = internalMutation({

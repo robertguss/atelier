@@ -348,6 +348,7 @@ export const createTurns = ({
 
     let text = "";
     let finalText: string | null = null;
+    let narration: string | undefined;
     let error: string | null = null;
     let sessionId = scribe ? undefined : job.participant.sessionId;
     let savedSessionId: string | undefined;
@@ -467,6 +468,7 @@ export const createTurns = ({
         }
         case "final": {
           finalText = ev.text;
+          ({ narration } = ev);
           break;
         }
         case "error": {
@@ -487,6 +489,7 @@ export const createTurns = ({
             commandId,
             finalText: finalText === "" ? text : finalText,
             model: effectiveModel,
+            narration: finalText === "" ? "" : narration,
             secret,
             sessionId,
             transcriptRef,

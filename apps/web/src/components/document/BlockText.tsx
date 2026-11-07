@@ -24,5 +24,10 @@ export const BlockText = ({
       </h3>
     );
   }
-  return <StreamingMarkdown text={kind === "listItem" ? `- ${text}` : text} />;
+  return (
+    <StreamingMarkdown
+      className="block-text"
+      text={kind === "listItem" ? `- ${text}` : text}
+    />
+  );
 };
