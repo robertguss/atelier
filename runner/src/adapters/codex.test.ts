@@ -12,11 +12,13 @@ import { turnInput } from './events.ts';
 // - `steps`: run after `turn/start` is answered. `{send}` writes a message,
 //   `{response: id}` waits for the client's answer to a server request, and
 //   `{request: method}` waits for a client request.
-// Every line the client writes is appended to `calls.jsonl`.
+// Every line the client writes is appended to `calls.jsonl`, and its
+// arguments and room token go to `process.json`.
 const FAKE = `#!/usr/bin/env node
 import {createInterface} from 'node:readline';
-import {appendFileSync, readFileSync} from 'node:fs';
+import {appendFileSync, readFileSync, writeFileSync} from 'node:fs';
 const spec = JSON.parse(readFileSync('fake.json', 'utf8'));
+writeFileSync('process.json', JSON.stringify({argv: process.argv.slice(2), token: process.env.ATELIER_ROOM_TOKEN ?? null}));
 const defaults = {
   'thread/start': {result: {thread: {id: 'thread-1'}}},
   'thread/resume': {result: {thread: {id: 'thread-1'}}},
@@ -60,6 +62,9 @@ async function fakeCodex(spec: unknown) {
   return {
     dir,
     executable,
+    async process(): Promise<{ argv: string[]; token: string | null }> {
+      return JSON.parse(await readFile(join(dir, 'process.json'), 'utf8'));
+    },
     async calls(): Promise<any[]> {
       return (await readFile(join(dir, 'calls.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l));
     },
@@ -253,4 +258,56 @@ test('Codex with edits on declines commands and accepts file changes only inside
       { type: 'tool_result', id: 'mcp1', ok: false },
     ]);
   } finally { await rm(outside, { recursive: true, force: true }); }
+});
+
+const roomTools = { url: 'http://127.0.0.1:40123/mcp', token: 'ROOM-TOKEN-SECRET' };
+const atelierConfig = {
+  'mcp_servers.atelier.url': 'http://127.0.0.1:40123/mcp',
+  'mcp_servers.atelier.bearer_token_env_var': 'ATELIER_ROOM_TOKEN',
+  'mcp_servers.atelier.default_tools_approval_mode': 'approve',
+};
+
+test('an ordinary Codex turn adds the Atelier server on thread/start and thread/resume, with the token only in the environment', async () => {
+  await using fake = await fakeCodex({ steps: [{ send: completed }] });
+  const harness = codexHarness({ executable: fake.executable, onRaw() {} });
+  await collect(harness.runTurn(request(fake.dir, { roomTools }), new AbortController().signal, turnInput()));
+  const start = (await fake.calls()).find((c) => c.method === 'thread/start');
+  assert.deepEqual(start.params.config, atelierConfig);
+  assert.deepEqual(await fake.process(), { argv: ['app-server'], token: 'ROOM-TOKEN-SECRET' });
+
+  await writeFile(join(fake.dir, 'calls.jsonl'), '');
+  await collect(harness.runTurn(request(fake.dir, { roomTools, editsEnabled: true, resumeSessionId: 'thread-1' }), new AbortController().signal, turnInput()));
+  const resume = (await fake.calls()).find((c) => c.method === 'thread/resume');
+  assert.equal(resume.params.threadId, 'thread-1');
+  assert.deepEqual(resume.params.config, atelierConfig);
+  assert.deepEqual(await fake.process(), { argv: ['app-server'], token: 'ROOM-TOKEN-SECRET' });
+  assert.doesNotMatch(JSON.stringify(await fake.calls()), /ROOM-TOKEN-SECRET/);
+});
+
+test('a Codex review gets no Atelier server or token, even if a route is passed', async () => {
+  await using fake = await fakeCodex({ steps: [{ send: completed }] });
+  await collect(codexHarness({ executable: fake.executable, onRaw() {} })
+    .runTurn(request(fake.dir, { independentReview: true, roomTools }), new AbortController().signal, turnInput()));
+  const start = (await fake.calls()).find((c) => c.method === 'thread/start');
+  assert.deepEqual(Object.keys(start.params.config).filter((k) => k.startsWith('mcp_servers.')), []);
+  assert.equal((await fake.process()).token, null);
+  assert.doesNotMatch(JSON.stringify(await fake.calls()), /40123|ROOM-TOKEN-SECRET/);
+});
+
+test('a Codex document tool call shows up as a turn item with the tool name and no token', async () => {
+  const item = { type: 'mcpToolCall', id: 'doc-1', server: 'atelier', tool: 'add_block', arguments: { kind: 'paragraph', text: 'We chose blue.' } };
+  await using fake = await fakeCodex({
+    steps: [
+      { send: { method: 'item/started', params: { item: { ...item, status: 'inProgress' } } } },
+      { send: { method: 'item/completed', params: { item: { ...item, status: 'completed', result: { content: [{ type: 'text', text: 'Added block b1 at rev 1.' }] } } } } },
+      { send: completed },
+    ],
+  });
+  const results = await collect(codexHarness({ executable: fake.executable, onRaw() {} })
+    .runTurn(request(fake.dir, { roomTools }), new AbortController().signal, turnInput()));
+  assert.deepEqual(results.filter((e) => e.type === 'tool_call' || e.type === 'tool_result'), [
+    { type: 'tool_call', id: 'doc-1', name: 'atelier.add_block', summary: '{"kind":"paragraph","text":"We chose blue."}' },
+    { type: 'tool_result', id: 'doc-1', ok: true },
+  ]);
+  assert.doesNotMatch(JSON.stringify(results), /ROOM-TOKEN-SECRET/);
 });

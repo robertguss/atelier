@@ -30,7 +30,10 @@ export interface TurnRequest {
   editsEnabled: boolean;
   /** Sealed independent review: fresh session, supplied snapshot, no execution tools. */
   independentReview?: boolean;
-  /** Always includes the Atelier MCP server. */
+  /**
+   * Extra MCP servers for the turn. The runner sends none: the room document
+   * tools travel in `roomTools`, and each adapter attaches them its own way.
+   */
   mcpServers: McpServerSpec[];
   /**
    * The runner's loopback endpoint for the room document tools, and this

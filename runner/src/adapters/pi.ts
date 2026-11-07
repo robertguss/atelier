@@ -4,9 +4,11 @@ import { execFile, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Harness } from '@atelier/shared';
 import { eventQueue } from './events.ts';
+import { TOOL_PREFIX } from './pi-room-tools-extension.ts';
 
 const READ_TOOLS = 'read,grep,find,ls';
 const guardExtension = fileURLToPath(new URL('./pi-guard-extension.ts', import.meta.url));
+const roomToolsExtension = fileURLToPath(new URL('./pi-room-tools-extension.ts', import.meta.url));
 
 // RpcClient launches a Node CLI entry point, not Pi's standalone binary.
 export function piHarness(opts: { cliPath?: string; onRaw: (id: string, event: unknown) => void }): Harness {
@@ -33,14 +35,19 @@ export function piHarness(opts: { cliPath?: string; onRaw: (id: string, event: u
         return 'steered';
       };
       signal.throwIfAborted();
-      if (req.mcpServers.length) throw new Error('Configure Pi MCP through your own extension until per-turn MCP support exists');
+      // Reviews never get the document tools. Elsewhere the extension offers
+      // them; naming no mcp__ tool in --tools leaves the user's MCP tools as they were.
+      const room = req.independentReview ? undefined : req.roomTools;
       const args = req.independentReview ? ['--no-tools', '--no-extensions', '--no-mcp', '--no-session']
         : [
-          '--tools', req.editsEnabled ? `${READ_TOOLS},edit,write` : READ_TOOLS,
+          '--tools', [READ_TOOLS, ...(req.editsEnabled ? ['edit,write'] : []), ...(room ? [`${TOOL_PREFIX}*`] : [])].join(','),
           ...(req.editsEnabled ? ['--extension', guardExtension] : []),
+          ...(room ? ['--extension', roomToolsExtension] : []),
           ...(req.resumeSessionId ? ['--session', req.resumeSessionId] : []),
         ];
-      const client = new RpcClient({ cliPath, cwd: req.cwd, model: req.model, args });
+      // The token travels in the environment only, never in argv.
+      const env = room ? { ATELIER_ROOM_URL: room.url, ATELIER_ROOM_TOKEN: room.token } : undefined;
+      const client = new RpcClient({ cliPath, cwd: req.cwd, model: req.model, args, ...(env ? { env } : {}) });
       // RpcClient has no call for answering extension dialogs; write to Pi's stdin directly.
       const answerUi = (id: string) => {
         const child = (client as unknown as { process: ChildProcess | null }).process;

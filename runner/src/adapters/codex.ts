@@ -6,6 +6,8 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import type { Harness } from '@atelier/shared';
 import { eventQueue } from './events.ts';
 
+const ROOM_TOKEN_ENV = 'ATELIER_ROOM_TOKEN';
+
 export function codexHarness(opts: { executable: string; onRaw: (id: string, event: unknown) => void }): Harness {
   return {
     id: 'codex',
@@ -14,7 +16,15 @@ export function codexHarness(opts: { executable: string; onRaw: (id: string, eve
     async version() { return (await promisify(execFile)(opts.executable, ['--version'])).stdout.trim(); },
     async *runTurn(req, signal, input) {
       signal.throwIfAborted();
-      if (req.mcpServers.length) throw new Error('Per-turn MCP injection is not implemented');
+      // Reviews never get the document tools. Elsewhere Codex reaches them as
+      // the `atelier` MCP server, pre-approved so no call waits on an answer.
+      // The token goes in the app-server's environment, never in argv.
+      const room = req.independentReview ? undefined : req.roomTools;
+      const roomConfig = room ? {
+        'mcp_servers.atelier.url': room.url,
+        'mcp_servers.atelier.bearer_token_env_var': ROOM_TOKEN_ENV,
+        'mcp_servers.atelier.default_tools_approval_mode': 'approve',
+      } : undefined;
 
       let threadId: string | undefined;
       let turnId: string | undefined;
@@ -36,7 +46,10 @@ export function codexHarness(opts: { executable: string; onRaw: (id: string, eve
       // the turn; switching them on applies from the next turn.
       input.setEditsEnabled = () => {};
 
-      const child = spawn(opts.executable, ['app-server'], { cwd: req.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawn(opts.executable, ['app-server'], {
+        cwd: req.cwd, stdio: ['pipe', 'pipe', 'pipe'],
+        ...(room ? { env: { ...process.env, [ROOM_TOKEN_ENV]: room.token } } : {}),
+      });
       const events = eventQueue();
       let sequence = 0;
       const privateResponses = new Set<number>();
@@ -154,7 +167,7 @@ export function codexHarness(opts: { executable: string; onRaw: (id: string, eve
         const resume = req.independentReview ? undefined : req.resumeSessionId;
         const { thread } = await call(resume ? 'thread/resume' : 'thread/start', {
           ...(resume ? { threadId: resume } : {}),
-          ...(req.independentReview ? { config: reviewConfig, ephemeral: true } : {}),
+          ...(req.independentReview ? { config: reviewConfig, ephemeral: true } : roomConfig ? { config: roomConfig } : {}),
           cwd: req.cwd, model: req.model, approvalPolicy, sandbox: req.editsEnabled ? 'workspace-write' : 'read-only',
         });
         threadId = thread.id;

@@ -51,6 +51,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 }).on('close', () => { eof = true; log({ eof: true }); exit(); });
 `;
 
+const roomTools = { url: 'http://127.0.0.1:40123/mcp', token: 'ROOM-TOKEN-SECRET' };
+
 const init = { emit: { type: 'system', subtype: 'init', uuid: 'i1' } };
 const result = (text: string) => ({ emit: { type: 'result', subtype: 'success', is_error: false, result: text, usage: { input_tokens: 1, output_tokens: 1 }, total_cost_usd: 0.01, uuid: `r-${text}` } });
 const toolUse = (id: string, name: string, input: unknown) => ({ emit: { type: 'assistant', parent_tool_use_id: null, uuid: `a-${id}`, message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input }] } } });
@@ -59,6 +61,7 @@ const permission = (id: string, tool_name: string, input: unknown) => ({ permiss
 interface Options {
   editsEnabled?: boolean;
   independentReview?: boolean;
+  roomTools?: { url: string; token: string };
   cancelled?: boolean;
   onQuestion?: (card: QuestionCard) => Promise<QuestionAnswer>;
   onEvent?: (ev: HarnessEvent, input: TurnInput, cwd: string) => void;
@@ -80,6 +83,7 @@ async function runFake(steps: unknown[], opts: Options = {}) {
     const turn = harness.runTurn({
       turnId: 'test', cwd, prompt: 'Plan the launch', editsEnabled: opts.editsEnabled ?? false,
       independentReview: opts.independentReview, mcpServers: [],
+      ...(opts.roomTools ? { roomTools: opts.roomTools } : {}),
     }, new AbortController().signal, input);
     for await (const ev of turn) { events.push(ev); opts.onEvent?.(ev, input, cwd); }
     const calls = (await readFile(join(cwd, 'calls.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l));
@@ -273,10 +277,11 @@ test('a late steer the CLI could not withdraw runs on in the same turn and count
   assert.deepEqual(events.filter((e) => e.type === 'final').at(-1), { type: 'final', text: 'first\n\nsecond' });
 });
 
-test('independent review options are unchanged', async () => {
+test('independent review options are unchanged, with no Atelier server even if a route is passed', async () => {
   let steered: SteerOutcome | undefined;
   const { calls } = await runFake([init, result('review')], {
     independentReview: true,
+    roomTools,
     onEvent(ev, input) { if (ev.type === 'session') void input.steer('x').then((o) => { steered = o; }); },
   });
   assert.deepEqual(calls[0].argv, [
@@ -289,4 +294,49 @@ test('independent review options are unchanged', async () => {
   assert.deepEqual(initialize, { type: 'control_request', request: { subtype: 'initialize', hooks: { PreToolUse: [{ hookCallbackIds: ['hook_0'] }] }, systemPrompt: [''] } });
   assert.deepEqual(calls[2], { type: 'user', session_id: '', message: { role: 'user', content: [{ type: 'text', text: 'Plan the launch' }] }, parent_tool_use_id: null });
   assert.equal(steered, 'rejected');
+});
+
+test('an ordinary Claude turn gets the in-process Atelier server, with no route or token in its arguments', async () => {
+  const { calls } = await runFake([init, result('ok')], { roomTools });
+  // In-process servers are declared in initialize, not passed as --mcp-config,
+  // and without --strict-mcp-config the user's own MCP servers still load.
+  assert.deepEqual(calls[0].argv, [
+    '--output-format', 'stream-json', '--verbose', '--input-format', 'stream-json',
+    '--permission-prompt-tool=stdio', '--allowedTools=Skill',
+    '--setting-sources=user,project,local', '--permission-mode=default', '--include-partial-messages',
+  ]);
+  const initialize = calls.find((c) => c.type === 'control_request' && c.request.subtype === 'initialize');
+  assert.deepEqual(initialize.request.sdkMcpServers, ['atelier']);
+  assert.deepEqual(initialize.request.sdkMcpServerManifests.atelier.toolsListResult.tools.map((t: { name: string }) => t.name), [
+    'read_document', 'read_thread', 'add_block', 'update_block', 'delete_block', 'comment',
+  ]);
+  assert.doesNotMatch(JSON.stringify(calls), /ROOM-TOKEN-SECRET|40123/);
+});
+
+test('canUseTool allows the Atelier document tools and still denies other unapproved tools', async () => {
+  const { decision } = await runFake([
+    init,
+    permission('doc', 'mcp__atelier__add_block', { kind: 'paragraph', text: 'We chose blue.' }),
+    permission('other', 'mcp__elsewhere__post', { a: 1 }),
+    permission('lookalike', 'mcp__atelier_evil__post', { a: 1 }),
+    permission('bash', 'Bash', { command: 'rm -rf build' }),
+    result('ok'),
+  ], { roomTools });
+  assert.equal(decision('doc').behavior, 'allow');
+  assert.deepEqual(decision('doc').updatedInput, { kind: 'paragraph', text: 'We chose blue.' });
+  for (const id of ['other', 'lookalike', 'bash']) assert.equal(decision(id).behavior, 'deny', id);
+});
+
+test('a Claude document tool call shows up as a turn item with the tool name and no token', async () => {
+  const { events } = await runFake([
+    init,
+    toolUse('doc-1', 'mcp__atelier__add_block', { kind: 'paragraph', text: 'We chose blue.' }),
+    { emit: { type: 'user', parent_tool_use_id: null, uuid: 'u1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'doc-1', content: 'Added block b1 at rev 1.' }] } } },
+    result('ok'),
+  ], { roomTools });
+  assert.deepEqual(events.filter((e) => e.type === 'tool_call' || e.type === 'tool_result'), [
+    { type: 'tool_call', id: 'doc-1', name: 'mcp__atelier__add_block', summary: '' },
+    { type: 'tool_result', id: 'doc-1', ok: true },
+  ]);
+  assert.doesNotMatch(JSON.stringify(events), /ROOM-TOKEN-SECRET/);
 });

@@ -6,9 +6,13 @@ import { promisify } from 'node:util';
 import { query, type CanUseTool, type Options, type PermissionResult, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { Harness, HarnessEvent, QuestionAnswer, QuestionCard, SteerOutcome } from '@atelier/shared';
 import { eventQueue } from './events.ts';
+import { claudeRoomToolsServer } from '../roomTools.ts';
+import { loopbackCaller } from '../roomToolsServer.ts';
 
 const run = promisify(execFile);
 
+// The in-process document tools server is named `atelier`.
+const ROOM_TOOL_PREFIX = 'mcp__atelier__';
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
 // Harness and repository control files. Writing one could add an allow rule,
 // hook or extension that runs commands on a later turn.
@@ -53,8 +57,13 @@ export function claudeHarness(opts: { executable: string; onRaw: (turnId: string
       const abortController = new AbortController();
       signal.addEventListener('abort', () => abortController.abort(), { once: true });
 
+      // Reviews never get the document tools. Elsewhere they run in-process,
+      // so the route and token never reach the CLI's arguments.
+      const room = req.independentReview ? undefined : req.roomTools;
+
       const canUseTool: CanUseTool = async (toolName, toolInput, { toolUseID }) => {
         if (toolName === 'AskUserQuestion') return await askRoom(toolInput, toolUseID, input.onQuestion);
+        if (room && toolName.startsWith(ROOM_TOOL_PREFIX)) return { behavior: 'allow', updatedInput: toolInput };
         if (EDIT_TOOLS.has(toolName)) {
           if (!editsEnabled) return deny('File edits are off in this room. Ask the room owner to turn on "agents may edit files in this folder".');
           const target = toolInput.file_path ?? toolInput.notebook_path;
@@ -91,6 +100,7 @@ export function claudeHarness(opts: { executable: string; onRaw: (turnId: string
         // acceptEdits, which would also approve rm, mv and sed in the folder.
         permissionMode: 'default',
         canUseTool,
+        ...(room ? { mcpServers: { atelier: claudeRoomToolsServer(loopbackCaller(room)) } } : {}),
         ...(req.model ? { model: req.model } : {}),
         ...(req.resumeSessionId ? { resume: req.resumeSessionId } : {}),
       };
