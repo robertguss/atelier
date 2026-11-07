@@ -730,6 +730,7 @@ describe("the agent message queue", () => {
       messageId,
       outcome: "steered",
       secret: SECRET,
+      streamOffset: 12,
     });
     const [handledSteer, steered, ledger] = await Promise.all([
       getDoc(t, steer._id),
@@ -744,7 +745,11 @@ describe("the agent message queue", () => {
       steerStatus: handledSteer.status,
     }).toMatchObject({
       ledgerHasSteered: true,
-      message: { deliveredTurnId: first, delivery: "steered" },
+      message: {
+        deliveredTurnId: first,
+        delivery: "steered",
+        streamOffset: 12,
+      },
       steerStatus: "done",
     });
 

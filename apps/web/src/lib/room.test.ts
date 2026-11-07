@@ -37,6 +37,7 @@ const message = (
   delivery: "delivered",
   id,
   maySteer: true,
+  streamOffset: null,
   toParticipantId: "p-claude",
   turnId: null,
   ...overrides,
