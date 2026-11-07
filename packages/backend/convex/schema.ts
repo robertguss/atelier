@@ -46,6 +46,40 @@ export const cardAnswer = v.object({
   freeText: v.optional(v.string()),
 });
 
+// The room document. A block is one heading, paragraph or list item.
+export const blockKind = v.union(v.literal('heading'), v.literal('paragraph'), v.literal('listItem'));
+
+// Who a block is attributed to: the participant who wrote it, or the scribe,
+// with the participant that acted as scribe and the authors it drew from.
+export const blockAuthor = v.union(
+  v.object({ kind: v.literal('participant'), participantId: v.id('participants') }),
+  v.object({
+    kind: v.literal('scribe'),
+    participantId: v.id('participants'),
+    credits: v.array(v.id('participants')),
+  }),
+);
+
+// One version in the history: a model turn's writes, a person's edit session
+// on a block, a scribe run, a restore, or the template seeding.
+export const changeSetKind = v.union(
+  v.literal('template_seed'),
+  v.literal('model_turn'),
+  v.literal('human_edit'),
+  v.literal('scribe_run'),
+  v.literal('restore'),
+);
+
+// A block as history and checkpoints record it.
+export const blockState = v.object({
+  order: v.string(),
+  kind: blockKind,
+  text: v.string(),
+  author: blockAuthor,
+});
+
+export const templateSection = v.object({ heading: v.string(), guidance: v.optional(v.string()) });
+
 export default defineSchema({
   runners: defineTable({
     name: v.string(),
@@ -328,6 +362,184 @@ export default defineSchema({
   })
     .index('by_room', ['roomId'])
     .index('by_room_type', ['roomId', 'type', 'subjectId']),
+
+  // One shared document per room. `rev` counts every block revision ever
+  // written to it. The scribe lock is set while a scribe run owns the document.
+  documents: defineTable({
+    roomId: v.id('rooms'),
+    rev: v.number(),
+    // Revisions since the last checkpoint; a checkpoint is taken every 200.
+    revisionsSinceCheckpoint: v.number(),
+    seededAt: v.number(),
+    // The template it was seeded from. Missing means Atelier's default.
+    templateId: v.optional(v.id('templates')),
+    scribeRunId: v.optional(v.id('scribeRuns')),
+    scribeLockExpiresAt: v.optional(v.number()),
+  })
+    // Each room has one document, found from the room.
+    .index('by_room', ['roomId']),
+
+  // One row per block, so an edit rewrites one small row and never a shared
+  // array. Deleted blocks keep their row, with `deletedAt` set.
+  blocks: defineTable({
+    documentId: v.id('documents'),
+    roomId: v.id('rooms'),
+    // A fractional-indexing key: blocks sort by it, and an insert between two
+    // blocks gets a key between theirs without renumbering the rest.
+    order: v.string(),
+    kind: blockKind,
+    text: v.string(),
+    author: blockAuthor,
+    // The document rev of the block's latest revision. Writers send it back
+    // to detect that someone else changed the block in between.
+    rev: v.number(),
+    // Set when a human edits a block attributed to someone else.
+    humanEditedAt: v.optional(v.number()),
+    // A person's edit lease, and the change set their edits go into.
+    leaseHolderParticipantId: v.optional(v.id('participants')),
+    leaseExpiresAt: v.optional(v.number()),
+    leaseChangeSetId: v.optional(v.id('changeSets')),
+    deletedAt: v.optional(v.number()),
+    // Guidance text a template seeded, cleared once the text is changed, so
+    // saving a room as a template copies guidance and never room content.
+    fromTemplate: v.optional(v.boolean()),
+    // For a block the scribe wrote: the blocks it was drawn from.
+    sourceBlockIds: v.optional(v.array(v.id('blocks'))),
+  })
+    // Reading the document in order.
+    .index('by_document_order', ['documentId', 'order']),
+
+  changeSets: defineTable({
+    documentId: v.id('documents'),
+    roomId: v.id('rooms'),
+    kind: changeSetKind,
+    actorParticipantId: v.optional(v.id('participants')),
+    turnId: v.optional(v.id('turns')),
+    scribeRunId: v.optional(v.id('scribeRuns')),
+    at: v.number(),
+    // The document rev of its latest revision, and how many it holds.
+    lastRev: v.number(),
+    revisionCount: v.number(),
+  })
+    // History, newest first.
+    .index('by_document', ['documentId'])
+    // A model turn's writes all join that turn's one change set.
+    .index('by_turn', ['turnId'])
+    // A scribe run commits as one change set.
+    .index('by_scribe_run', ['scribeRunId']),
+
+  // Append-only. Text lives here, never in the ledger.
+  blockRevisions: defineTable({
+    documentId: v.id('documents'),
+    changeSetId: v.id('changeSets'),
+    blockId: v.id('blocks'),
+    // The document rev this revision produced.
+    rev: v.number(),
+    op: v.union(v.literal('insert'), v.literal('update'), v.literal('move'), v.literal('delete')),
+    before: v.optional(blockState),
+    after: v.optional(blockState),
+  })
+    // Replaying revisions after a checkpoint, in order.
+    .index('by_document_rev', ['documentId', 'rev'])
+    // What one change set changed.
+    .index('by_change_set', ['changeSetId'])
+    // One block's history.
+    .index('by_block', ['blockId']),
+
+  // A full copy of the live blocks at one rev. The blocks are separate rows,
+  // so no row grows with the document.
+  documentCheckpoints: defineTable({
+    documentId: v.id('documents'),
+    rev: v.number(),
+    reason: v.union(
+      v.literal('interval'),
+      v.literal('before_scribe'),
+      v.literal('after_scribe'),
+      v.literal('before_restore'),
+    ),
+    blockCount: v.number(),
+  })
+    // Finding the nearest checkpoint at or before a rev.
+    .index('by_document_rev', ['documentId', 'rev']),
+
+  checkpointBlocks: defineTable({
+    checkpointId: v.id('documentCheckpoints'),
+    blockId: v.id('blocks'),
+    ...blockState.fields,
+  })
+    // Loading one checkpoint's blocks.
+    .index('by_checkpoint', ['checkpointId']),
+
+  // A comment thread on a passage of a block. The anchor is a text-quote
+  // selector (the passage, with text before and after) plus its character
+  // position in the block's plain text.
+  threads: defineTable({
+    documentId: v.id('documents'),
+    roomId: v.id('rooms'),
+    blockId: v.id('blocks'),
+    exact: v.string(),
+    prefix: v.string(),
+    suffix: v.string(),
+    position: v.number(),
+    state: v.union(v.literal('open'), v.literal('settled')),
+    // Set when the passage was removed: the change set that removed it.
+    detachedBeforeChangeSetId: v.optional(v.id('changeSets')),
+  })
+    // Open threads in a document, and settled ones for the Settled section.
+    .index('by_document_state', ['documentId', 'state'])
+    // Threads on one block, to re-anchor when its text changes.
+    .index('by_block', ['blockId']),
+
+  comments: defineTable({
+    threadId: v.id('threads'),
+    roomId: v.id('rooms'),
+    authorParticipantId: v.id('participants'),
+    body: v.string(),
+    mentions: v.array(v.id('participants')),
+    // The model turn that wrote it, for a model's comment.
+    turnId: v.optional(v.id('turns')),
+  })
+    // A thread's comments in order.
+    .index('by_thread', ['threadId']),
+
+  // Robert's templates: an ordered list of headings, each with optional
+  // guidance text. Atelier's default is a code constant, not a row.
+  templates: defineTable({
+    ownerUserId: v.id('users'),
+    name: v.string(),
+    sections: v.array(templateSection),
+  })
+    // Listing the owner's templates.
+    .index('by_owner', ['ownerUserId']),
+
+  // A scribe run: the participant acting as scribe and how the run ended.
+  scribeRuns: defineTable({
+    documentId: v.id('documents'),
+    roomId: v.id('rooms'),
+    participantId: v.id('participants'),
+    startedByParticipantId: v.id('participants'),
+    turnId: v.optional(v.id('turns')),
+    status: v.union(v.literal('running'), v.literal('committed'), v.literal('released')),
+    startedAt: v.number(),
+    endedAt: v.optional(v.number()),
+  })
+    // A document's runs.
+    .index('by_document', ['documentId']),
+
+  // One row per operation in a scribe run's draft, so a large draft never
+  // forms one oversized row. Applied in `seq` order when the run commits.
+  scribeDraftOps: defineTable({
+    scribeRunId: v.id('scribeRuns'),
+    seq: v.number(),
+    op: v.union(v.literal('keep'), v.literal('replace'), v.literal('add'), v.literal('remove'), v.literal('move')),
+    blockId: v.optional(v.id('blocks')),
+    afterBlockId: v.optional(v.id('blocks')),
+    kind: v.optional(blockKind),
+    text: v.optional(v.string()),
+    sourceBlockIds: v.optional(v.array(v.id('blocks'))),
+  })
+    // A run's draft, in order.
+    .index('by_run_seq', ['scribeRunId', 'seq']),
 
   pushTokens: defineTable({
     userSubject: v.string(),

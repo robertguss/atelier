@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "@convex-dev/workflow": "^0.4.10",
-    "convex": "^1.49.0"
+    "convex": "^1.49.0",
+    "fractional-indexing": "4.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

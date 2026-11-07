@@ -1,6 +1,7 @@
 import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 import { ensureUser, getMembership, getOwner, getUser, requireMember, requireOwner } from './lib/auth';
+import { DEFAULT_TEMPLATE, ownTemplate, seedDocument } from './lib/document';
 import { record } from './lib/ledger';
 import { agentName } from './lib/prompt';
 
@@ -59,14 +60,16 @@ export const get = query({
 });
 
 // Step 2: a room starts with the owner and a Claude Code participant.
-// Codex and Pi join in step 3.
+// Codex and Pi join in step 3. Its document is seeded from the chosen
+// template, or Atelier's default when none is chosen.
 export const create = mutation({
-  args: { name: v.string(), runnerId: v.id('runners'), cwd: v.string() },
-  handler: async (ctx, { name, runnerId, cwd }) => {
+  args: { name: v.string(), runnerId: v.id('runners'), cwd: v.string(), templateId: v.optional(v.id('templates')) },
+  handler: async (ctx, { name, runnerId, cwd, templateId }) => {
     const owner = await requireOwner(ctx);
     const user = await ensureUser(ctx);
     const runner = await ctx.db.get(runnerId);
     if (!runner) throw new Error('Unknown runner');
+    const template = templateId ? await ownTemplate(ctx, templateId) : null;
 
     const roomId = await ctx.db.insert('rooms', { name: name.trim(), runnerId, cwd: cwd.trim(), handbook: '' });
     const created = await record(ctx, { roomId, type: 'room.created', subjectId: roomId, payload: { name, cwd, runner: runner.name } });
@@ -95,6 +98,7 @@ export const create = mutation({
       payload: { kind: 'harness', harness: 'claude' },
     });
 
+    await seedDocument(ctx, roomId, template?.sections ?? DEFAULT_TEMPLATE, template?._id);
     return roomId;
   },
 });
