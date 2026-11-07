@@ -1,20 +1,23 @@
-// The loopback MCP endpoint that serves the room document tools to harnesses
-// running on this machine. It speaks the JSON-response form of streamable
+// The loopback MCP endpoint that serves the room tools to harnesses running
+// on this machine. It speaks the JSON-response form of streamable
 // HTTP: one JSON-RPC message per POST, a JSON reply, 202 for notifications.
 //
 // It binds 127.0.0.1 on an OS-assigned port outside 3000-9999, which exe.dev
 // forwards to anyone with access to the VM. Every request needs the bearer
 // token issued to one running turn. The turn comes from the token, never from
 // the request, and the token stops working when the turn ends. Tokens are
-// never logged.
+// never logged. A tool call whose caller hangs up, or cancels it with
+// notifications/cancelled, has its abort signal fired, so raise_hand can
+// withdraw a card nobody is waiting on.
 
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 
-import { callRoomTool, documentTools, listTools } from "./room-tools.ts";
+import { callRoomTool, listTools, ordinaryTools } from "./room-tools.ts";
 import type {
+  AskRoom,
   RoomToolResult,
   RoomToolSet,
   RoomToolsClient,
@@ -26,9 +29,15 @@ export interface RoomToolsRoute {
   token: string;
 }
 
+/** A turn's tools (the ordinary set if left out) and its question channel. */
+interface IssueOptions {
+  tools?: RoomToolSet;
+  ask?: AskRoom;
+}
+
 export interface RoomToolsServer {
   /** Starts listening on first use, then issues a token that acts as `turnId`. */
-  issue: (turnId: string, tools?: RoomToolSet) => Promise<RoomToolsRoute>;
+  issue: (turnId: string, options?: IssueOptions) => Promise<RoomToolsRoute>;
   revoke: (token: string) => void;
   /** The bound address, once listening. */
   address: () => { address: string; port: number } | null;
@@ -79,10 +88,23 @@ const closeServer = async (server: Server) => {
 
 const unavailable: RoomToolResult = {
   content: [
-    { text: "The document tools no longer work for this turn.", type: "text" },
+    { text: "The room tools no longer work for this turn.", type: "text" },
   ],
   isError: true,
 };
+
+type RequestId = string | number;
+
+interface Entry {
+  turnId: string;
+  tools: RoomToolSet;
+  ask?: AskRoom;
+  /** Tool calls still running, by request id, so a cancellation can find them. */
+  calls: Map<RequestId, AbortController>;
+}
+
+const isRequestId = (value: unknown): value is RequestId =>
+  typeof value === "string" || typeof value === "number";
 
 export const createRoomToolsServer = ({
   client,
@@ -91,15 +113,16 @@ export const createRoomToolsServer = ({
   client: RoomToolsClient;
   secret: string;
 }): RoomToolsServer => {
-  const live = new Map<string, { turnId: string; tools: RoomToolSet }>();
+  const live = new Map<string, Entry>();
   let server: Server | undefined;
   let listening: Promise<string> | undefined;
 
   const answer = async (
-    entry: { turnId: string; tools: RoomToolSet },
-    id: string | number | null,
+    entry: Entry,
+    id: RequestId | null,
     method: string,
-    params: Record<string, unknown>
+    params: Record<string, unknown>,
+    hungUp: AbortSignal
   ): Promise<Reply> => {
     switch (method) {
       case "initialize": {
@@ -121,16 +144,32 @@ export const createRoomToolsServer = ({
         return reply(id, { result: { tools: listTools(entry.tools) } });
       }
       case "tools/call": {
-        return reply(id, {
-          result: await callRoomTool(
-            client,
-            secret,
-            entry.turnId,
-            typeof params.name === "string" ? params.name : "(none given)",
-            params.arguments,
-            entry.tools
-          ),
-        });
+        const call = new AbortController();
+        const stop = () => {
+          call.abort();
+        };
+        hungUp.addEventListener("abort", stop, { once: true });
+        if (id !== null) {
+          entry.calls.set(id, call);
+        }
+        try {
+          return reply(id, {
+            result: await callRoomTool(
+              client,
+              secret,
+              entry.turnId,
+              typeof params.name === "string" ? params.name : "(none given)",
+              params.arguments,
+              entry.tools,
+              { ask: entry.ask, signal: call.signal }
+            ),
+          });
+        } finally {
+          hungUp.removeEventListener("abort", stop);
+          if (id !== null && entry.calls.get(id) === call) {
+            entry.calls.delete(id);
+          }
+        }
       }
       default: {
         return reply(id, {
@@ -143,7 +182,10 @@ export const createRoomToolsServer = ({
     }
   };
 
-  const handle = async (req: IncomingMessage): Promise<Reply> => {
+  const handle = async (
+    req: IncomingMessage,
+    hungUp: AbortSignal
+  ): Promise<Reply> => {
     const token = /^Bearer (?<token>\S+)$/u.exec(
       req.headers.authorization ?? ""
     )?.groups?.token;
@@ -173,6 +215,13 @@ export const createRoomToolsServer = ({
     }
     const { id } = msg;
     if (id === undefined) {
+      const params = isRecord(msg.params) ? msg.params : {};
+      if (
+        msg.method === "notifications/cancelled" &&
+        isRequestId(params.requestId)
+      ) {
+        entry.calls.get(params.requestId)?.abort();
+      }
       return { status: 202 };
     }
     if (id !== null && typeof id !== "string" && typeof id !== "number") {
@@ -184,13 +233,20 @@ export const createRoomToolsServer = ({
       entry,
       id,
       typeof msg.method === "string" ? msg.method : "",
-      isRecord(msg.params) ? msg.params : {}
+      isRecord(msg.params) ? msg.params : {},
+      hungUp
     );
   };
 
   const respond = async (req: IncomingMessage, res: ServerResponse) => {
+    const hungUp = new AbortController();
+    res.on("close", () => {
+      if (!res.writableFinished) {
+        hungUp.abort();
+      }
+    });
     try {
-      const { status, body } = await handle(req);
+      const { status, body } = await handle(req, hungUp.signal);
       if (body === undefined) {
         res.writeHead(status).end();
       } else {
@@ -256,11 +312,16 @@ export const createRoomToolsServer = ({
         await closeServer(closing);
       }
     },
-    async issue(turnId, tools = documentTools) {
+    async issue(turnId, { tools = ordinaryTools, ask } = {}) {
       listening ??= startListening();
       const url = await listening;
       const token = randomBytes(32).toString("base64url");
-      live.set(token, { tools, turnId });
+      live.set(token, {
+        calls: new Map(),
+        tools,
+        turnId,
+        ...(ask ? { ask } : {}),
+      });
       return { token, url };
     },
     revoke(token) {

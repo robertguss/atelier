@@ -1,3 +1,7 @@
+import { request } from "node:http";
+import { setImmediate } from "node:timers/promises";
+
+import type { QuestionAnswer } from "@atelier/shared";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { FakeRoomConvex } from "./fake-room-convex.ts";
@@ -6,7 +10,7 @@ import {
   isForwardedPort,
   loopbackCaller,
 } from "./room-tools-server.ts";
-import type { RoomToolsClient } from "./room-tools.ts";
+import type { AskRoom, RoomToolsClient } from "./room-tools.ts";
 
 const convex = new FakeRoomConvex({
   "documentTools:commentForTurn": () => ({
@@ -52,6 +56,34 @@ const call = (name: string, args: unknown) => ({
   method: "tools/call",
   params: { arguments: args, name },
 });
+
+// An ask that stays pending until the test settles it, and records the
+// signal it was given.
+const pendingAsk = () => {
+  const state: {
+    signal?: AbortSignal;
+    resolve?: (answer: QuestionAnswer) => void;
+  } = {};
+  const ask: AskRoom = async (_card, signal) => {
+    state.signal = signal;
+    // oxlint-disable-next-line promise/avoid-new -- the test answers later, from outside
+    return await new Promise<QuestionAnswer>((resolve) => {
+      state.resolve = resolve;
+    });
+  };
+  return { ask, state };
+};
+
+const until = async (condition: () => boolean) => {
+  for (let i = 0; i < 2000; i += 1) {
+    if (condition()) {
+      return;
+    }
+    // oxlint-disable-next-line no-await-in-loop -- polling for the endpoint to make progress
+    await setImmediate();
+  }
+  throw new Error("condition never held");
+};
 
 describe(createRoomToolsServer, () => {
   afterAll(async () => {
@@ -179,6 +211,9 @@ describe(createRoomToolsServer, () => {
         "update_block",
         "delete_block",
         "comment",
+        "read_handbook",
+        "recent_decisions",
+        "raise_hand",
       ],
       unknownCode: -32_601,
     });
@@ -204,11 +239,85 @@ describe(createRoomToolsServer, () => {
     ).resolves.toStrictEqual({
       content: [
         {
-          text: "The document tools no longer work for this turn.",
+          text: "The room tools no longer work for this turn.",
           type: "text",
         },
       ],
       isError: true,
+    });
+  });
+
+  describe("raise_hand through the endpoint", () => {
+    const answered: QuestionAnswer = {
+      answeredBy: "Robert",
+      answers: [{ labels: ["Postgres"], question: "Which?", questionId: "q1" }],
+      handId: "h1",
+      requestId: "r1",
+      via: "card",
+    };
+
+    it("a call stays open until the person answers, then returns the answer", async () => {
+      const { ask, state } = pendingAsk();
+      const { url, token } = await server.issue("t-ask", { ask });
+      const reply = post(
+        url,
+        call("raise_hand", { question: "Which?" }),
+        token
+      );
+      await until(() => state.resolve !== undefined);
+      state.resolve?.(answered);
+      const { reply: body } = await reply;
+      expect(at(body, "result", "content")).toStrictEqual([
+        { text: "Robert answered on the card: Postgres", type: "text" },
+      ]);
+      expect(state.signal?.aborted).toBeFalsy();
+    });
+
+    it("hanging up mid-call fires the call's abort signal", async () => {
+      const { ask, state } = pendingAsk();
+      const { url, token } = await server.issue("t-hangup", { ask });
+      const req = request(url, {
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        method: "POST",
+      });
+      req.on("error", () => {
+        // The test hangs up on purpose.
+      });
+      req.end(JSON.stringify(call("raise_hand", { question: "Which?" })));
+      await until(() => state.signal !== undefined);
+      expect(state.signal?.aborted).toBeFalsy();
+      req.destroy();
+      await until(() => state.signal?.aborted === true);
+    });
+
+    it("notifications/cancelled for a pending call fires its abort signal, but not from another turn's token", async () => {
+      const { ask, state } = pendingAsk();
+      const mine = await server.issue("t-cancel", { ask });
+      const other = await server.issue("t-other");
+      const reply = post(
+        mine.url,
+        { ...call("raise_hand", { question: "Which?" }), id: 7 },
+        mine.token
+      );
+      await until(() => state.signal !== undefined);
+      const cancel = {
+        jsonrpc: "2.0",
+        method: "notifications/cancelled",
+        params: { requestId: 7 },
+      };
+      const fromOther = await post(other.url, cancel, other.token);
+      expect({
+        abortedByOther: state.signal?.aborted,
+        status: fromOther.status,
+      }).toStrictEqual({ abortedByOther: false, status: 202 });
+      const fromMine = await post(mine.url, cancel, mine.token);
+      expect(fromMine.status).toBe(202);
+      expect(state.signal?.aborted).toBeTruthy();
+      state.resolve?.(answered);
+      await reply;
     });
   });
 });

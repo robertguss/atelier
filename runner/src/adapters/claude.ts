@@ -24,13 +24,17 @@ import { execFileAsync } from "../exec.ts";
 import { loopbackCaller } from "../room-tools-server.ts";
 import {
   claudeRoomToolsServer,
-  documentTools,
+  ordinaryTools,
   scribeTools,
 } from "../room-tools.ts";
 import { eventQueue } from "./events.ts";
 
-// The in-process document tools server is named `atelier`.
+// The in-process room tools server is named `atelier`.
 const ROOM_TOOL_PREFIX = "mcp__atelier__";
+
+// Claude asks the room through its own question tool, which supports several
+// questions per card, so it is not offered raise_hand as a second way.
+const claudeTools = ordinaryTools.filter((t) => t.name !== "raise_hand");
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
 // Harness and repository control files. Writing one could add an allow rule,
@@ -433,14 +437,14 @@ const turnOptions = (
         ...(req.model === undefined || req.model === ""
           ? {}
           : { model: req.model }),
-        // Reviews never get the document tools. Elsewhere they run in-process,
+        // Reviews never get the room tools. Elsewhere they run in-process,
         // so the route and token never reach the CLI's arguments.
         ...(req.roomTools
           ? {
               mcpServers: {
                 atelier: claudeRoomToolsServer(
                   loopbackCaller(req.roomTools),
-                  req.scribe === true ? scribeTools : documentTools
+                  req.scribe === true ? scribeTools : claudeTools
                 ),
               },
             }

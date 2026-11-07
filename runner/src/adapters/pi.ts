@@ -40,8 +40,9 @@ export const piHarness = (opts: {
   const cliPath =
     opts.cliPath ?? fileURLToPath(new URL("pi-cli.mjs", import.meta.url));
   return {
-    // Pi has no built-in question prompt, so it asks in plain text.
-    capabilities: { canRaiseCards: false },
+    // Pi has no built-in question prompt; it raises cards through the room's
+    // raise_hand tool.
+    capabilities: { canRaiseCards: true },
     id: "pi",
     async *runTurn(req, signal, input) {
       // Pi fixes its tools when a turn starts. Turning edits off interrupts
@@ -55,7 +56,7 @@ export const piHarness = (opts: {
           "Configure Pi MCP through your own extension until per-turn MCP support exists"
         );
       }
-      // Reviews never get the document tools. Elsewhere the extension offers
+      // Reviews never get the room tools. Elsewhere the extension offers
       // them; naming no mcp__ tool in --tools leaves the user's MCP tools as they were.
       const room = req.independentReview === true ? undefined : req.roomTools;
       let args: string[];

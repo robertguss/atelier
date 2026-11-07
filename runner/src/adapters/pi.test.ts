@@ -285,6 +285,10 @@ describe(piHarness, () => {
     });
   });
 
+  it("Pi reports that it can raise cards, which it does through raise_hand", () => {
+    expect(piHarness({ onRaw() {} }).capabilities.canRaiseCards).toBeTruthy();
+  });
+
   it("Pi keeps a run going past 30 minutes while a tool call is pending", async () => {
     await withFakePi(async (fake) => {
       vi.useFakeTimers({
@@ -490,6 +494,9 @@ describe(piHarness, () => {
             "atelier_update_block",
             "atelier_delete_block",
             "atelier_comment",
+            "atelier_read_handbook",
+            "atelier_recent_decisions",
+            "atelier_raise_hand",
           ],
           required: ["kind", "text"],
           type: "object",

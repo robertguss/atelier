@@ -19,7 +19,7 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
 import { eventQueue } from "./adapters/events.ts";
 import { documentTools, scribeTools } from "./room-tools.ts";
-import type { RoomToolSet } from "./room-tools.ts";
+import type { AskRoom, RoomToolSet } from "./room-tools.ts";
 import { createTurns } from "./turns.ts";
 import type { TurnsClient } from "./turns.ts";
 
@@ -139,14 +139,22 @@ const runJob = (turnId: string) => ({
 // Issues one token per turn and records what is still live.
 const fakeRoomTools = () => {
   const live = new Map<string, string>();
-  const issued: { turnId: string; token: string; tools?: RoomToolSet }[] = [];
+  const issued: {
+    turnId: string;
+    token: string;
+    tools?: RoomToolSet;
+    ask?: AskRoom;
+  }[] = [];
   let next = 0;
   return {
-    async issue(turnId: string, tools?: RoomToolSet) {
+    async issue(
+      turnId: string,
+      options: { tools?: RoomToolSet; ask?: AskRoom } = {}
+    ) {
       next += 1;
       const token = `room-token-${next}`;
       live.set(token, turnId);
-      issued.push({ token, tools, turnId });
+      issued.push({ token, turnId, ...options });
       return await Promise.resolve({
         token,
         url: "http://127.0.0.1:40123/mcp",
@@ -703,11 +711,13 @@ describe(createTurns, () => {
     it("starts fresh with edits off and the scribe tools, and no write tool beside the draft", async () => {
       const { run, s, turn } = await startScribe();
       expect({
+        ask: s.roomTools.issued[0]?.ask,
         editsEnabled: run.req.editsEnabled,
         resumeSessionId: run.req.resumeSessionId,
         scribe: run.req.scribe,
         tools: s.roomTools.issued[0]?.tools === scribeTools,
       }).toStrictEqual({
+        ask: undefined,
         editsEnabled: false,
         resumeSessionId: undefined,
         scribe: true,
@@ -758,14 +768,116 @@ describe(createTurns, () => {
     });
   });
 
-  it("an ordinary turn gets the ordinary document tools", async () => {
-    const s = setup();
+  it("an ordinary turn and a follow-up get the ordinary tools and a way to ask the room", async () => {
+    const followUp = {
+      ...runJob("t-follow"),
+      commandId: "c-follow",
+      turn: {
+        followUp: true,
+        id: "t-follow",
+        independentReview: false,
+        prompt: "About the review",
+      },
+    };
+    const s = setup({ "c-follow": followUp });
+    for (const [n, commandId] of ["c-run", "c-follow"].entries()) {
+      const turn = s.turns.handle(commandId);
+      // oxlint-disable-next-line no-await-in-loop -- one turn at a time, as the runner runs one agent's turns
+      await until(() => s.runs.length > n);
+      const run = s.runs.at(-1);
+      assert(run);
+      expect(run.req.scribe).toBeUndefined();
+      end(run, { text: "done", type: "final" });
+      // oxlint-disable-next-line no-await-in-loop -- see above
+      await turn;
+    }
+    expect(
+      s.roomTools.issued.map((i) => ({
+        ask: typeof i.ask,
+        tools: i.tools,
+        turnId: i.turnId,
+      }))
+    ).toStrictEqual([
+      { ask: "function", tools: undefined, turnId: "t1" },
+      { ask: "function", tools: undefined, turnId: "t-follow" },
+    ]);
+  });
+
+  it("raise_hand through the issued channel raises the card, pauses the deadline, and returns the answer", async () => {
+    vi.useFakeTimers({
+      now: 0,
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    const payload = {
+      answeredBy: "Robert",
+      answers: [
+        { labels: ["Small"], question: "Which scope?", questionId: "scope" },
+      ],
+      handId: "hand-1",
+      requestId: "req-1",
+      via: "card",
+    };
+    const s = setup({
+      "c-answer": {
+        commandId: "c-answer",
+        payload,
+        turn: { id: "t1" },
+        type: "answer",
+      },
+    });
     const turn = s.turns.handle("c-run");
     await until(() => s.runs.length > 0);
     const [run] = s.runs;
-    assert(run);
-    expect(run.req.scribe).toBeUndefined();
-    expect(s.roomTools.issued[0]?.tools).toBeUndefined();
+    const ask = s.roomTools.issued[0]?.ask;
+    assert(run && ask);
+    const answer = ask(card, new AbortController().signal);
+    await until(() => s.named("runner:raiseHand").length > 0);
+    vi.advanceTimersByTime(45 * MINUTE);
+    expect(run.signal.aborted).toBeFalsy();
+    await s.turns.handle("c-answer");
+    await expect(answer).resolves.toStrictEqual(payload);
+    end(run, { text: "done", type: "final" });
+    await turn;
+  });
+
+  it("a raise_hand whose caller stops waiting withdraws its card, and a later answer finds nothing waiting", async () => {
+    const s = setup({
+      "c-answer": {
+        commandId: "c-answer",
+        payload: {
+          answeredBy: "Robert",
+          answers: [],
+          handId: "hand-1",
+          requestId: "req-1",
+          via: "card",
+        },
+        turn: { id: "t1" },
+        type: "answer",
+      },
+    });
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    const ask = s.roomTools.issued[0]?.ask;
+    assert(run && ask);
+    const stop = new AbortController();
+    const answer = ask(card, stop.signal);
+    await until(() => s.named("runner:raiseHand").length > 0);
+    stop.abort();
+    await expect(answer).rejects.toThrow(/stopped waiting/u);
+    await until(() => s.named("runner:handWithdrawn").length > 0);
+    expect(s.named("runner:handWithdrawn")).toStrictEqual([
+      { handId: "hand-1", secret: "s3cret" },
+    ]);
+    await s.turns.handle("c-answer");
+    expect(s.named("runner:commandHandled")).toStrictEqual([
+      {
+        commandId: "c-answer",
+        error: "No question is waiting for this answer",
+        ok: false,
+        secret: "s3cret",
+      },
+    ]);
     end(run, { text: "done", type: "final" });
     await turn;
   });

@@ -29,7 +29,7 @@ export interface TurnsOptions {
   client: TurnsClient;
   secret: string;
   harnesses: Partial<Record<HarnessId, Harness>>;
-  /** Issues each turn but a review a token for its room document tools. */
+  /** Issues each turn but a review a token for its room tools. */
   roomTools: Pick<RoomToolsServer, "issue" | "revoke">;
   appendTranscript: (turnId: string, record: unknown) => void;
   transcriptPath: (turnId: string) => string;
@@ -277,7 +277,9 @@ export const createTurns = ({
       }
       return question;
     };
-    const onQuestion = async (card: QuestionCard) => {
+    // `signal` aborts when the agent stops waiting, as when its raise_hand
+    // call is cancelled: the card is then withdrawn, with no decision.
+    const onQuestion = async (card: QuestionCard, signal?: AbortSignal) => {
       if (scribe) {
         throw new Error(
           "The scribe works without asking questions: decide, and note open questions in the document."
@@ -288,8 +290,9 @@ export const createTurns = ({
         questions.set(card.requestId, { reject, resolve });
       });
       deadline.pause();
+      let handId: Id<"hands">;
       try {
-        const handId = await client.mutation(api.runner.raiseHand, {
+        handId = await client.mutation(api.runner.raiseHand, {
           questions: card.questions,
           requestId: card.requestId,
           secret,
@@ -309,7 +312,27 @@ export const createTurns = ({
         settle(card.requestId);
         throw error_;
       }
-      return await answer;
+      const withdraw = () => {
+        const question = settle(card.requestId);
+        if (!question) {
+          return;
+        }
+        question.reject(new Error("The agent stopped waiting"));
+        client
+          .mutation(api.runner.handWithdrawn, { handId, secret })
+          .catch((withdrawError: unknown) => {
+            console.error("withdrawing a card failed:", withdrawError);
+          });
+      };
+      if (signal?.aborted === true) {
+        withdraw();
+      }
+      signal?.addEventListener("abort", withdraw, { once: true });
+      try {
+        return await answer;
+      } finally {
+        signal?.removeEventListener("abort", withdraw);
+      }
     };
 
     const turn: RunningTurn = {
@@ -511,7 +534,10 @@ export const createTurns = ({
         turnId,
       });
       if (!job.turn.independentReview) {
-        route = await roomTools.issue(turnId, scribe ? scribeTools : undefined);
+        route = await roomTools.issue(
+          turnId,
+          scribe ? { tools: scribeTools } : { ask: onQuestion }
+        );
       }
       // Start polling only after start commits: a queued turn is not cancelled.
       timer = setInterval(() => {

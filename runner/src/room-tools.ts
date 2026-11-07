@@ -1,13 +1,18 @@
-// The room document tools a model uses during a turn. One core serves every
-// harness: the loopback MCP endpoint (room-tools-server.ts) for Codex and Pi,
-// and an in-process SDK server for Claude. Each tool forwards to a
-// runner-secret Convex function that applies every rule itself, so this file
-// only validates the shape of the arguments and turns Convex's answer, or its
-// refusal, into text the model can act on.
+// The room tools a model uses during a turn: the room document, the handbook
+// and recent decisions, and raise_hand. One core serves every harness: the
+// loopback MCP endpoint (room-tools-server.ts) for Codex and Pi, and an
+// in-process SDK server for Claude. Each Convex-backed tool forwards to a
+// runner-secret function that applies every rule itself, so this file only
+// validates the shape of the arguments and turns Convex's answer, or its
+// refusal, into text the model can act on. raise_hand goes through the
+// turn's own question channel instead, the one Claude's question tool uses.
+
+import { randomUUID } from "node:crypto";
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { api } from "@atelier/backend/api";
 import type { Id } from "@atelier/backend/dataModel";
+import type { QuestionAnswer, QuestionCard } from "@atelier/shared";
 import type { ConvexClient } from "convex/browser";
 import type { FunctionReturnType } from "convex/server";
 import { z } from "zod";
@@ -29,7 +34,22 @@ interface Refusal {
   current?: { text: string; rev: number; changedBy: string };
 }
 
-interface ToolContext {
+/**
+ * Puts a question card to the room and waits for the first answer. Aborting
+ * `signal` means the agent stopped waiting, and the card is withdrawn.
+ */
+export type AskRoom = (
+  card: QuestionCard,
+  signal?: AbortSignal
+) => Promise<QuestionAnswer>;
+
+/** What a call knows beyond its arguments: its turn's question channel, and whether its caller is still waiting. */
+export interface CallContext {
+  ask?: AskRoom;
+  signal?: AbortSignal;
+}
+
+interface ToolContext extends CallContext {
   convex: RoomToolsClient;
   secret: string;
   turnId: Id<"turns">;
@@ -313,6 +333,116 @@ export const documentTools: RoomToolSet = [
   }),
 ];
 
+const choiceText = (a: { labels: string[]; freeText?: string }) => {
+  const free = a.freeText?.trim() ?? "";
+  return [...a.labels, ...(free === "" ? [] : [free])].join("; ");
+};
+
+// The first answer to a raise_hand card, as the model reads it.
+const renderAnswer = (answer: QuestionAnswer) => {
+  if ("noDecision" in answer) {
+    return answer.message;
+  }
+  const choice = answer.answers.map(choiceText).join("; ");
+  return answer.via === "chat"
+    ? `${answer.answeredBy} answered in chat: ${choice}`
+    : `${answer.answeredBy} answered on the card: ${choice}`;
+};
+
+/** The handbook, decisions and raise_hand: every ordinary turn gets them. */
+const roomContextTools: RoomToolSet = [
+  defineTool({
+    description:
+      "Read the room's handbook as it is now: the standing instructions for how everyone in this room works. Your prompt has a copy from when your turn was queued; use this when you need the current one.",
+    name: "read_handbook",
+    async run({ convex, secret, turnId }) {
+      const read = await convex.query(api.documentTools.readHandbookForTurn, {
+        secret,
+        turnId,
+      });
+      if (!read.ok) {
+        return read;
+      }
+      return read.handbook.trim() || "This room has no handbook.";
+    },
+    shape: {},
+  }),
+  defineTool({
+    description:
+      "Read the room's latest decisions, oldest first: each question, the choice made, who made it and when. Your prompt lists the last 10 from when your turn was queued; use this for newer ones or more of them.",
+    name: "recent_decisions",
+    async run({ convex, secret, turnId }, { limit }) {
+      const read = await convex.query(
+        api.documentTools.recentDecisionsForTurn,
+        { secret, turnId, ...(limit === undefined ? {} : { limit }) }
+      );
+      if (!read.ok) {
+        return read;
+      }
+      return read.lines.length
+        ? `Recent decisions, oldest first:\n${read.lines.join("\n")}`
+        : "No decisions yet.";
+    },
+    shape: {
+      limit: z
+        .number()
+        .int()
+        .optional()
+        .describe("How many decisions, from 1 to 50. Defaults to 10."),
+    },
+  }),
+  defineTool({
+    description:
+      "Ask the people in this room a question when you need their decision or information to continue. It puts a question card in front of them and waits for the first answer, for up to 2 hours: they can pick one of your options or write their own answer, on the card or in chat. " +
+      "Use this instead of asking in plain text and waiting. Ask one question per call.",
+    name: "raise_hand",
+    async run({ ask, signal }, { question, options }) {
+      if (!ask) {
+        return {
+          message: "This turn cannot ask the room questions.",
+          ok: false,
+          reason: "no_questions",
+        };
+      }
+      const card: QuestionCard = {
+        questions: [
+          {
+            allowFreeText: true,
+            header: "",
+            id: "q1",
+            multiSelect: false,
+            options: (options ?? []).map((label) => ({ label })),
+            text: question,
+          },
+        ],
+        requestId: randomUUID(),
+      };
+      try {
+        return renderAnswer(await ask(card, signal));
+      } catch {
+        return {
+          message: "No answer came before the question closed.",
+          ok: false,
+          reason: "turn_ended",
+        };
+      }
+    },
+    shape: {
+      options: z
+        .array(z.string().trim().min(1))
+        .optional()
+        .describe("Answers they can pick. They can always write their own."),
+      question: z.string().trim().min(1).describe("The question to ask."),
+    },
+  }),
+];
+
+/** Every ordinary turn's tools: the document tools, the handbook and decisions, and raise_hand. */
+export const ordinaryTools: RoomToolSet = [
+  ...documentTools,
+  ...roomContextTools,
+];
+
 const sourceBlockIds = z
   .array(z.string())
   .describe(
@@ -477,7 +607,7 @@ export const scribeTools: RoomToolSet = [
 ];
 
 /** The MCP `tools/list` entries for a tool set. */
-export const listTools = (tools: RoomToolSet = documentTools) =>
+export const listTools = (tools: RoomToolSet = ordinaryTools) =>
   tools.map((t) => {
     const { $schema: _, ...inputSchema }: Record<string, unknown> =
       z.toJSONSchema(z.object(t.shape));
@@ -498,7 +628,8 @@ export const callRoomTool = async (
   turnId: string,
   name: string,
   args: unknown,
-  tools: RoomToolSet = documentTools
+  tools: RoomToolSet = ordinaryTools,
+  call: CallContext = {}
 ): Promise<RoomToolResult> => {
   const found = tools.find((t) => t.name === name);
   if (!found) {
@@ -516,7 +647,10 @@ export const callRoomTool = async (
     if (!isTurnId(turnId)) {
       throw new Error("Turn ids are strings");
     }
-    const out = await found.run({ convex, secret, turnId }, parsed.data);
+    const out = await found.run(
+      { ...call, convex, secret, turnId },
+      parsed.data
+    );
     return typeof out === "string"
       ? { content: [{ text: out, type: "text" }] }
       : errorText(renderRefusal(out));
@@ -534,7 +668,7 @@ export const callRoomTool = async (
  */
 export const claudeRoomToolsServer = (
   call: (name: string, args: unknown) => Promise<RoomToolResult>,
-  tools: RoomToolSet = documentTools
+  tools: RoomToolSet
 ) =>
   createSdkMcpServer({
     alwaysLoad: true,

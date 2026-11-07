@@ -346,7 +346,7 @@ describe(codexHarness, () => {
     expect(!results.some((e) => e.type === "final")).toBeTruthy();
   });
 
-  it("Codex with edits off keeps the read-only sandbox, never asks, and raises no cards", async () => {
+  it("Codex with edits off keeps the read-only sandbox, never asks, and refuses its own question prompt (cards come through raise_hand)", async () => {
     await using fake = await fakeCodex({
       steps: [
         {
@@ -386,7 +386,7 @@ describe(codexHarness, () => {
       turnApprovalPolicy: at(turn, "params", "approvalPolicy"),
       turnSandboxPolicy: at(turn, "params", "sandboxPolicy"),
     }).toStrictEqual({
-      canRaiseCards: false,
+      canRaiseCards: true,
       questionErrorCode: -32_601,
       threadApprovalPolicy: "never",
       threadSandbox: "read-only",
