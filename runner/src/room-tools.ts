@@ -349,8 +349,8 @@ const renderAnswer = (answer: QuestionAnswer) => {
     : `${answer.answeredBy} answered on the card: ${choice}`;
 };
 
-/** The handbook, decisions and raise_hand: every ordinary turn gets them. */
-const roomContextTools: RoomToolSet = [
+/** The handbook and recent decisions. */
+const contextTools: RoomToolSet = [
   defineTool({
     description:
       "Read the room's handbook as it is now: the standing instructions for how everyone in this room works. Your prompt has a copy from when your turn was queued; use this when you need the current one.",
@@ -391,57 +391,65 @@ const roomContextTools: RoomToolSet = [
         .describe("How many decisions, from 1 to 50. Defaults to 10."),
     },
   }),
-  defineTool({
-    description:
-      "Ask the people in this room a question when you need their decision or information to continue. It puts a question card in front of them and waits for the first answer, for up to 2 hours: they can pick one of your options or write their own answer, on the card or in chat. " +
-      "Use this instead of asking in plain text and waiting. Ask one question per call.",
-    name: "raise_hand",
-    async run({ ask, signal }, { question, options }) {
-      if (!ask) {
-        return {
-          message: "This turn cannot ask the room questions.",
-          ok: false,
-          reason: "no_questions",
-        };
-      }
-      const card: QuestionCard = {
-        questions: [
-          {
-            allowFreeText: true,
-            header: "",
-            id: "q1",
-            multiSelect: false,
-            options: (options ?? []).map((label) => ({ label })),
-            text: question,
-          },
-        ],
-        requestId: randomUUID(),
-      };
-      try {
-        return renderAnswer(await ask(card, signal));
-      } catch {
-        return {
-          message: "No answer came before the question closed.",
-          ok: false,
-          reason: "turn_ended",
-        };
-      }
-    },
-    shape: {
-      options: z
-        .array(z.string().trim().min(1))
-        .optional()
-        .describe("Answers they can pick. They can always write their own."),
-      question: z.string().trim().min(1).describe("The question to ask."),
-    },
-  }),
 ];
+
+const raiseHand = defineTool({
+  description:
+    "Ask the people in this room a question when you need their decision or information to continue. It puts a question card in front of them and waits for the first answer, for up to 2 hours: they can pick one of your options or write their own answer, on the card or in chat. " +
+    "Use this instead of asking in plain text and waiting. Ask one question per call.",
+  name: "raise_hand",
+  async run({ ask, signal }, { question, options }) {
+    if (!ask) {
+      return {
+        message: "This turn cannot ask the room questions.",
+        ok: false,
+        reason: "no_questions",
+      };
+    }
+    const card: QuestionCard = {
+      questions: [
+        {
+          allowFreeText: true,
+          header: "",
+          id: "q1",
+          multiSelect: false,
+          options: (options ?? []).map((label) => ({ label })),
+          text: question,
+        },
+      ],
+      requestId: randomUUID(),
+    };
+    try {
+      return renderAnswer(await ask(card, signal));
+    } catch {
+      return {
+        message: "No answer came before the question closed.",
+        ok: false,
+        reason: "turn_ended",
+      };
+    }
+  },
+  shape: {
+    options: z
+      .array(z.string().trim().min(1))
+      .optional()
+      .describe("Answers they can pick. They can always write their own."),
+    question: z.string().trim().min(1).describe("The question to ask."),
+  },
+});
 
 /** Every ordinary turn's tools: the document tools, the handbook and decisions, and raise_hand. */
 export const ordinaryTools: RoomToolSet = [
   ...documentTools,
-  ...roomContextTools,
+  ...contextTools,
+  raiseHand,
 ];
+
+/**
+ * Claude's ordinary tools: no raise_hand, because Claude asks the room
+ * through its own question tool, which allows several questions per card.
+ */
+export const claudeTools: RoomToolSet = [...documentTools, ...contextTools];
 
 const sourceBlockIds = z
   .array(z.string())

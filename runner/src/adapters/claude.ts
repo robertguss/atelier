@@ -24,17 +24,13 @@ import { execFileAsync } from "../exec.ts";
 import { loopbackCaller } from "../room-tools-server.ts";
 import {
   claudeRoomToolsServer,
-  ordinaryTools,
+  claudeTools,
   scribeTools,
 } from "../room-tools.ts";
 import { eventQueue } from "./events.ts";
 
 // The in-process room tools server is named `atelier`.
 const ROOM_TOOL_PREFIX = "mcp__atelier__";
-
-// Claude asks the room through its own question tool, which supports several
-// questions per card, so it is not offered raise_hand as a second way.
-const claudeTools = ordinaryTools.filter((t) => t.name !== "raise_hand");
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
 // Harness and repository control files. Writing one could add an allow rule,

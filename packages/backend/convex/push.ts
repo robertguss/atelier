@@ -9,7 +9,7 @@ import {
   internalMutation,
   internalAction,
 } from "./_generated/server";
-import type { ActionCtx } from "./_generated/server";
+import type { ActionCtx, MutationCtx } from "./_generated/server";
 import { requireOwner } from "./lib/auth";
 
 const BATCH_SIZE = 100;
@@ -95,6 +95,15 @@ export const recipients = internalQuery({
       .collect();
   },
 });
+// Devices Expo reported as no longer registered.
+const deleteTokens = async (ctx: MutationCtx, ids: Id<"pushTokens">[]) => {
+  await Promise.all(
+    ids.map(async (id) => {
+      await ctx.db.delete(id);
+    })
+  );
+};
+
 export const result = internalMutation({
   args: {
     invalidTokens: v.array(v.id("pushTokens")),
@@ -107,11 +116,7 @@ export const result = internalMutation({
   },
   handler: async (ctx, { ritualId, status, invalidTokens }) => {
     await ctx.db.patch(ritualId, { pushStatus: status });
-    await Promise.all(
-      invalidTokens.map(async (id) => {
-        await ctx.db.delete(id);
-      })
-    );
+    await deleteTokens(ctx, invalidTokens);
   },
 });
 interface PushMessage {
@@ -247,11 +252,7 @@ export const handPush = internalQuery({
 export const dropTokens = internalMutation({
   args: { tokenIds: v.array(v.id("pushTokens")) },
   handler: async (ctx, { tokenIds }) => {
-    await Promise.all(
-      tokenIds.map(async (id) => {
-        await ctx.db.delete(id);
-      })
-    );
+    await deleteTokens(ctx, tokenIds);
   },
 });
 
@@ -270,17 +271,18 @@ export const sendHand = internalAction({
       title: "Question waiting",
     };
     let failed = false;
+    const gone: Id<"pushTokens">[] = [];
     for (let i = 0; i < push.tokens.length; i += BATCH_SIZE) {
       // oxlint-disable-next-line eslint/no-await-in-loop -- batches go out one at a time
       const sent = await expoSend(
         push.tokens.slice(i, i + BATCH_SIZE),
         message
       );
-      // oxlint-disable-next-line eslint/no-await-in-loop -- each batch drops its own gone devices
-      await ctx.runMutation(internal.push.dropTokens, {
-        tokenIds: sent.invalidTokens,
-      });
+      gone.push(...sent.invalidTokens);
       failed ||= sent.failed;
+    }
+    if (gone.length > 0) {
+      await ctx.runMutation(internal.push.dropTokens, { tokenIds: gone });
     }
     if (failed) {
       throw new Error("Expo rejected a push ticket");

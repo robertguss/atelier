@@ -214,6 +214,12 @@ const LiveTurn = ({
   );
 };
 
+// The questions on each agent's open cards.
+type OpenQuestions = Map<
+  Id<"participants">,
+  { text: string; options: { label: string }[] }[]
+>;
+
 const Composer = ({
   roomId,
   onSent,
@@ -237,10 +243,7 @@ const Composer = ({
     harness?: string;
   }[];
   waitingAgents: Set<Id<"participants">>;
-  openQuestions: Map<
-    Id<"participants">,
-    { text: string; options: { label: string }[] }[]
-  >;
+  openQuestions: OpenQuestions;
 }) => {
   const send = useMutation(api.messages.send);
   const add = useMutation(api.rooms.addParticipant);
@@ -433,10 +436,7 @@ const Room = () => {
   );
   // The questions on each agent's open cards, shown above the composer, so
   // a reply typed there can answer them.
-  const openQuestions = new Map<
-    Id<"participants">,
-    { text: string; options: { label: string }[] }[]
-  >();
+  const openQuestions: OpenQuestions = new Map();
   for (const card of pane?.cards ?? []) {
     if (card.status === "raised") {
       openQuestions.set(card.participantId, [
