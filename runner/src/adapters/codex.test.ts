@@ -311,3 +311,15 @@ test('a Codex document tool call shows up as a turn item with the tool name and 
   ]);
   assert.doesNotMatch(JSON.stringify(results), /ROOM-TOKEN-SECRET/);
 });
+
+test('a Codex scribe turn starts a fresh, ephemeral thread with the Atelier server, never resuming the ordinary one', async () => {
+  await using fake = await fakeCodex({ steps: [{ send: completed }] });
+  await collect(codexHarness({ executable: fake.executable, onRaw() {} })
+    .runTurn(request(fake.dir, { scribe: true, roomTools, resumeSessionId: 'thread-ordinary' }), new AbortController().signal, turnInput()));
+  const calls = await fake.calls();
+  assert.equal(calls.some((c) => c.method === 'thread/resume'), false);
+  const start = calls.find((c) => c.method === 'thread/start');
+  assert.equal(start.params.ephemeral, true);
+  assert.deepEqual(start.params.config, atelierConfig);
+  assert.equal(start.params.sandbox, 'read-only');
+});

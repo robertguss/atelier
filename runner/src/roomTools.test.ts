@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getFunctionName } from 'convex/server';
-import { callRoomTool, claudeRoomToolsServer, documentTools, listTools, type RoomToolsClient } from './roomTools.ts';
+import { callRoomTool, claudeRoomToolsServer, documentTools, listTools, scribeTools, type RoomToolsClient } from './roomTools.ts';
 
 // Records every query and mutation by name and answers from `replies`.
 function fakeConvex(replies: Record<string, (args: any) => unknown> = {}) {
@@ -154,4 +154,41 @@ test("Claude's in-process server is named atelier, always loads, and forwards ea
   assert.equal(registered.comment!._meta?.['anthropic/alwaysLoad'], true);
   assert.deepEqual(await registered.comment!.handler({ blockId: 'b-1', quote: 'x', body: 'y' }, {}), { content: [{ type: 'text', text: 'ok' }] });
   assert.deepEqual(forwarded, [['comment', { blockId: 'b-1', quote: 'x', body: 'y' }]]);
+});
+
+test('each scribe draft tool sends one operation and reports what the whole draft would do', async () => {
+  const report = {
+    operations: 2, blocks: 4, untouched: { count: 2, ids: ['b-1', 'b-2'] }, replaced: 1, removed: 1, moved: 0, added: 1, finalBlocks: 4,
+    removedUndrawn: ['b-4'],
+    threads: { moving: [{ threadId: 'th-1', passage: 'Postgres', toBlockId: 'b-3' }], detaching: [{ threadId: 'th-2', passage: 'Ask Sam', blockId: 'b-4' }] },
+  };
+  const convex = fakeConvex({ 'documentTools:scribeDraftForTurn': (args) => ({ ok: true, report, ...(args.op.op === 'add' ? { draftId: 'new-2' } : {}) }) });
+  const run = (name: string, args: unknown) => callRoomTool(convex.client, 's3cret', 't1', name, args, scribeTools);
+
+  const replaced = text(await run('draft_replace', { blockId: 'b-3', text: 'Merged.', sourceBlockIds: ['b-4'] }));
+  assert.equal(replaced, [
+    'Block b-3 is rewritten in the draft.',
+    '',
+    'Draft so far: 2 operations. Of the 4 blocks in the document, 1 rewritten, 1 removed, 0 moved; 1 added. The document will have 4 blocks.',
+    'Not mentioned by the draft, so kept exactly as they are: 2 blocks (b-1, b-2).',
+    'Removed and drawn on by no block, so their text leaves the document (history keeps it): b-4.',
+    'Comment threads that will move with their passage:',
+    '- thread th-1 ("Postgres") to b-3',
+    'Comment threads that will lose their passage (they stay open and link to the version before your run):',
+    '- thread th-2 ("Ask Sam") on b-4',
+  ].join('\n'));
+  assert.match(text(await run('draft_add', { kind: 'heading', text: 'Summary', sourceBlockIds: [], afterBlockId: 'start' })), /^Added new-2 to the draft\./);
+  await run('draft_keep', { blockId: 'b-1' });
+  await run('draft_remove', { blockId: 'b-4' });
+  await run('draft_move', { blockId: 'b-2', afterBlockId: 'new-2' });
+  assert.deepEqual(convex.calls.map((c) => c.args.op), [
+    { op: 'replace', blockId: 'b-3', text: 'Merged.', sourceBlockIds: ['b-4'] },
+    { op: 'add', kind: 'heading', text: 'Summary', sourceBlockIds: [], afterBlockId: 'start' },
+    { op: 'keep', blockId: 'b-1' },
+    { op: 'remove', blockId: 'b-4' },
+    { op: 'move', blockId: 'b-2', afterBlockId: 'new-2' },
+  ]);
+  assert.ok(convex.calls.every((c) => c.name === 'documentTools:scribeDraftForTurn' && c.args.secret === 's3cret' && c.args.turnId === 't1'));
+  // The scribe's set has no tool that writes the document directly.
+  assert.equal((await run('update_block', { blockId: 'b-1', baseRev: 1, text: 'x' })).isError, true);
 });

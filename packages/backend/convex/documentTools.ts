@@ -16,6 +16,7 @@ import {
   scribeWorking,
 } from './lib/document';
 import { authorLabel, isOwnBlock, participantNames } from './lib/documentDigest';
+import { DRAFT_OP_LIMIT, buildDraft, draftId, draftOps, draftReport, finalItems, parseDraftId, type DraftOp } from './lib/scribe';
 import { createThread, postComment } from './lib/threads';
 import { canWriteDocument, documentMode } from './lib/visibility';
 import { blockKind } from './schema';
@@ -24,7 +25,8 @@ import { blockKind } from './schema';
 // the runner secret and the turn, and Convex applies every rule itself: the
 // author is the turn's participant, never an argument; the turn must be
 // running under its claimed command; reviews never see the document and
-// follow-ups only read it. A refused call returns a reason and a message the
+// follow-ups only read it; a scribe turn changes it only through its draft.
+// A refused call returns a reason and a message the
 // model can act on, rather than throwing. Model writes never take a lease:
 // each is a compare-and-set against the block's rev that refuses while a
 // person holds the block. Nothing here reads team chat.
@@ -46,6 +48,8 @@ type Reason =
   | 'empty'
   | 'document_full'
   | 'quote_not_found'
+  | 'not_scribe'
+  | 'draft_full'
   | 'bad_request';
 
 export type Refusal = {
@@ -80,7 +84,9 @@ async function loadTurn(ctx: QueryCtx, secret: string, turnId: Id<'turns'>, need
   }
   if (documentMode(turn) === 'none') return refuse('no_document_access', 'An independent review works without the room document.');
   if (need === 'write' && !canWriteDocument(turn)) {
-    return refuse('read_only', 'This turn follows up an independent review: it can read the room document but not change it.');
+    return documentMode(turn) === 'scribe'
+      ? refuse('read_only', 'As the scribe, you change the room document only through your draft tools, and the draft is applied when your turn ends.')
+      : refuse('read_only', 'This turn follows up an independent review: it can read the room document but not change it.');
   }
   const document = await getDocument(ctx, turn.roomId);
   if (!document) return refuse('not_found', 'This room has no document yet.');
@@ -180,6 +186,7 @@ export const readDocumentForTurn = query({
       ok: true as const,
       rev: document.rev,
       writable: canWriteDocument(turn),
+      scribe: documentMode(turn) === 'scribe',
       blocks: blocks.map((b) => ({
         id: b._id,
         kind: b.kind,
@@ -312,5 +319,99 @@ export const commentForTurn = mutation({
     const author = (await ctx.db.get(turn.participantId))!;
     const commentId = await postComment(ctx, thread, author, text, turn._id);
     return { ok: true as const, threadId: thread._id, commentId };
+  },
+});
+
+const draftOp = v.union(
+  v.object({ op: v.literal('keep'), blockId: v.string() }),
+  v.object({ op: v.literal('replace'), blockId: v.string(), text: v.string(), kind: v.optional(blockKind), sourceBlockIds: v.optional(v.array(v.string())) }),
+  v.object({ op: v.literal('add'), kind: blockKind, text: v.string(), sourceBlockIds: v.array(v.string()), afterBlockId: v.optional(v.string()) }),
+  v.object({ op: v.literal('remove'), blockId: v.string() }),
+  v.object({ op: v.literal('move'), blockId: v.string(), afterBlockId: v.optional(v.string()) }),
+);
+
+const NOT_IN_DRAFT = 'There is no such block in the document or your draft. Use an id from read_document, or a draft id (new-N) that draft_add returned.';
+
+// Adds one operation to the scribe's draft and reports what the whole draft
+// would do. Only the turn acting for the document's running scribe run may
+// call it. Block ids are checked here; nothing reaches the document until the
+// turn finishes.
+export const scribeDraftForTurn = mutation({
+  args: { secret: v.string(), turnId: v.id('turns'), op: draftOp },
+  handler: async (ctx, { secret, turnId, op }) => {
+    const loaded = await loadTurn(ctx, secret, turnId, 'read');
+    if (!loaded.ok) return loaded;
+    const { turn, document } = loaded;
+    if (!turn.scribeRunId) return refuse('not_scribe', 'Only the scribe has draft tools. Change your own blocks with update_block, or comment.');
+    const run = await ctx.db.get(turn.scribeRunId);
+    if (!run || run.status !== 'running' || run.turnId !== turn._id || document.scribeRunId !== run._id || !scribeWorking(document, Date.now())) {
+      return refuse('turn_ended', 'This scribe run has ended, so its draft can no longer change.');
+    }
+    const ops = await draftOps(ctx, run._id);
+    if (ops.length >= DRAFT_OP_LIMIT) return refuse('draft_full', `The draft holds at most ${DRAFT_OP_LIMIT} operations. Finish with what you have.`);
+    const blocks = await liveBlocks(ctx, document._id);
+    const live = new Map(blocks.map((b) => [b._id as string, b._id]));
+    const plan = buildDraft(blocks, ops);
+    const seq = (ops.at(-1)?.seq ?? -1) + 1;
+
+    // A block in the document, or one the draft adds, as the op row names it.
+    const target = (raw: string) => {
+      const added = parseDraftId(raw);
+      if (added !== undefined) return plan.items.has(draftId(added)) ? { targetSeq: added } : null;
+      const blockId = live.get(raw);
+      return blockId ? { blockId } : null;
+    };
+    const after = (raw: string | undefined) => {
+      if (raw === undefined) return {};
+      if (raw === 'start') return { atStart: true };
+      const found = target(raw);
+      return found && { ...('blockId' in found ? { afterBlockId: found.blockId } : { afterSeq: found.targetSeq }) };
+    };
+    const sources = (raws: string[] | undefined) => {
+      if (raws === undefined) return undefined;
+      const ids = raws.map((raw) => live.get(raw));
+      return ids.every((id) => id !== undefined) ? (ids as Id<'blocks'>[]) : null;
+    };
+
+    let row: DraftOp;
+    if (op.op === 'add') {
+      const badText = checkText(op.text);
+      if (badText) return badText;
+      const place = after(op.afterBlockId);
+      if (!place) return refuse('not_found', NOT_IN_DRAFT);
+      const drawn = sources(op.sourceBlockIds);
+      if (!drawn) return refuse('not_found', 'Every source must be a block in the document now, by its id from read_document.');
+      row = { seq, op: 'add', kind: op.kind, text: op.text, sourceBlockIds: drawn, ...place };
+    } else {
+      const named = target(op.blockId);
+      if (!named) return refuse('not_found', NOT_IN_DRAFT);
+      if (op.op === 'keep') {
+        if (!('blockId' in named)) return refuse('bad_request', 'draft_keep is for blocks already in the document; a block you added is kept unless you remove it.');
+        row = { seq, op: 'keep', ...named };
+      } else if (op.op === 'replace') {
+        const badText = checkText(op.text);
+        if (badText) return badText;
+        const drawn = sources(op.sourceBlockIds);
+        if (drawn === null) return refuse('not_found', 'Every source must be a block in the document now, by its id from read_document.');
+        row = { seq, op: 'replace', ...named, text: op.text, ...(op.kind ? { kind: op.kind } : {}), ...(drawn ? { sourceBlockIds: drawn } : {}) };
+      } else if (op.op === 'remove') {
+        row = { seq, op: 'remove', ...named };
+      } else {
+        if (op.afterBlockId === op.blockId) return refuse('bad_request', 'A block cannot go after itself.');
+        const place = after(op.afterBlockId);
+        if (!place) return refuse('not_found', NOT_IN_DRAFT);
+        row = { seq, op: 'move', ...named, ...place };
+      }
+    }
+    const next = buildDraft(blocks, [...ops, row]);
+    if (finalItems(next).length > MODEL_LIMITS.documentBlocks) {
+      return refuse('document_full', `The document holds at most ${MODEL_LIMITS.documentBlocks} blocks. Merge or remove some instead.`);
+    }
+    await ctx.db.insert('scribeDraftOps', { scribeRunId: run._id, ...row });
+    return {
+      ok: true as const,
+      ...(row.op === 'add' ? { draftId: draftId(seq) } : {}),
+      report: await draftReport(ctx, document, next, ops.length + 1),
+    };
   },
 });

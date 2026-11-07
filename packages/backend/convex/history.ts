@@ -34,7 +34,8 @@ async function loadChangeSet(ctx: QueryCtx, changeSetId: Id<'changeSets'>) {
   return { changeSet, ...member };
 }
 
-// Change sets, newest first.
+// Change sets, newest first. A scribe run's also names the model that acted
+// as scribe and the person who called it in.
 export const list = query({
   args: { roomId: v.id('rooms'), paginationOpts: paginationOptsValidator },
   handler: async (ctx, { roomId, paginationOpts }) => {
@@ -46,16 +47,21 @@ export const list = query({
       .withIndex('by_document', (q) => q.eq('documentId', document._id))
       .order('desc')
       .paginate(paginationOpts);
-    return {
-      ...result,
-      page: result.page.map((c) => ({
+    const page = [];
+    for (const c of result.page) {
+      // A scribe run is the model that acted as scribe and the person who called it in.
+      const run = c.scribeRunId ? await ctx.db.get(c.scribeRunId) : null;
+      page.push({
         _id: c._id,
         kind: c.kind,
         actorParticipantId: c.actorParticipantId,
         at: c.at,
         revisionCount: c.revisionCount,
-      })),
-    };
+        scribeParticipantId: run?.participantId,
+        scribeStartedByParticipantId: run?.startedByParticipantId,
+      });
+    }
+    return { ...result, page };
   },
 });
 

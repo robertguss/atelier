@@ -128,6 +128,94 @@ export const documentTools: RoomToolSet = [
   }),
 ];
 
+const sourceBlockIds = z
+  .array(z.string())
+  .describe('Ids of the blocks in the document this text draws from, from read_document. Their authors are credited.');
+const placeAfter = z
+  .string()
+  .optional()
+  .describe('Put it right after this block: a block id, or a draft id (new-N) from draft_add. "start" puts it at the top; leave it out to put it at the end.');
+
+type DraftOp =
+  | { op: 'keep'; blockId: string }
+  | { op: 'replace'; blockId: string; text: string; kind?: 'heading' | 'paragraph' | 'listItem'; sourceBlockIds?: string[] }
+  | { op: 'add'; kind: 'heading' | 'paragraph' | 'listItem'; text: string; sourceBlockIds: string[]; afterBlockId?: string }
+  | { op: 'remove'; blockId: string }
+  | { op: 'move'; blockId: string; afterBlockId?: string };
+
+async function draft({ convex, secret, turnId }: ToolContext, op: DraftOp, done: (draftId?: string) => string) {
+  const result = await convex.mutation(api.documentTools.scribeDraftForTurn, { secret, turnId, op });
+  return result.ok ? `${done(result.draftId)}\n\n${renderReport(result.report)}` : result;
+}
+
+/**
+ * The scribe's tools: it reads the document and builds a draft, which is
+ * applied in one go when its turn ends. It gets no tool that writes the
+ * document directly.
+ */
+export const scribeTools: RoomToolSet = [
+  defineTool({
+    name: 'read_document',
+    description:
+      `${DOCUMENT_PURPOSE} You are its scribe in this turn. This lists every block in order with its id, kind and author, and the comment threads on it. Your draft names blocks by these ids.`,
+    shape: {},
+    async run({ convex, secret, turnId }) {
+      const doc = await convex.query(api.documentTools.readDocumentForTurn, { secret, turnId });
+      return doc.ok ? renderDocument(doc) : doc;
+    },
+  }),
+  defineTool({
+    name: 'draft_keep',
+    description: 'Mark a block as kept exactly as it is, undoing any earlier draft change to it. Blocks your draft never mentions are kept anyway.',
+    shape: { blockId },
+    async run(ctx, { blockId }) {
+      return await draft(ctx, { op: 'keep', blockId }, () => `Block ${blockId} is kept as it is.`);
+    },
+  }),
+  defineTool({
+    name: 'draft_replace',
+    description:
+      'Rewrite a block in your draft. Use it to merge blocks too: rewrite one with the combined text, list the others in sourceBlockIds, then draft_remove them. ' +
+      'The block becomes the scribe\'s, crediting the authors of the block and its sources. A later draft_replace of the same block replaces this one.',
+    shape: {
+      blockId: z.string().describe('A block id from read_document, or a draft id (new-N) from draft_add.'),
+      text: z.string().describe('The full new text of the block.'),
+      kind: z.enum(['heading', 'paragraph', 'listItem']).optional().describe('Change the kind of block; leave it out to keep it.'),
+      sourceBlockIds: sourceBlockIds.optional(),
+    },
+    async run(ctx, args) {
+      return await draft(ctx, { op: 'replace', ...args }, () => `Block ${args.blockId} is rewritten in the draft.`);
+    },
+  }),
+  defineTool({
+    name: 'draft_add',
+    description:
+      'Add a new block to your draft, listing in sourceBlockIds the blocks it draws from (an empty list for a new heading that draws on none). ' +
+      'Returns its draft id (new-N), which later draft operations can name. To add several blocks in a row, put each after the one you added before it.',
+    shape: { kind: z.enum(['heading', 'paragraph', 'listItem']), text: z.string().describe('Markdown text of this one block.'), sourceBlockIds, afterBlockId: placeAfter },
+    async run(ctx, args) {
+      return await draft(ctx, { op: 'add', ...args }, (id) => `Added ${id} to the draft.`);
+    },
+  }),
+  defineTool({
+    name: 'draft_remove',
+    description:
+      'Remove a block in your draft. Its text stays in the document\'s history. If its content lives on in a block you wrote, list it in that block\'s sourceBlockIds so its comment threads can follow.',
+    shape: { blockId: z.string().describe('A block id from read_document, or a draft id (new-N) from draft_add.') },
+    async run(ctx, { blockId }) {
+      return await draft(ctx, { op: 'remove', blockId }, () => `Block ${blockId} is removed in the draft.`);
+    },
+  }),
+  defineTool({
+    name: 'draft_move',
+    description: 'Move a block to another place in your draft, keeping its text and author.',
+    shape: { blockId: z.string().describe('A block id from read_document, or a draft id (new-N) from draft_add.'), afterBlockId: placeAfter },
+    async run(ctx, args) {
+      return await draft(ctx, { op: 'move', ...args }, () => `Block ${args.blockId} is moved in the draft.`);
+    },
+  }),
+];
+
 /** The MCP `tools/list` entries for a tool set. */
 export function listTools(tools: RoomToolSet = documentTools) {
   return tools.map((t) => {
@@ -189,10 +277,16 @@ const indent = (text: string) => text.split('\n').map((line) => `  ${line}`).joi
 
 type DocumentView = Extract<FunctionReturnType<typeof api.documentTools.readDocumentForTurn>, { ok: true }>;
 type ThreadView = Extract<FunctionReturnType<typeof api.documentTools.readThreadForTurn>, { ok: true }>;
+type DraftReport = Extract<FunctionReturnType<typeof api.documentTools.scribeDraftForTurn>, { ok: true }>['report'];
+
+function access(doc: DocumentView) {
+  if (doc.scribe) return 'You are its scribe: change it only through your draft tools, which apply when your turn ends.';
+  return doc.writable ? 'You can add blocks, change and delete your own, and comment on any block.' : 'This turn can read the document but not change it.';
+}
 
 function renderDocument(doc: DocumentView) {
   const lines = [
-    `Room document at rev ${doc.rev}. ${doc.writable ? 'You can add blocks, change and delete your own, and comment on any block.' : 'This turn can read the document but not change it.'}`,
+    `Room document at rev ${doc.rev}. ${access(doc)}`,
     '',
     'Blocks, in order:',
   ];
@@ -215,5 +309,30 @@ function renderThread(thread: ThreadView) {
   const where = thread.detached ? 'its passage was removed from the document' : `on block ${thread.blockId}`;
   const lines = [`Thread ${thread.id} | ${thread.state} | ${where}`, `Passage: "${thread.passage}"`, '', 'Comments:'];
   for (const c of thread.comments) lines.push(`- ${c.author}, ${new Date(c.at).toISOString()}:`, indent(c.body));
+  return lines.join('\n');
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+// What the whole draft would do if the turn ended now.
+function renderReport(r: DraftReport) {
+  const more = r.untouched.count > r.untouched.ids.length ? `, and ${r.untouched.count - r.untouched.ids.length} more` : '';
+  const lines = [
+    `Draft so far: ${plural(r.operations, 'operation')}. Of the ${plural(r.blocks, 'block')} in the document, ${r.replaced} rewritten, ${r.removed} removed, ${r.moved} moved; ${r.added} added. The document will have ${plural(r.finalBlocks, 'block')}.`,
+    r.untouched.count
+      ? `Not mentioned by the draft, so kept exactly as they are: ${plural(r.untouched.count, 'block')} (${r.untouched.ids.join(', ')}${more}).`
+      : 'Every block in the document is mentioned by the draft.',
+  ];
+  if (r.removedUndrawn.length) {
+    lines.push(`Removed and drawn on by no block, so their text leaves the document (history keeps it): ${r.removedUndrawn.join(', ')}.`);
+  }
+  if (r.threads.moving.length) {
+    lines.push('Comment threads that will move with their passage:');
+    for (const t of r.threads.moving) lines.push(`- thread ${t.threadId} ("${t.passage}") to ${t.toBlockId}`);
+  }
+  if (r.threads.detaching.length) {
+    lines.push('Comment threads that will lose their passage (they stay open and link to the version before your run):');
+    for (const t of r.threads.detaching) lines.push(`- thread ${t.threadId} ("${t.passage}") on ${t.blockId}`);
+  }
   return lines.join('\n');
 }

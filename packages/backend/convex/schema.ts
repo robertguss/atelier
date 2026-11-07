@@ -251,6 +251,10 @@ export default defineSchema({
     // The document rev the turn's claim showed it. Saved beside its session
     // when the turn finishes, never before, so a failed turn advances nothing.
     documentRev: v.optional(v.number()),
+    // Set on the turn that acts as scribe for a scribe run. Like a review, it
+    // runs on a fresh session that is never saved, with file edits off, and
+    // takes no steer; it changes the document only through its draft.
+    scribeRunId: v.optional(v.id('scribeRuns')),
   })
     .index('by_room', ['roomId'])
     .index('by_ritual', ['ritualId'])
@@ -548,18 +552,27 @@ export default defineSchema({
     status: v.union(v.literal('running'), v.literal('committed'), v.literal('released')),
     startedAt: v.number(),
     endedAt: v.optional(v.number()),
+    // Why a released run ended without changing the document.
+    releaseReason: v.optional(v.string()),
   })
     // A document's runs.
     .index('by_document', ['documentId']),
 
   // One row per operation in a scribe run's draft, so a large draft never
   // forms one oversized row. Applied in `seq` order when the run commits.
+  // An op names a block already in the document by `blockId`, or one the
+  // draft adds by the `seq` of its add op (`targetSeq`); likewise for the
+  // block it goes after (`afterBlockId`, `afterSeq`, or `atStart`). With
+  // none of those it goes at the end.
   scribeDraftOps: defineTable({
     scribeRunId: v.id('scribeRuns'),
     seq: v.number(),
     op: v.union(v.literal('keep'), v.literal('replace'), v.literal('add'), v.literal('remove'), v.literal('move')),
     blockId: v.optional(v.id('blocks')),
+    targetSeq: v.optional(v.number()),
     afterBlockId: v.optional(v.id('blocks')),
+    afterSeq: v.optional(v.number()),
+    atStart: v.optional(v.boolean()),
     kind: v.optional(blockKind),
     text: v.optional(v.string()),
     sourceBlockIds: v.optional(v.array(v.id('blocks'))),

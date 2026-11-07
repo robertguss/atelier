@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { getFunctionName } from 'convex/server';
 import type { Harness, HarnessEvent, QuestionCard, TurnInput, TurnRequest } from '@atelier/shared';
 import { eventQueue } from './adapters/events.ts';
+import { documentTools, scribeTools, type RoomToolSet } from './roomTools.ts';
 import { createTurns, type TurnsClient } from './turns.ts';
 
 afterEach(() => mock.timers.reset());
@@ -77,15 +78,15 @@ function runJob(turnId: string) {
 // Issues one token per turn and records what is still live.
 function fakeRoomTools() {
   const live = new Map<string, string>();
-  const issued: { turnId: string; token: string }[] = [];
+  const issued: { turnId: string; token: string; tools?: RoomToolSet }[] = [];
   let next = 0;
   return {
     live,
     issued,
-    async issue(turnId: string) {
+    async issue(turnId: string, tools?: RoomToolSet) {
       const token = `room-token-${++next}`;
       live.set(token, turnId);
-      issued.push({ turnId, token });
+      issued.push({ turnId, token, tools });
       return { url: 'http://127.0.0.1:40123/mcp', token };
     },
     revoke(token: string) { live.delete(token); },
@@ -363,4 +364,43 @@ test('the room tools token never reaches Convex, the transcript or the logs', as
     log.mock.restore();
     error.mock.restore();
   }
+});
+
+test('a scribe turn runs on a fresh session it never saves, with edits off, the scribe tools and no question cards', async () => {
+  const scribe = {
+    ...runJob('t-scribe'),
+    commandId: 'c-scribe',
+    documentMode: 'scribe',
+    participant: { id: 'p-claude', harness: 'claude', sessionId: 'ordinary-session' },
+  };
+  const s = setup({ 'c-scribe': scribe });
+  s.replies['runner:start'] = () => ({ editsEnabled: true });
+  const turn = s.turns.handle('c-scribe');
+  await until(() => s.runs[0]);
+  const run = s.runs[0]!;
+  assert.equal(run.req.scribe, true);
+  assert.equal(run.req.resumeSessionId, undefined);
+  assert.equal(run.req.editsEnabled, false);
+  assert.equal(s.roomTools.issued[0]!.tools, scribeTools);
+  assert.deepEqual(scribeTools.map((t) => t.name), ['read_document', 'draft_keep', 'draft_replace', 'draft_add', 'draft_remove', 'draft_move']);
+  assert.ok(!scribeTools.some((t) => documentTools.includes(t) && t.name !== 'read_document'));
+
+  await assert.rejects(run.input.onQuestion(card), /without asking questions/);
+  end(run, { type: 'session', sessionId: 'scribe-session' }, { type: 'final', text: 'Tidied' });
+  await turn;
+  assert.equal(s.named('runner:raiseHand').length, 0);
+  assert.equal(s.named('runner:sessionStarted').length, 0);
+  const [finished] = s.named('runner:finish');
+  assert.equal(finished.sessionId, undefined);
+  assert.equal(s.transcript.some((r) => JSON.stringify(r).includes('ordinary-session')), false);
+});
+
+test('an ordinary turn gets the ordinary document tools', async () => {
+  const s = setup();
+  const turn = s.turns.handle('c-run');
+  await until(() => s.runs[0]);
+  assert.equal(s.runs[0]!.req.scribe, undefined);
+  assert.equal(s.roomTools.issued[0]!.tools, undefined);
+  end(s.runs[0]!, { type: 'final', text: 'done' });
+  await turn;
 });

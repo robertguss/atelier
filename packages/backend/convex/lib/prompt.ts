@@ -63,9 +63,10 @@ export function envelope(e: Envelope) {
 const DOCUMENT_LINE = {
   write: 'Room document: you may add and update your own blocks and comment on others.',
   read: 'Room document: read-only in this turn.',
+  scribe: 'Room document: you are its scribe in this turn, and change it only through your draft.',
 };
 
-export function contextBlock(c: RoomContext, documentMode: 'read' | 'write') {
+export function contextBlock(c: RoomContext, documentMode: keyof typeof DOCUMENT_LINE) {
   const lines = [
     '<room_context>',
     `You are working in the Atelier room "${neutralize(c.roomName)}". More than one person can message you; each message is wrapped in a <message> tag naming its author.`,

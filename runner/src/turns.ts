@@ -7,6 +7,7 @@ import type { Id } from '@atelier/backend/dataModel';
 import type { Harness, HarnessId, QuestionAnswer, QuestionCard, SteerOutcome, TurnInput } from '@atelier/shared';
 import { turnInput } from './adapters/events.ts';
 import { reviewSnapshot } from './review.ts';
+import { scribeTools } from './roomTools.ts';
 import type { RoomToolsServer } from './roomToolsServer.ts';
 
 const PROGRESS_MS = 500;
@@ -19,7 +20,7 @@ export interface TurnsOptions {
   client: TurnsClient;
   secret: string;
   harnesses: Partial<Record<HarnessId, Harness>>;
-  /** Issues each ordinary turn a token for the room document tools. */
+  /** Issues each turn but a review a token for its room document tools. */
   roomTools: Pick<RoomToolsServer, 'issue' | 'revoke'>;
   appendTranscript(turnId: string, record: unknown): void;
   transcriptPath(turnId: string): string;
@@ -101,6 +102,10 @@ export function createTurns({ client, secret, harnesses, roomTools, appendTransc
     }
 
     const effectiveModel = job.participant.model ?? defaultModels[harness.id];
+    // A scribe turn, like a review, starts a fresh session and never saves
+    // it, so the scribe's instructions never reach the participant's
+    // ordinary session. It edits no files and asks no questions.
+    const scribe = job.documentMode === 'scribe';
     const abort = new AbortController();
     let ended = false;
     // The deadline stops counting while the agent waits on a card.
@@ -116,6 +121,7 @@ export function createTurns({ client, secret, harnesses, roomTools, appendTransc
       return question;
     };
     const onQuestion = async (card: QuestionCard) => {
+      if (scribe) throw new Error('The scribe works without asking questions: decide, and note open questions in the document.');
       const answer = new Promise<QuestionAnswer>((resolve, reject) => questions.set(card.requestId, { resolve, reject }));
       deadline.pause();
       try {
@@ -147,7 +153,7 @@ export function createTurns({ client, secret, harnesses, roomTools, appendTransc
     let text = '';
     let finalText: string | null = null;
     let error: string | null = null;
-    let sessionId = job.participant.sessionId;
+    let sessionId = scribe ? undefined : job.participant.sessionId;
     let savedSessionId: string | undefined;
     let usage: { inputTokens: number; outputTokens: number; costUsd?: number } | undefined;
 
@@ -179,7 +185,7 @@ export function createTurns({ client, secret, harnesses, roomTools, appendTransc
 
     try {
       const started = await client.mutation(api.runner.start, { secret, turnId, harnessVersion: await harness.version() });
-      if (!job.turn.independentReview) route = await roomTools.issue(turnId);
+      if (!job.turn.independentReview) route = await roomTools.issue(turnId, scribe ? scribeTools : undefined);
       // Start polling only after start commits: a queued turn is not cancelled.
       timer = setInterval(() => flush().catch((e) => console.error('progress failed:', e)), PROGRESS_MS);
       console.log(`turn ${turnId}: ${harness.id} in ${job.room.cwd}`);
@@ -191,10 +197,11 @@ export function createTurns({ client, secret, harnesses, roomTools, appendTransc
           cwd: job.room.cwd,
           prompt: job.turn.prompt + (job.turn.ritualId ? await client.mutation(api.runner.prepareReview, { secret, ritualId: job.turn.ritualId, snapshot: await reviewSnapshot(job.room.cwd) }) : ''),
           independentReview: job.turn.independentReview,
+          ...(scribe ? { scribe: true } : {}),
           model: effectiveModel,
           reasoning: parseReasoning(job.participant.reasoning),
           resumeSessionId: sessionId,
-          editsEnabled: !job.turn.independentReview && started?.editsEnabled === true,
+          editsEnabled: !job.turn.independentReview && !scribe && started?.editsEnabled === true,
           mcpServers: [],
           ...(route ? { roomTools: route } : {}),
         },
@@ -202,6 +209,7 @@ export function createTurns({ client, secret, harnesses, roomTools, appendTransc
         turn.input,
       )) {
         if (ev.type === 'session') {
+          if (scribe) continue;
           sessionId = ev.sessionId;
           if (sessionId !== savedSessionId) {
             savedSessionId = sessionId;

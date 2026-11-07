@@ -31,6 +31,12 @@ export interface TurnRequest {
   /** Sealed independent review: fresh session, supplied snapshot, no execution tools. */
   independentReview?: boolean;
   /**
+   * The turn acts as scribe for the room document: a fresh session that is
+   * never saved, file edits off, no question cards, and the scribe's draft
+   * tools in `roomTools` instead of the ordinary document tools.
+   */
+  scribe?: boolean;
+  /**
    * Extra MCP servers for the turn. The runner sends none: the room document
    * tools travel in `roomTools`, and each adapter attaches them its own way.
    */

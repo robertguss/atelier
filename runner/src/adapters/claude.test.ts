@@ -61,6 +61,8 @@ const permission = (id: string, tool_name: string, input: unknown) => ({ permiss
 interface Options {
   editsEnabled?: boolean;
   independentReview?: boolean;
+  scribe?: boolean;
+  resumeSessionId?: string;
   roomTools?: { url: string; token: string };
   cancelled?: boolean;
   onQuestion?: (card: QuestionCard) => Promise<QuestionAnswer>;
@@ -83,6 +85,8 @@ async function runFake(steps: unknown[], opts: Options = {}) {
     const turn = harness.runTurn({
       turnId: 'test', cwd, prompt: 'Plan the launch', editsEnabled: opts.editsEnabled ?? false,
       independentReview: opts.independentReview, mcpServers: [],
+      ...(opts.scribe ? { scribe: true } : {}),
+      ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
       ...(opts.roomTools ? { roomTools: opts.roomTools } : {}),
     }, new AbortController().signal, input);
     for await (const ev of turn) { events.push(ev); opts.onEvent?.(ev, input, cwd); }
@@ -339,4 +343,26 @@ test('a Claude document tool call shows up as a turn item with the tool name and
     { type: 'tool_result', id: 'doc-1', ok: true },
   ]);
   assert.doesNotMatch(JSON.stringify(events), /ROOM-TOKEN-SECRET/);
+});
+
+test('a Claude scribe turn starts a fresh session it never saves, gets the scribe tools, and has its question cards denied', async () => {
+  let asked = false;
+  const questions = [{ question: 'Merge these?', header: 'Merge', options: [{ label: 'Yes', description: '' }, { label: 'No', description: '' }], multiSelect: false }];
+  const { calls, decision } = await runFake([init, permission('ask1', 'AskUserQuestion', { questions }), permission('w1', 'Write', { file_path: 'plan.md', content: 'x' }), result('ok')], {
+    scribe: true,
+    roomTools,
+    resumeSessionId: 'ordinary-session',
+    editsEnabled: false,
+    onQuestion: async () => { asked = true; throw new Error('unexpected'); },
+  });
+  assert.ok(calls[0].argv.includes('--no-session-persistence'));
+  assert.doesNotMatch(JSON.stringify(calls[0].argv), /ordinary-session|--resume/);
+  const initialize = calls.find((c) => c.type === 'control_request' && c.request.subtype === 'initialize');
+  assert.deepEqual(initialize.request.sdkMcpServerManifests.atelier.toolsListResult.tools.map((t: { name: string }) => t.name), [
+    'read_document', 'draft_keep', 'draft_replace', 'draft_add', 'draft_remove', 'draft_move',
+  ]);
+  assert.equal(decision('ask1').behavior, 'deny');
+  assert.match(decision('ask1').message, /without asking questions/);
+  assert.equal(asked, false);
+  assert.equal(decision('w1').behavior, 'deny');
 });

@@ -240,3 +240,13 @@ test('Pi edit guard allows in-folder files and blocks outside, control folders a
     await rm(outside, { recursive: true, force: true });
   }
 });
+
+test('a Pi scribe turn starts a fresh session it never saves, with edits off and the room tools extension', async () => {
+  await withFakePi(async (fake) => {
+    await fake.run({ scribe: true, editsEnabled: false, roomTools });
+    const argv = await fake.argv();
+    const extension = argv[argv.indexOf('--extension') + 1]!;
+    assert.deepEqual(argv, ['--mode', 'rpc', '--tools', 'read,grep,find,ls,atelier_*', '--extension', extension, '--no-session']);
+    assert.match(extension, /\/pi-room-tools-extension\.ts$/);
+  });
+});

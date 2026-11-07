@@ -5,9 +5,10 @@ import { contextBlock, loadRoomContext, renderMention, renderMessage, roomMember
 
 // Each agent has at most one active ordinary turn. Messages sent while it
 // works wait as `queued` and go in together, in send order, as the next turn.
-// Independent review turns stay outside this queue. A thread delivery, a
-// person's comment that @mentions the agent, waits in the same queue but
-// always runs as its own turn.
+// Independent review turns stay outside this queue. A scribe turn counts as
+// the agent's active turn, so messages to it wait until the run ends, but it
+// never takes a steer. A thread delivery, a person's comment that @mentions
+// the agent, waits in the same queue but always runs as its own turn.
 
 const HEARTBEAT_MS = 15_000;
 export const OFFLINE_AFTER_MS = 3 * HEARTBEAT_MS;
@@ -97,7 +98,7 @@ export async function dispatchNext(ctx: MutationCtx, participantId: Id<'particip
     .query('turns')
     .withIndex('by_participant', (q) => q.eq('participantId', participantId))
     .order('desc')
-    .filter((q) => q.eq(q.field('ritualId'), undefined))
+    .filter((q) => q.and(q.eq(q.field('ritualId'), undefined), q.eq(q.field('scribeRunId'), undefined)))
     .first();
   const stopper = previous?.status === 'interrupted' && previous.stoppedByParticipantId ? await ctx.db.get(previous.stoppedByParticipantId) : null;
   // A follow-up to a review or its decision may only read the document.
@@ -136,10 +137,10 @@ export async function dispatchNext(ctx: MutationCtx, participantId: Id<'particip
 }
 
 // Only a running ordinary turn takes a steer. A follow-up to a review or
-// decision, and a turn answering a thread mention, always run as their own
-// turn, so they neither take nor give one.
+// decision, a turn answering a thread mention, and a scribe turn always run
+// as their own turn, so they neither take nor give one.
 export function takesSteer(turn: Doc<'turns'> | null): turn is Doc<'turns'> {
-  return turn?.status === 'running' && !turn.followUp && !turn.threadId;
+  return turn?.status === 'running' && !turn.followUp && !turn.threadId && !turn.scribeRunId;
 }
 
 // The runner is back online: every agent in its rooms with a thread delivery

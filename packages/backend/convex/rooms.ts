@@ -124,6 +124,7 @@ export const addParticipant = mutation({
 // get the new value as a settings command. Codex and Pi fix their
 // permissions when a turn starts, so turning edits off also interrupts those
 // that started with edits on; one that started with edits off never had them.
+// Reviews and scribe turns never edit files, so they get no settings change.
 export const setEditsEnabled = mutation({
   args: { roomId: v.id('rooms'), on: v.boolean() },
   handler: async (ctx, { roomId, on }) => {
@@ -136,7 +137,7 @@ export const setEditsEnabled = mutation({
     await record(ctx, { roomId, type: 'room.edits_changed', actorParticipantId: owner._id, subjectId: roomId, payload: { editsEnabled: on } });
 
     const running = (await ctx.db.query('turns').withIndex('by_room', q => q.eq('roomId', roomId)).collect())
-      .filter(t => t.status === 'running' && !t.ritualId);
+      .filter(t => t.status === 'running' && !t.ritualId && !t.scribeRunId);
     for (const turn of running) {
       await ctx.db.insert('commands', { runnerId: room.runnerId, type: 'settings', turnId: turn._id, status: 'pending', payload: { editsEnabled: on } });
       const agent = await ctx.db.get(turn.participantId);

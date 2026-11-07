@@ -99,11 +99,15 @@ async function nextRev(ctx: MutationCtx, changeSetId: Id<'changeSets'>) {
 }
 
 // Appends the revision, then takes a checkpoint if one is due, so the
-// checkpoint includes this revision.
+// checkpoint includes this revision. Only a scribe commit writes while the
+// scribe lock is held, and it ends with its own checkpoint, so none is taken
+// in the middle of it.
 async function recordRevision(ctx: MutationCtx, revision: Omit<Doc<'blockRevisions'>, '_id' | '_creationTime'>) {
   await ctx.db.insert('blockRevisions', revision);
   const document = (await ctx.db.get(revision.documentId))!;
-  if (document.revisionsSinceCheckpoint >= CHECKPOINT_EVERY) await takeCheckpoint(ctx, document._id, 'interval');
+  if (document.revisionsSinceCheckpoint >= CHECKPOINT_EVERY && document.scribeRunId === undefined) {
+    await takeCheckpoint(ctx, document._id, 'interval');
+  }
 }
 
 export async function insertBlock(

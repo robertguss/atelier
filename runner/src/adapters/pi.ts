@@ -43,7 +43,8 @@ export function piHarness(opts: { cliPath?: string; onRaw: (id: string, event: u
           '--tools', [READ_TOOLS, ...(req.editsEnabled ? ['edit,write'] : []), ...(room ? [`${TOOL_PREFIX}*`] : [])].join(','),
           ...(req.editsEnabled ? ['--extension', guardExtension] : []),
           ...(room ? ['--extension', roomToolsExtension] : []),
-          ...(req.resumeSessionId ? ['--session', req.resumeSessionId] : []),
+          // A scribe turn starts fresh and is never saved.
+          ...(req.scribe ? ['--no-session'] : req.resumeSessionId ? ['--session', req.resumeSessionId] : []),
         ];
       // The token travels in the environment only, never in argv.
       const env = room ? { ATELIER_ROOM_URL: room.url, ATELIER_ROOM_TOKEN: room.token } : undefined;

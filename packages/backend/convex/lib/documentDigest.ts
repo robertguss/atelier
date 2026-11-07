@@ -2,6 +2,7 @@ import type { Doc, Id } from '../_generated/dataModel';
 import type { QueryCtx } from '../_generated/server';
 import { liveBlocks, scribeWorking } from './document';
 import { agentName, neutralize } from './prompt';
+import type { DocumentMode } from './visibility';
 
 // The room document as a model turn sees it when the runner claims the turn,
 // in a <room_document> section of its prompt. Block ids appear in it, so the
@@ -16,6 +17,7 @@ export const DIGEST_BUDGET = 24_000;
 const EXCERPT_LENGTHS = [80, 40, 20, 0];
 const LINE_LIMIT = 200;
 
+type DigestMode = Exclude<DocumentMode, 'none'>;
 type Thread = { thread: Doc<'threads'>; comments: Doc<'comments'>[] };
 type View = {
   document: Doc<'documents'>;
@@ -104,7 +106,7 @@ function outlineLine(view: View, block: Doc<'blocks'>, excerpt: number) {
   return shown ? `${header(view, block)}: ${neutralize(shown)}` : header(view, block);
 }
 
-function intro(view: View, mode: 'read' | 'write') {
+function intro(view: View, mode: DigestMode) {
   const lines = [
     "This is the room's shared document. Everyone in the room reads it, people and agents. Each block starts with its id in brackets; the document tools take these ids.",
   ];
@@ -112,6 +114,9 @@ function intro(view: View, mode: 'read' | 'write') {
     lines.push(
       'Add to it without being asked whenever something is worth keeping: a finding, an idea, a change of direction or an open question. You may update or delete blocks you wrote; comment on anyone else\'s instead of changing them.',
     );
+  } else if (mode === 'scribe') {
+    lines.push('You are its scribe in this turn. Your draft tools name blocks by these ids, and blocks your draft does not mention are kept as they are.');
+    return lines;
   } else {
     lines.push('You can read it in this turn but not change it.');
   }
@@ -180,7 +185,7 @@ async function changesSince(ctx: QueryCtx, document: Doc<'documents'>, seenRev: 
 export async function documentDigest(
   ctx: QueryCtx,
   document: Doc<'documents'>,
-  { participantId, mode, seenRev }: { participantId: Id<'participants'>; mode: 'read' | 'write'; seenRev?: number },
+  { participantId, mode, seenRev }: { participantId: Id<'participants'>; mode: DigestMode; seenRev?: number },
 ) {
   const view = await loadView(ctx, document, participantId);
   const lead = intro(view, mode);

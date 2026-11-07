@@ -8,6 +8,7 @@ import { ensureDocument } from './lib/document';
 import { documentDigest, withDigest } from './lib/documentDigest';
 import { record } from './lib/ledger';
 import { reviewFinished } from './lib/review';
+import { commitScribe, releaseScribe } from './lib/scribe';
 import { sessionResetAfter } from './lib/sessions';
 import { postComment } from './lib/threads';
 import { setStreamedText } from './lib/turnActivity';
@@ -63,19 +64,20 @@ export const claim = mutation({
     if (!participant || !room || !participant.harness) return null;
 
     // The turn runs with the switch as it is now, not as it was at dispatch.
-    const editsEnabled = room.editsEnabled === true;
+    // A scribe never edits files.
+    const editsEnabled = !turn.scribeRunId && room.editsEnabled === true;
     if (turn.editsEnabled !== editsEnabled) await ctx.db.patch(turn._id, { editsEnabled });
 
-    // A review never resumes a session. A follow-up never continues the
-    // ordinary session, even alone with the owner: that session could later
-    // write review content into the document a teammate reads. It runs on a
-    // session kept on its review, fixed here so finish saves to it.
+    // A review or a scribe turn never resumes a session. A follow-up never
+    // continues the ordinary session, even alone with the owner: that session
+    // could later write review content into the document a teammate reads. It
+    // runs on a session kept on its review, fixed here so finish saves to it.
     let session: { sessionId?: string; documentRevSeen?: number } = {};
     if (turn.followUp && !turn.ritualId) {
       await ctx.db.patch(turn._id, { followUp: { ...turn.followUp, separateSession: true } });
       const ritual = await ctx.db.get(turn.followUp.ritualId);
       session = ritual?.followUpSessions?.find((s) => s.participantId === participant._id) ?? {};
-    } else if (!turn.ritualId) {
+    } else if (!turn.ritualId && !turn.scribeRunId) {
       session = { sessionId: participant.harnessSessionId, documentRevSeen: participant.documentRevSeen };
     }
     const sessionId = session.sessionId;
@@ -118,7 +120,7 @@ export const start = mutation({
     const turn = await ctx.db.get(turnId);
     if (!turn || !isActiveTurnStatus(turn.status)) return null;
     const room = await ctx.db.get(turn.roomId);
-    const editsEnabled = room?.editsEnabled === true;
+    const editsEnabled = !turn.scribeRunId && room?.editsEnabled === true;
     await ctx.db.patch(turnId, { status: 'running', startedAt: Date.now(), harnessVersion, editsEnabled });
     await record(ctx, {
       roomId: turn.roomId,
@@ -174,7 +176,9 @@ export const finish = mutation({
     });
     await ctx.db.patch(args.commandId, { status: 'done', leaseExpiresAt: undefined });
     await closeOpenCards(ctx, args.turnId, 'cancelled', 'The turn ended before anyone answered');
-    if (args.sessionId && !turn.ritualId) await saveSession(ctx, turn, args.sessionId, turn.documentRev);
+    if (args.sessionId && !turn.ritualId && !turn.scribeRunId) await saveSession(ctx, turn, args.sessionId, turn.documentRev);
+    // A scribe's draft is applied now, if its run still holds the document.
+    if (turn.scribeRunId) await commitScribe(ctx, turn);
 
     // A turn answering a thread mention replies in the thread, not the chat.
     const participant = await ctx.db.get(turn.participantId);
@@ -305,14 +309,14 @@ export const steerResult = mutation({
 
 // Saves the harness session id as soon as the runner sees it, so a turn
 // interrupted before it finishes can still be resumed. Follows the same rules
-// as finish: reviews never save a session, and a follow-up saves to its
-// review. Only finish records the document rev the session has seen.
+// as finish: reviews and scribe turns never save a session, and a follow-up
+// saves to its review. Only finish records the document rev the session has seen.
 export const sessionStarted = mutation({
   args: { secret: v.string(), turnId: v.id('turns'), sessionId: v.string() },
   handler: async (ctx, { secret, turnId, sessionId }) => {
     requireRunnerSecret(secret);
     const turn = await ctx.db.get(turnId);
-    if (!turn || turn.ritualId || !isActiveTurnStatus(turn.status)) return;
+    if (!turn || turn.ritualId || turn.scribeRunId || !isActiveTurnStatus(turn.status)) return;
     await saveSession(ctx, turn, sessionId);
   },
 });
@@ -409,7 +413,9 @@ function seenRev(stored: { sessionId?: string; documentRevSeen?: number }, sessi
   return documentRevSeen ?? (stored.sessionId === sessionId ? stored.documentRevSeen : undefined);
 }
 
-async function failTurn(
+// Also releases a scribe run the turn was acting for, leaving the document
+// as it was before the run.
+export async function failTurn(
   ctx: MutationCtx,
   turnId: Id<'turns'>,
   commandId: Id<'commands'>,
@@ -427,6 +433,7 @@ async function failTurn(
   // A runner that went away expires the turn's open cards; any other failure
   // stopped the turn, which cancels them. Neither records a decision.
   await closeOpenCards(ctx, turnId, runnerLost ? 'expired' : 'cancelled', error);
+  if (turn.scribeRunId) await releaseScribe(ctx, turn.scribeRunId, 'released', error);
   await ctx.db.patch(turnId, {
     status: interrupted && !turn.ritualId ? 'interrupted' : 'failed',
     error,

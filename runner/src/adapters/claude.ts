@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { query, type CanUseTool, type Options, type PermissionResult, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { Harness, HarnessEvent, QuestionAnswer, QuestionCard, SteerOutcome } from '@atelier/shared';
 import { eventQueue } from './events.ts';
-import { claudeRoomToolsServer } from '../roomTools.ts';
+import { claudeRoomToolsServer, documentTools, scribeTools } from '../roomTools.ts';
 import { loopbackCaller } from '../roomToolsServer.ts';
 
 const run = promisify(execFile);
@@ -41,7 +41,8 @@ export function claudeHarness(opts: { executable: string; onRaw: (turnId: string
       };
       let accepting = !req.independentReview;
       if (!req.independentReview) {
-        input.setEditsEnabled = (on) => { editsEnabled = on; };
+        // A scribe never edits files, whatever the switch does mid-turn.
+        if (!req.scribe) input.setEditsEnabled = (on) => { editsEnabled = on; };
         // Sent as typed, with priority 'next': it joins the running turn at the
         // next tool result. 'now' would end the turn instead.
         input.steer = (text) => {
@@ -62,6 +63,8 @@ export function claudeHarness(opts: { executable: string; onRaw: (turnId: string
       const room = req.independentReview ? undefined : req.roomTools;
 
       const canUseTool: CanUseTool = async (toolName, toolInput, { toolUseID }) => {
+        // A scribe turn must not sit waiting on a card.
+        if (toolName === 'AskUserQuestion' && req.scribe) return deny('The scribe works without asking questions: decide, and keep open questions in the document.');
         if (toolName === 'AskUserQuestion') return await askRoom(toolInput, toolUseID, input.onQuestion);
         if (room && toolName.startsWith(ROOM_TOOL_PREFIX)) return { behavior: 'allow', updatedInput: toolInput };
         if (EDIT_TOOLS.has(toolName)) {
@@ -100,9 +103,10 @@ export function claudeHarness(opts: { executable: string; onRaw: (turnId: string
         // acceptEdits, which would also approve rm, mv and sed in the folder.
         permissionMode: 'default',
         canUseTool,
-        ...(room ? { mcpServers: { atelier: claudeRoomToolsServer(loopbackCaller(room)) } } : {}),
+        ...(room ? { mcpServers: { atelier: claudeRoomToolsServer(loopbackCaller(room), req.scribe ? scribeTools : documentTools) } } : {}),
         ...(req.model ? { model: req.model } : {}),
-        ...(req.resumeSessionId ? { resume: req.resumeSessionId } : {}),
+        // A scribe turn starts fresh and is never saved, like a review.
+        ...(req.scribe ? { persistSession: false } : req.resumeSessionId ? { resume: req.resumeSessionId } : {}),
       };
 
       let q: Query;

@@ -6,6 +6,7 @@ import { answerCard, closeOpenCards, ownerOnlyCard, waitingCard } from './lib/ca
 import { activeOrdinaryTurn, dispatchNext, isActiveTurnStatus, requireRunnerOnline, steerMessage, takesSteer } from './lib/dispatch';
 import { findLedger, record } from './lib/ledger';
 import { reviewFinished } from './lib/review';
+import { releaseScribe } from './lib/scribe';
 import { streamedText } from './lib/turnActivity';
 import { visibleMessage, visibleTurn } from './lib/visibility';
 
@@ -166,6 +167,8 @@ export const cancel = mutation({
       stoppedByParticipantId: participant._id,
     });
     await closeOpenCards(ctx, turnId, 'cancelled', reason);
+    // Stopping the scribe leaves the document as it was before its run.
+    if (turn.scribeRunId) await releaseScribe(ctx, turn.scribeRunId, 'released', reason);
     await reviewFinished(ctx, turn);
     for (const command of await ctx.db.query('commands').withIndex('by_turn', (q) => q.eq('turnId', turnId)).collect()) {
       if (command.status === 'pending' || command.status === 'claimed') await ctx.db.patch(command._id, { status: 'failed', error: reason, leaseExpiresAt: undefined });

@@ -164,10 +164,12 @@ export function codexHarness(opts: { executable: string; onRaw: (id: string, eve
         const sandboxPolicy = req.editsEnabled
           ? { type: 'workspaceWrite', writableRoots: [req.cwd], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true }
           : { type: 'readOnly' };
-        const resume = req.independentReview ? undefined : req.resumeSessionId;
+        // Reviews and scribe turns start fresh and are never saved.
+        const resume = req.independentReview || req.scribe ? undefined : req.resumeSessionId;
         const { thread } = await call(resume ? 'thread/resume' : 'thread/start', {
           ...(resume ? { threadId: resume } : {}),
           ...(req.independentReview ? { config: reviewConfig, ephemeral: true } : roomConfig ? { config: roomConfig } : {}),
+          ...(req.scribe ? { ephemeral: true } : {}),
           cwd: req.cwd, model: req.model, approvalPolicy, sandbox: req.editsEnabled ? 'workspace-write' : 'read-only',
         });
         threadId = thread.id;
