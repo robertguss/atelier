@@ -23,6 +23,8 @@ interface BlockProps {
   meId: string | null;
   /** Who holds an unexpired lease on the block, if anyone. */
   holderId: string | null;
+  /** A scribe run holds the document: the block can be read and commented on, not changed. */
+  locked: boolean;
   isFirst: boolean;
   isLast: boolean;
   editing: boolean;
@@ -44,6 +46,7 @@ export function Block({
   names,
   meId,
   holderId,
+  locked,
   isFirst,
   isLast,
   editing,
@@ -63,6 +66,7 @@ export function Block({
   const [adding, setAdding] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const otherHolder = holderId && holderId !== meId ? holderId : null;
+  const blocked = locked || !!otherHolder;
 
   const run = async (action: () => Promise<unknown>) => {
     setError(null);
@@ -114,19 +118,19 @@ export function Block({
           aria-label={`${KIND_LABEL[block.kind]} actions`}
           className="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100"
         >
-          <ToolButton label="Edit" disabled={editing || !!otherHolder} onClick={() => void edit()}>
+          <ToolButton label="Edit" disabled={editing || blocked} onClick={() => void edit()}>
             <PencilIcon />
           </ToolButton>
-          <ToolButton label="Add below" pressed={adding} onClick={() => setAdding((a) => !a)}>
+          <ToolButton label="Add below" disabled={locked} pressed={adding && !locked} onClick={() => setAdding((a) => !a)}>
             <PlusIcon />
           </ToolButton>
-          <ToolButton label="Move up" disabled={isFirst || !!otherHolder} onClick={() => void run(() => move({ blockId, direction: 'up' }))}>
+          <ToolButton label="Move up" disabled={isFirst || blocked} onClick={() => void run(() => move({ blockId, direction: 'up' }))}>
             <ArrowUpIcon />
           </ToolButton>
-          <ToolButton label="Move down" disabled={isLast || !!otherHolder} onClick={() => void run(() => move({ blockId, direction: 'down' }))}>
+          <ToolButton label="Move down" disabled={isLast || blocked} onClick={() => void run(() => move({ blockId, direction: 'down' }))}>
             <ArrowDownIcon />
           </ToolButton>
-          <ToolButton label="Delete" disabled={editing || !!otherHolder} onClick={() => setConfirmingDelete(true)}>
+          <ToolButton label="Delete" disabled={editing || blocked} onClick={() => setConfirmingDelete(true)}>
             <Trash2Icon />
           </ToolButton>
         </div>
@@ -136,7 +140,7 @@ export function Block({
           {error}
         </p>
       ) : null}
-      {confirmingDelete ? (
+      {confirmingDelete && !locked ? (
         <div role="group" aria-label="Confirm deletion" className="mt-1.5 flex flex-wrap items-center gap-2 text-sm">
           <span className="mr-auto">Delete this block? History keeps a copy.</span>
           <Button
@@ -158,7 +162,7 @@ export function Block({
       {commentDraft && !editing ? (
         <NewComment passage={commentDraft} exact={block.text.slice(commentDraft.start, commentDraft.end)} models={models} onDone={onCommentDone} />
       ) : null}
-      {adding ? (
+      {adding && !locked ? (
         <AddChoices
           roomId={roomId}
           place={{ afterBlockId: blockId }}

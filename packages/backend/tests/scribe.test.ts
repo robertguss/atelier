@@ -492,3 +492,27 @@ test('a 600-block document of 4,000-character blocks checkpoints before the run,
   const checkpoints = await s.t.run(ctx => ctx.db.query('documentCheckpoints').collect());
   expect(checkpoints.filter(c => c.reason === 'interval' && c.rev > changeSet!.lastRev - 600)).toEqual([]);
 });
+
+test('the room\'s latest scribe run shows its scribe, who started it and its turn while working, then how it ended and its change set', async () => {
+  const s = await setup();
+  const outsider = s.t.withIdentity({ email: 'eve@example.com', subject: 'eve', name: 'Eve' });
+  expect(await s.dana.query(api.scribe.latest, { roomId: s.roomId })).toBeNull();
+
+  const stopped = await runWithDraft(s);
+  const working = await s.dana.query(api.scribe.latest, { roomId: s.roomId });
+  expect(working).toMatchObject({ runId: stopped.scribeRunId, participantId: s.claude._id, startedByParticipantId: s.danaP._id, status: 'running', turnId: stopped.turnId, startedAt: (await runOf(s.t, stopped.scribeRunId)).startedAt });
+  expect(working!.changeSetId).toBeUndefined();
+  expect(working!.stoppedByParticipantId).toBeUndefined();
+  await expect(outsider.query(api.scribe.latest, { roomId: s.roomId })).rejects.toThrow('Not a member of this room');
+
+  await s.owner.mutation(api.messages.cancel, { turnId: stopped.turnId });
+  expect(await s.dana.query(api.scribe.latest, { roomId: s.roomId })).toMatchObject({ runId: stopped.scribeRunId, status: 'released', releaseReason: 'Cancelled by owner', stoppedByParticipantId: s.robert._id });
+
+  const committed = await beginScribe(s.t, s.owner, s.roomId, s.pi._id);
+  await draft(s.t, committed.turnId, { op: 'replace', blockId: s.ideas._id, text: 'Ideas', sourceBlockIds: [] });
+  await finish(s.t, committed.turnId, committed.commandId);
+  const [changeSet] = await scribeChangeSets(s.t, s.documentId);
+  expect(await s.dana.query(api.scribe.latest, { roomId: s.roomId })).toMatchObject({
+    runId: committed.scribeRunId, participantId: s.pi._id, startedByParticipantId: s.robert._id, status: 'committed', changeSetId: changeSet!._id,
+  });
+});

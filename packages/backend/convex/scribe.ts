@@ -1,10 +1,10 @@
 import { v } from 'convex/values';
 import { internal } from './_generated/api';
 import type { Doc } from './_generated/dataModel';
-import { internalMutation, mutation, type MutationCtx } from './_generated/server';
+import { internalMutation, mutation, query, type MutationCtx } from './_generated/server';
 import { requireMember } from './lib/auth';
 import { isActiveTurnStatus, requireRunnerOnline } from './lib/dispatch';
-import { SCRIBE_WORKING, ensureDocument, leaseHolder, liveBlocks, participantName, scribeWorking, takeCheckpoint } from './lib/document';
+import { SCRIBE_WORKING, ensureDocument, getDocument, leaseHolder, liveBlocks, participantName, scribeWorking, takeCheckpoint } from './lib/document';
 import { record } from './lib/ledger';
 import { agentName, contextBlock, loadRoomContext, neutralize, roomMembers, turnPrompt } from './lib/prompt';
 import { SCRIBE_LOCK_MS, SCRIBE_OUT_OF_TIME, releaseScribe } from './lib/scribe';
@@ -115,5 +115,41 @@ export const expireLock = internalMutation({
     const document = await ctx.db.get(run.documentId);
     if (document?.scribeRunId === run._id && scribeWorking(document, Date.now())) return;
     await expireRun(ctx, run);
+  },
+});
+
+// The room's running or most recent scribe run, for its members: who acts as
+// scribe, who called it in, its turn (which Stop cancels), how it ended, who
+// stopped it if someone did and, once committed with changes, its change
+// set. Null before the first run.
+export const latest = query({
+  args: { roomId: v.id('rooms') },
+  handler: async (ctx, { roomId }) => {
+    await requireMember(ctx, roomId);
+    const document = await getDocument(ctx, roomId);
+    if (!document) return null;
+    const run = await ctx.db
+      .query('scribeRuns')
+      .withIndex('by_document', (q) => q.eq('documentId', document._id))
+      .order('desc')
+      .first();
+    if (!run) return null;
+    const changeSet = await ctx.db
+      .query('changeSets')
+      .withIndex('by_scribe_run', (q) => q.eq('scribeRunId', run._id))
+      .first();
+    const turn = run.turnId ? await ctx.db.get(run.turnId) : null;
+    return {
+      runId: run._id,
+      participantId: run.participantId,
+      startedByParticipantId: run.startedByParticipantId,
+      startedAt: run.startedAt,
+      endedAt: run.endedAt,
+      status: run.status,
+      releaseReason: run.releaseReason,
+      turnId: run.turnId,
+      stoppedByParticipantId: turn?.stoppedByParticipantId,
+      changeSetId: changeSet?._id,
+    };
   },
 });

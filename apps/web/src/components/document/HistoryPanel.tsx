@@ -7,7 +7,7 @@ import { PageSpinner } from '~/components/page';
 import { errorText } from '~/components/room/errors';
 import { Button } from '~/components/ui/button';
 import { Sheet, SheetDescription, SheetHeader, SheetPopup, SheetTitle } from '~/components/ui/sheet';
-import { changeSetText, markedVersion, type ChangeSetEntry } from '~/lib/document';
+import { entryText, markedVersion, type ChangeSetEntry } from '~/lib/document';
 import type { Names } from '~/lib/room';
 import { VersionView } from './VersionView';
 
@@ -18,35 +18,45 @@ function whenText(at: number) {
   return new Date(at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-function entryTitle(entry: ChangeSetEntry, names: Names) {
-  return changeSetText(entry.kind, names(entry.actorParticipantId));
+/** Whether the history panel is open, and the version it opened at, if one was asked for. */
+export type HistoryView = { open: false } | { open: true; changeSetId?: string };
+
+interface HistoryControlProps {
+  roomId: Id<'rooms'>;
+  names: Names;
+  view: HistoryView;
+  onView: (view: HistoryView) => void;
 }
 
 /** The document header's History button and the panel it opens. */
-export function HistoryControl({ roomId, names }: { roomId: Id<'rooms'>; names: Names }) {
-  const [open, setOpen] = useState(false);
+export function HistoryControl({ roomId, names, view, onView }: HistoryControlProps) {
+  const open = view.open;
   return (
     <>
-      <Button size="xs" variant="ghost-muted" onClick={() => setOpen(true)}>
+      <Button size="xs" variant="ghost-muted" onClick={() => onView({ open: true })}>
         <HistoryIcon />
         History
       </Button>
-      <Sheet open={open} onOpenChange={setOpen}>
+      <Sheet open={open} onOpenChange={(next) => onView(next ? { open: true } : { open: false })}>
         <SheetPopup side="right" className="w-[min(92vw,40rem)] max-w-none overflow-y-auto">
           <SheetHeader>
             <SheetTitle>History</SheetTitle>
             <SheetDescription>Every change to the document, newest first. Pick one to see the document as it stood then.</SheetDescription>
           </SheetHeader>
-          {open ? <HistoryBody roomId={roomId} names={names} /> : null}
+          {view.open ? <HistoryBody key={view.changeSetId ?? ''} roomId={roomId} names={names} initialChangeSetId={view.changeSetId} /> : null}
         </SheetPopup>
       </Sheet>
     </>
   );
 }
 
-function HistoryBody({ roomId, names }: { roomId: Id<'rooms'>; names: Names }) {
+function HistoryBody({ roomId, names, initialChangeSetId }: { roomId: Id<'rooms'>; names: Names; initialChangeSetId?: string }) {
   const { results, status, loadMore } = usePaginatedQuery(api.history.list, { roomId }, { initialNumItems: PAGE_SIZE });
-  const [selected, setSelected] = useState<ChangeSetEntry | null>(null);
+  // A version asked for when opening shows once its entry has loaded; one
+  // past the loaded pages leaves the list showing.
+  const [selectedId, setSelectedId] = useState<string | null>(initialChangeSetId ?? null);
+  const selected = selectedId ? (results.find((e) => e._id === selectedId) ?? null) : null;
+  const setSelected = (entry: ChangeSetEntry | null) => setSelectedId(entry?._id ?? null);
   const [restored, setRestored] = useState<ChangeSetEntry | null>(null);
 
   if (status === 'LoadingFirstPage') return <PageSpinner />;
@@ -88,7 +98,7 @@ function HistoryBody({ roomId, names }: { roomId: Id<'rooms'>; names: Names }) {
                 }}
               >
                 <span data-entry-title="" className="font-medium">
-                  {entryTitle(entry, names)}
+                  {entryText(entry, names)}
                 </span>
                 <span className="ml-auto shrink-0 text-xs text-muted-foreground">{whenText(entry.at)}</span>
               </button>
@@ -119,7 +129,7 @@ function SelectedVersion({ entry, names, isCurrent, onBack, onRestored }: Select
   const changeSetId = entry._id as Id<'changeSets'>;
   const version = useQuery(api.history.version, { changeSetId });
   const diff = useQuery(api.history.diff, { changeSetId });
-  const title = entryTitle(entry, names);
+  const title = entryText(entry, names);
 
   return (
     <section aria-label={`Version: ${title}`} className="space-y-3 px-6 pb-6">

@@ -7,11 +7,12 @@ import { PageSpinner } from '~/components/page';
 import { errorText } from '~/components/room/errors';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
-import { leaseHolder, sectionsOf, type DocBlock, type Passage, type Section, type ThreadsData } from '~/lib/document';
+import { leaseHolder, scribeLocked, sectionsOf, type DocBlock, type Passage, type Section, type ThreadsData } from '~/lib/document';
 import { useNow, type Names, type Participant } from '~/lib/room';
 import { renderedRange, selectionIn, sourceRange } from '~/lib/selection';
 import { AddChoices, Block, type AddPlace } from './Block';
-import { HistoryControl } from './HistoryPanel';
+import { HistoryControl, type HistoryView } from './HistoryPanel';
+import { ScribeBanner, ScribeControl, ScribeNotice, useEndedRun } from './ScribeControl';
 import { ThreadMargin } from './ThreadMargin';
 
 interface DocumentPaneProps {
@@ -19,7 +20,7 @@ interface DocumentPaneProps {
   names: Names;
   /** The person's own participant in this room. */
   meId: string | null;
-  /** The room's model participants, offered as mentions in comments. */
+  /** The room's model participants, offered as mentions in comments and as the scribe. */
   models: readonly Participant[];
   /** Only the owner writes templates. */
   isOwner: boolean;
@@ -29,6 +30,7 @@ interface DocumentPaneProps {
 export function DocumentPane({ roomId, names, meId, models, isOwner }: DocumentPaneProps) {
   const doc = useQuery(api.documents.get, { roomId });
   const threads = useQuery(api.threads.list, { roomId });
+  const scribeRun = useQuery(api.scribe.latest, { roomId });
   const ensure = useMutation(api.documents.ensure);
   const [ensureError, setEnsureError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<Id<'blocks'> | null>(null);
@@ -39,6 +41,11 @@ export function DocumentPane({ roomId, names, meId, models, isOwner }: DocumentP
   const [commentDraft, setCommentDraft] = useState<Passage | null>(null);
   const textRef = useRef<HTMLDivElement>(null);
   useCommentHighlights(textRef, blocks, threads, commentDraft);
+  const [historyView, setHistoryView] = useState<HistoryView>({ open: false });
+  // While a scribe run holds the document, nobody edits, adds, moves or deletes blocks; comments still work.
+  const locked = !!doc && scribeLocked(doc, now);
+  const lockedRunId = locked ? (doc.scribeRunId ?? null) : null;
+  const { ended, dismiss } = useEndedRun(lockedRunId, scribeRun);
 
   // Rooms made before documents existed get theirs seeded on first open.
   const ensuredFor = useRef<string | null>(null);
@@ -76,6 +83,7 @@ export function DocumentPane({ roomId, names, meId, models, isOwner }: DocumentP
                   names={names}
                   meId={meId}
                   holderId={leaseHolder(block, now)}
+                  locked={locked}
                   isFirst={block._id === blocks[0]?._id}
                   isLast={block._id === blocks[blocks.length - 1]?._id}
                   editing={editingId === block._id}
@@ -93,12 +101,13 @@ export function DocumentPane({ roomId, names, meId, models, isOwner }: DocumentP
                   roomId={roomId}
                   label={`Add to ${section.heading.text || 'this section'}`}
                   place={{ endOfSectionId: section.heading._id as Id<'blocks'> }}
+                  locked={locked}
                   onAdded={setEditingId}
                 />
               ) : null}
             </div>
           ))}
-          {onlyLoose ? <SectionAdd roomId={roomId} label="Add to the document" place={{}} onAdded={setEditingId} /> : null}
+          {onlyLoose ? <SectionAdd roomId={roomId} label="Add to the document" place={{}} locked={locked} onAdded={setEditingId} /> : null}
         </div>
         {threads ? (
           <ThreadMargin threads={threads} blocks={blocks} names={names} models={models} className="w-full @4xl:w-72 @4xl:shrink-0" />
@@ -114,10 +123,20 @@ export function DocumentPane({ roomId, names, meId, models, isOwner }: DocumentP
         <h2 className="text-sm font-medium">Document</h2>
         <span className="text-xs text-muted-foreground">Shared with everyone in the room, agents included.</span>
         <div className="ml-auto flex items-center gap-1">
-          <HistoryControl roomId={roomId} names={names} />
+          <ScribeControl roomId={roomId} models={models} locked={locked} />
+          <HistoryControl roomId={roomId} names={names} view={historyView} onView={setHistoryView} />
           {isOwner ? <SaveAsTemplate roomId={roomId} /> : null}
         </div>
       </header>
+      {locked ? <ScribeBanner run={scribeRun?.runId === doc.scribeRunId ? scribeRun : undefined} names={names} /> : null}
+      {ended && !locked ? (
+        <ScribeNotice
+          run={ended}
+          names={names}
+          onOpenHistory={(changeSetId) => setHistoryView({ open: true, changeSetId })}
+          onDismiss={dismiss}
+        />
+      ) : null}
       <div className="@container min-h-0 flex-1 overflow-y-auto">{body}</div>
     </section>
   );
@@ -195,17 +214,19 @@ function SectionAdd({
   roomId,
   label,
   place,
+  locked,
   onAdded,
 }: {
   roomId: Id<'rooms'>;
   label: string;
   place: AddPlace;
+  locked: boolean;
   onAdded: (blockId: Id<'blocks'>) => void;
 }) {
   const [open, setOpen] = useState(false);
-  if (open) return <AddChoices roomId={roomId} place={place} label={label} onClose={() => setOpen(false)} onAdded={onAdded} className="px-2" />;
+  if (open && !locked) return <AddChoices roomId={roomId} place={place} label={label} onClose={() => setOpen(false)} onAdded={onAdded} className="px-2" />;
   return (
-    <Button size="xs" variant="ghost-muted" className="ml-1" onClick={() => setOpen(true)}>
+    <Button size="xs" variant="ghost-muted" className="ml-1" disabled={locked} onClick={() => setOpen(true)}>
       <PlusIcon />
       {label}
     </Button>

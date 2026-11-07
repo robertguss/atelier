@@ -88,8 +88,15 @@ export type VersionData = FunctionReturnType<typeof api.history.version>;
 export type VersionBlock = VersionData['blocks'][number];
 export type ChangeSetDiff = FunctionReturnType<typeof api.history.diff>;
 
-/** One history entry in plain words: what kind of change it was, and whose. */
-export function changeSetText(kind: ChangeSetEntry['kind'], actor: string) {
+/** One history entry in plain words: what kind of change it was, and whose. A scribe run names its model and the person who called it in. */
+export function entryText(entry: ChangeSetEntry, names: Names) {
+  if (entry.kind === 'scribe_run' && entry.scribeStartedByParticipantId) {
+    return `Scribe run by ${names(entry.scribeParticipantId ?? entry.actorParticipantId)}, started by ${names(entry.scribeStartedByParticipantId)}`;
+  }
+  return changeSetText(entry.kind, names(entry.actorParticipantId));
+}
+
+function changeSetText(kind: ChangeSetEntry['kind'], actor: string) {
   switch (kind) {
     case 'template_seed':
       return `Template seeding by ${actor}`;
@@ -142,4 +149,18 @@ export function markedVersion(blocks: readonly VersionBlock[], diff: ChangeSetDi
   }
   const all = [...blocks, ...removed].sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0));
   return all.map((block) => ({ ...block, mark: marks.get(block.blockId) ?? null }));
+}
+
+export type ScribeRun = NonNullable<FunctionReturnType<typeof api.scribe.latest>>;
+
+/** Whether a scribe run holds the document now. The lock lapses on its own at its expiry. */
+export function scribeLocked(doc: Pick<DocumentData, 'scribeRunId' | 'scribeLockExpiresAt'>, now: number) {
+  return !!doc.scribeRunId && (doc.scribeLockExpiresAt ?? 0) > now;
+}
+
+/** How long a run has been going, as "45s" or "3m 05s". */
+export function elapsedText(ms: number) {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
 }
