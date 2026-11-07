@@ -749,8 +749,9 @@ export const steerResult = mutation({
     messageId: v.id("messages"),
     outcome: v.union(v.literal("steered"), v.literal("rejected")),
     secret: v.string(),
+    streamOffset: v.optional(v.number()),
   },
-  handler: async (ctx, { secret, messageId, outcome }) => {
+  handler: async (ctx, { secret, messageId, outcome, streamOffset }) => {
     requireRunnerSecret(secret);
     const message = await ctx.db.get(messageId);
     if (!message || message.delivery !== "steering" || !message.steering) {
@@ -765,6 +766,7 @@ export const steerResult = mutation({
       deliveredTurnId: turnId,
       delivery: "steered",
       steering: undefined,
+      streamOffset,
     });
     const turn = await ctx.db.get(turnId);
     if (

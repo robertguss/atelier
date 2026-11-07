@@ -8,7 +8,7 @@ import {
   SquareIcon,
   WrenchIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 
 import { StreamingMarkdown } from "~/components/markdown/StreamingMarkdown";
 import { Badge } from "~/components/ui/badge";
@@ -52,6 +52,31 @@ const streamedText = (partialText: string, replies: PaneMessage[]) => {
     }
   }
   return text;
+};
+
+/**
+ * A running turn's text, cut where each steered message was taken in. Other
+ * delivered messages follow the text.
+ */
+const splitAtSteers = (text: string, delivered: PaneMessage[]) => {
+  const placed = delivered
+    .filter((m) => m.streamOffset !== null)
+    .toSorted((a, b) => (a.streamOffset ?? 0) - (b.streamOffset ?? 0));
+  let start = 0;
+  const before = placed.map((message) => {
+    const end = Math.max(
+      start,
+      Math.min(message.streamOffset ?? 0, text.length)
+    );
+    const piece = text.slice(start, end).trim();
+    start = end;
+    return { message, text: piece };
+  });
+  return {
+    after: delivered.filter((m) => m.streamOffset === null),
+    before,
+    rest: text.slice(start).trim(),
+  };
 };
 
 const TurnStatus = ({ turn, names }: { turn: PaneTurn; names: Names }) => {
@@ -199,6 +224,9 @@ export const TurnView = ({
   const agentName = names(turn.participantId);
   const active = turn.status === "queued" || turn.status === "running";
   const streamed = streamedText(turn.partialText, replies);
+  const live = active
+    ? splitAtSteers(turn.partialText, delivered)
+    : { after: delivered, before: [], rest: streamed };
 
   return (
     <article aria-label={`${agentName}'s turn`} className="space-y-2">
@@ -217,16 +245,23 @@ export const TurnView = ({
       {tools.length > 0 ? (
         <ToolActivity items={tools} defaultOpen={active} />
       ) : null}
-      {streamed ? (
+      {live.before.map(({ message, text }) => (
+        <Fragment key={message.id}>
+          {text ? <StreamingMarkdown text={text} /> : null}
+          <MessageRow message={message} names={names} />
+        </Fragment>
+      ))}
+      {live.rest ? (
         <StreamingMarkdown
-          text={streamed}
+          text={live.rest}
           streaming={turn.status === "running"}
           className={cn(replies.length > 0 && "text-muted-foreground")}
         />
-      ) : (
+      ) : null}
+      {streamed ? null : (
         <ThinkingNote turn={turn} hasTools={tools.length > 0} />
       )}
-      {delivered.map((message) => (
+      {live.after.map((message) => (
         <MessageRow key={message.id} message={message} names={names} />
       ))}
       {replies.map((reply) => (

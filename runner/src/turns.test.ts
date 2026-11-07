@@ -349,10 +349,17 @@ describe(createTurns, () => {
     await until(() => s.runs.length > 0);
     const [run] = s.runs;
     assert(run);
+    run.events.push({ text: "Checking", type: "text_delta" });
+    await idle();
     await s.turns.handle("c-steer");
     expect(run.steers).toStrictEqual(["Use Postgres"]);
     expect(s.named("runner:steerResult")).toStrictEqual([
-      { messageId: "m1", outcome: "steered", secret: "s3cret" },
+      {
+        messageId: "m1",
+        outcome: "steered",
+        secret: "s3cret",
+        streamOffset: "Checking".length,
+      },
     ]);
     expect(s.named("runner:commandHandled")).toStrictEqual([
       { commandId: "c-steer", ok: true, secret: "s3cret" },

@@ -220,6 +220,7 @@ export const pane = query({
         delivery: m.delivery ?? null,
         id: m._id,
         maySteer: !runsAlone(m),
+        streamOffset: m.streamOffset ?? null,
         toParticipantId: m.toParticipantId ?? null,
         // Set on an agent's reply.
         turnId: m.turnId ?? null,

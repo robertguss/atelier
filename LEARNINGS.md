@@ -374,6 +374,21 @@ Findings from the browser pass are in
   `clerk config pull` / `clerk config patch --json ... --dry-run` read and
   change settings; sign-up mode is `auth_access_control.sign_up_mode`, set to
   `restricted` on 2026-11-07.
+- Invites never email: `invites.create` makes the Clerk invitation with
+  `notify: false` and returns its ticket link for a new account, which the
+  owner sends. Restricted sign-up admits only holders of that link. Check an
+  invite with `clerk api "/invitations?status=pending|accepted|revoked"`; the
+  bare `/invitations` list hides revoked ones.
+- Clerk asks for first and last name at sign-up (`user_model.first_name` and
+  `last_name`, enabled and required, 2026-11-07). Atelier takes a member's
+  display name from the token's `name` when they join, falling back to email.
+- On the VM, `ls` is aliased to eza, which reads file names from stdin when
+  stdin is not a terminal: a bare `ls` prints nothing in Claude's Bash, and
+  over ssh it waits forever on the session's stdin. Use `command ls`, give
+  eza a path, or send ssh `< /dev/null`.
+- `claude -p` on the VM warns that its sign-in can end on a fixed date. When
+  it ends, every Claude turn fails until `claude auth login` (or
+  `claude setup-token`) is run in an interactive VM shell.
 
 ## Quality tooling (2026-11-06)
 

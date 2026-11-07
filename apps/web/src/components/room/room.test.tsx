@@ -82,6 +82,7 @@ const message = (overrides: Record<string, unknown>) => ({
   delivery: "delivered",
   id: "m1",
   maySteer: true,
+  streamOffset: null,
   toParticipantId: CLAUDE,
   turnId: null,
   ...overrides,
@@ -765,6 +766,36 @@ describe("room screen", () => {
       expect(text.indexOf("STEERED")).toBeLessThan(
         text.indexOf("Here is the plan.")
       );
+    });
+
+    it("places a steered message where it landed in a running turn's text", async () => {
+      pane.agents = [
+        agent(CLAUDE, "claude", "Claude", {
+          activeTurnId: "t1",
+          status: "running",
+        }),
+      ];
+      pane.turns = [turn({})];
+      pane.messages = [
+        message({
+          at: 2500,
+          body: "STEERED",
+          deliveredTurnId: "t1",
+          delivery: "steered",
+          id: "m-s",
+          streamOffset: "Sleep started.".length,
+        }),
+      ];
+      backend.queries["agent:live"] = () => [
+        { id: "t1", items: [], partialText: "Sleep started.\n\nbanana" },
+      ];
+      await openRoom();
+      const article = screen.getByRole("article", { name: "Claude's turn" });
+      const text = article.textContent ?? "";
+      expect(text.indexOf("Sleep started.")).toBeLessThan(
+        text.indexOf("STEERED")
+      );
+      expect(text.indexOf("STEERED")).toBeLessThan(text.indexOf("banana"));
     });
 
     it("shows a rejected steer back in the queue", async () => {

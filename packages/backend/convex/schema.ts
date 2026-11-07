@@ -331,6 +331,7 @@ export default defineSchema({
     steering: v.optional(
       v.object({ commandId: v.id("commands"), turnId: v.id("turns") })
     ),
+    streamOffset: v.optional(v.number()),
     // A thread delivery: a person's comment that @mentions this agent. It
     // waits in the agent's queue like a message, but runs as its own turn,
     // whose reply goes into the thread. Never shown as a chat message.

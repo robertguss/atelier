@@ -44,6 +44,8 @@ interface RunningTurn {
   stopReason?: string;
   /** Resolves the harness's pending question. False if none matches. */
   answer: (payload: QuestionAnswer) => boolean;
+  /** Characters of text streamed so far. */
+  streamed: () => number;
 }
 
 type Claimed = NonNullable<FunctionReturnType<typeof api.runner.claim>>;
@@ -209,6 +211,7 @@ export const createTurns = ({
           messageId: messageId(),
           outcome,
           secret,
+          ...(outcome === "steered" ? { streamOffset: turn.streamed() } : {}),
         });
         await handled(true);
         break;
@@ -335,6 +338,7 @@ export const createTurns = ({
       }
     };
 
+    let text = "";
     const turn: RunningTurn = {
       abort,
       answer(payload) {
@@ -343,10 +347,10 @@ export const createTurns = ({
         return !!question;
       },
       input: turnInput(onQuestion),
+      streamed: () => text.length,
     };
     running.set(turnId, turn);
 
-    let text = "";
     let finalText: string | null = null;
     let narration: string | undefined;
     let error: string | null = null;
