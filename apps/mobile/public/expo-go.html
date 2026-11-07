@@ -1,14 +1,45 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Open Atelier</title>
-<style>body{font:18px system-ui;background:#f7f7fa;color:#202328;margin:0;padding:40px 24px}main{max-width:440px;margin:15vh auto}a{display:block;background:#208aef;color:white;text-align:center;padding:18px;border-radius:14px;text-decoration:none;font-weight:600}p{line-height:1.5}</style>
-</head>
-<body><main><h1>Atelier</h1><p>Open this project in Expo Go on your iPhone or iPad.</p><a id="launch">Open in Expo Go</a></main>
-<script>
-// A direct deep link avoids the tunnel's failing HTTP redirect route.
-document.getElementById('launch').href = 'exp://' + location.host;
-</script></body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Open Atelier</title>
+    <style>
+      body {
+        font: 18px system-ui;
+        background: #f7f7fa;
+        color: #202328;
+        margin: 0;
+        padding: 40px 24px;
+      }
+      main {
+        max-width: 440px;
+        margin: 15vh auto;
+      }
+      a {
+        display: block;
+        background: #208aef;
+        color: white;
+        text-align: center;
+        padding: 18px;
+        border-radius: 14px;
+        text-decoration: none;
+        font-weight: 600;
+      }
+      p {
+        line-height: 1.5;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Atelier</h1>
+      <p>Open this project in Expo Go on your iPhone or iPad.</p>
+      <a id="launch">Open in Expo Go</a>
+    </main>
+    <script>
+      // A direct deep link avoids the tunnel's failing HTTP redirect route.
+      document.getElementById("launch").href = "exp://" + location.host;
+    </script>
+  </body>
 </html>

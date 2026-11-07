@@ -95,27 +95,27 @@ happens.** Ritual logic, visibility rules and the ledger all live in Convex, so:
 
 ### The ledger and the transcript are different things
 
-| Data | Lives in | Why |
-|---|---|---|
-| Rooms, participants, handbook, rituals, cruxes, decisions, outcomes, provenance | Convex | Small, live, queried from the phone. This is what Atelier learns from |
-| Turn summaries, final messages, in-progress text (throttled to about 2 writes a second) | Convex | So the phone can follow along |
-| Raw event streams, tool output, images, token deltas | Runner disk, linked from Convex | Large and rarely needed. Threadbear measured about 10 GB a month of transcripts, 52% of it images |
+| Data                                                                                    | Lives in                        | Why                                                                                               |
+| --------------------------------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Rooms, participants, handbook, rituals, cruxes, decisions, outcomes, provenance         | Convex                          | Small, live, queried from the phone. This is what Atelier learns from                             |
+| Turn summaries, final messages, in-progress text (throttled to about 2 writes a second) | Convex                          | So the phone can follow along                                                                     |
+| Raw event streams, tool output, images, token deltas                                    | Runner disk, linked from Convex | Large and rarely needed. Threadbear measured about 10 GB a month of transcripts, 52% of it images |
 
 ## Stack
 
-| Concern | Choice |
-|---|---|
-| Language | TypeScript everywhere |
-| Monorepo | pnpm workspaces and Turborepo |
-| Backend | Convex cloud to start. Self-hosting Convex later is a migration, not a rewrite |
-| Workflows | `@convex-dev/workflow` for rituals |
-| Auth | Clerk (`@clerk/expo`, Core 3; `@clerk/clerk-expo` is deprecated) with Convex's Clerk integration |
-| Mobile | Expo with a development build (not Expo Go), EAS to reach TestFlight, Expo Router, FlashList for transcripts |
-| Web | Vite and React static app with TanStack Router and `@clerk/react`, built on t3code's UI components (MIT), hosted on Vercel |
-| Runner | Node 24, run as a systemd service |
-| Claude Code | `@anthropic-ai/claude-agent-sdk` |
-| Codex | `codex app-server` (JSON-RPC over stdio) |
-| Pi | `@mariozechner/pi-coding-agent` `RpcClient` (subprocess, JSONL) |
+| Concern     | Choice                                                                                                                     |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Language    | TypeScript everywhere                                                                                                      |
+| Monorepo    | pnpm workspaces and Turborepo                                                                                              |
+| Backend     | Convex cloud to start. Self-hosting Convex later is a migration, not a rewrite                                             |
+| Workflows   | `@convex-dev/workflow` for rituals                                                                                         |
+| Auth        | Clerk (`@clerk/expo`, Core 3; `@clerk/clerk-expo` is deprecated) with Convex's Clerk integration                           |
+| Mobile      | Expo with a development build (not Expo Go), EAS to reach TestFlight, Expo Router, FlashList for transcripts               |
+| Web         | Vite and React static app with TanStack Router and `@clerk/react`, built on t3code's UI components (MIT), hosted on Vercel |
+| Runner      | Node 24, run as a systemd service                                                                                          |
+| Claude Code | `@anthropic-ai/claude-agent-sdk`                                                                                           |
+| Codex       | `codex app-server` (JSON-RPC over stdio)                                                                                   |
+| Pi          | `@mariozechner/pi-coding-agent` `RpcClient` (subprocess, JSONL)                                                            |
 
 Versions checked on npm on 2026-11-06: convex 1.49.0, @convex-dev/workflow
 0.4.10, @clerk/expo 4.15.1, @anthropic-ai/claude-agent-sdk 0.3.318,
@@ -142,28 +142,28 @@ Domain tables hold current state. Every mutation that changes something that
 matters to collaboration also adds a row to `ledger` in the same transaction.
 The ledger is append-only and never edited.
 
-| Table | Key fields |
-|---|---|
-| `runners` | `name`, `machine`, `lastHeartbeatAt`, `harnesses` (installed harnesses and versions), `harnessCapabilities` (per harness: `canRaiseCards`) |
-| `users` | `tokenIdentifier` (Clerk's), `email`, `name`. One row per signed-in person |
-| `rooms` | `name`, `runnerId`, `cwd`, `handbook` (markdown), `archivedAt`, `editsEnabled` (missing means off) |
-| `roomMembers` | `roomId`, `userId`, `role` (`owner` \| `member`), `participantId`, `noticeVersion`, `noticeAcceptedAt`, `removedAt` |
-| `roomInvites` | `roomId`, `email`, `tokenHash` (the token itself is only in the link), `expiresAt` (7 days), `status` (`pending` \| `accepted` \| `revoked` \| `expired`), `clerkInvitationId`, `acceptedByUserId`, `acceptedAt`, `revokedAt` |
-| `participants` | `roomId`, `kind` (`human` \| `harness`), `harness` (`claude` \| `codex` \| `pi`), `model`, `reasoning`, `displayName`, `harnessSessionId`, `userId` (for a human) |
-| `messages` | `roomId`, `authorParticipantId`, `body`, `ritualId?`, `turnId?` (set on an agent's reply), `visibility` (`room` \| `sealed`), `toParticipantId`, `delivery` (`queued` \| `steering` \| `steered` \| `delivered` \| `answeredCard` \| `cancelled`), `deliveredTurnId`, `steering` (`turnId`, `commandId` while a steer is in flight), `cancelReason`, `followUpRitualId`, `followUpDecisionId`, `followUpReviewTurnId` |
-| `teamMessages` | `roomId`, `authorUserId`, `authorParticipantId`, `body`. Humans only, in its own table so nothing that builds prompts can read it. Never edited or deleted |
-| `turns` | `roomId`, `participantId`, `ritualId?`, `status` (`queued` \| `running` \| `done` \| `failed` \| `interrupted`), `prompt`, `partialText` (older turns only; see `turnStreams`), `finalText`, `usage`, `transcriptRef`, `harnessVersion`, `error`, `startedAt`, `endedAt`, `followUp` (`ritualId`, `decisionId`, `separateSession`), `requestedByParticipantIds`, `editsEnabled` (the switch at dispatch), `waitingOnHandId`, `stoppedByParticipantId` |
-| `turnStreams` | `turnId`, `text`. A turn's streamed text, apart from the turn so streaming writes only rerun `agent.live`, the small query for active turns |
-| `turnItems` | `turnId`, `callId`, `seq`, `name`, `summary` (one line), `ok`. One row per tool call; raw output stays on the runner |
-| `rituals` | `roomId`, `type` (`independent_review`), `status` (`collecting` \| `revealed` \| `decided`), `request`, `participantIds`, `revealedAt`, `workflowId`, `snapshot`, `pushStatus`, `followUpSessions` (per participant, used in rooms with a teammate) |
-| `reviewSnapshots` | `ritualId`, `text` |
-| `takeaways` | `ritualId`, `body`, `authorParticipantId` |
-| `cruxes` | `ritualId`, `roomId`, `statement`, `options`, `authorParticipantId` |
-| `decisions` | `cruxId?`, `ritualId?`, `roomId`, `choice`, `rationale`, and for an answered question card `handId`, `questionId`, `answeredByParticipantId` |
-| `hands` | Question cards. `roomId`, `turnId`, `participantId`, `requestId` (the harness's id for the pending request), `questions` (one to four, each with `id`, `header`, `text`, `options`, `multiSelect`, `allowFreeText`), `status` (`raised` \| `answered` \| `cancelled` \| `expired`), `answers`, `answeredByParticipantId`, `answeredAt`, `via` (`card` \| `chat`), `raisedAt`, `closedAt`, `closeReason` |
-| `commands` | `runnerId`, `type` (`run_turn` \| `steer` \| `answer` \| `settings` \| `interrupt`), `turnId`, `payload`, `status` (`pending` \| `claimed` \| `done` \| `failed`), `leaseExpiresAt`, `error` |
-| `ledger` | `roomId`, `type`, `actorParticipantId`, `subjectId`, `parentLedgerId`, `provider`, `model`, `harnessVersion`, `payload`, `at` |
-| `pushTokens` | `userSubject`, `token`, `platform` |
+| Table             | Key fields                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `runners`         | `name`, `machine`, `lastHeartbeatAt`, `harnesses` (installed harnesses and versions), `harnessCapabilities` (per harness: `canRaiseCards`)                                                                                                                                                                                                                                                                                                            |
+| `users`           | `tokenIdentifier` (Clerk's), `email`, `name`. One row per signed-in person                                                                                                                                                                                                                                                                                                                                                                            |
+| `rooms`           | `name`, `runnerId`, `cwd`, `handbook` (markdown), `archivedAt`, `editsEnabled` (missing means off)                                                                                                                                                                                                                                                                                                                                                    |
+| `roomMembers`     | `roomId`, `userId`, `role` (`owner` \| `member`), `participantId`, `noticeVersion`, `noticeAcceptedAt`, `removedAt`                                                                                                                                                                                                                                                                                                                                   |
+| `roomInvites`     | `roomId`, `email`, `tokenHash` (the token itself is only in the link), `expiresAt` (7 days), `status` (`pending` \| `accepted` \| `revoked` \| `expired`), `clerkInvitationId`, `acceptedByUserId`, `acceptedAt`, `revokedAt`                                                                                                                                                                                                                         |
+| `participants`    | `roomId`, `kind` (`human` \| `harness`), `harness` (`claude` \| `codex` \| `pi`), `model`, `reasoning`, `displayName`, `harnessSessionId`, `userId` (for a human)                                                                                                                                                                                                                                                                                     |
+| `messages`        | `roomId`, `authorParticipantId`, `body`, `ritualId?`, `turnId?` (set on an agent's reply), `visibility` (`room` \| `sealed`), `toParticipantId`, `delivery` (`queued` \| `steering` \| `steered` \| `delivered` \| `answeredCard` \| `cancelled`), `deliveredTurnId`, `steering` (`turnId`, `commandId` while a steer is in flight), `cancelReason`, `followUpRitualId`, `followUpDecisionId`, `followUpReviewTurnId`                                 |
+| `teamMessages`    | `roomId`, `authorUserId`, `authorParticipantId`, `body`. Humans only, in its own table so nothing that builds prompts can read it. Never edited or deleted                                                                                                                                                                                                                                                                                            |
+| `turns`           | `roomId`, `participantId`, `ritualId?`, `status` (`queued` \| `running` \| `done` \| `failed` \| `interrupted`), `prompt`, `partialText` (older turns only; see `turnStreams`), `finalText`, `usage`, `transcriptRef`, `harnessVersion`, `error`, `startedAt`, `endedAt`, `followUp` (`ritualId`, `decisionId`, `separateSession`), `requestedByParticipantIds`, `editsEnabled` (the switch at dispatch), `waitingOnHandId`, `stoppedByParticipantId` |
+| `turnStreams`     | `turnId`, `text`. A turn's streamed text, apart from the turn so streaming writes only rerun `agent.live`, the small query for active turns                                                                                                                                                                                                                                                                                                           |
+| `turnItems`       | `turnId`, `callId`, `seq`, `name`, `summary` (one line), `ok`. One row per tool call; raw output stays on the runner                                                                                                                                                                                                                                                                                                                                  |
+| `rituals`         | `roomId`, `type` (`independent_review`), `status` (`collecting` \| `revealed` \| `decided`), `request`, `participantIds`, `revealedAt`, `workflowId`, `snapshot`, `pushStatus`, `followUpSessions` (per participant, used in rooms with a teammate)                                                                                                                                                                                                   |
+| `reviewSnapshots` | `ritualId`, `text`                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `takeaways`       | `ritualId`, `body`, `authorParticipantId`                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `cruxes`          | `ritualId`, `roomId`, `statement`, `options`, `authorParticipantId`                                                                                                                                                                                                                                                                                                                                                                                   |
+| `decisions`       | `cruxId?`, `ritualId?`, `roomId`, `choice`, `rationale`, and for an answered question card `handId`, `questionId`, `answeredByParticipantId`                                                                                                                                                                                                                                                                                                          |
+| `hands`           | Question cards. `roomId`, `turnId`, `participantId`, `requestId` (the harness's id for the pending request), `questions` (one to four, each with `id`, `header`, `text`, `options`, `multiSelect`, `allowFreeText`), `status` (`raised` \| `answered` \| `cancelled` \| `expired`), `answers`, `answeredByParticipantId`, `answeredAt`, `via` (`card` \| `chat`), `raisedAt`, `closedAt`, `closeReason`                                               |
+| `commands`        | `runnerId`, `type` (`run_turn` \| `steer` \| `answer` \| `settings` \| `interrupt`), `turnId`, `payload`, `status` (`pending` \| `claimed` \| `done` \| `failed`), `leaseExpiresAt`, `error`                                                                                                                                                                                                                                                          |
+| `ledger`          | `roomId`, `type`, `actorParticipantId`, `subjectId`, `parentLedgerId`, `provider`, `model`, `harnessVersion`, `payload`, `at`                                                                                                                                                                                                                                                                                                                         |
+| `pushTokens`      | `userSubject`, `token`, `platform`                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 `parentLedgerId` (what caused this) and `harnessVersion` look optional now and
 are painful to add later. Include them from the first migration.
@@ -190,16 +190,16 @@ answer links the team messages posted while the card was open, by id only.
 
 ```ts
 // packages/shared/src/harness.ts (abridged)
-export type HarnessId = 'claude' | 'codex' | 'pi';
+export type HarnessId = "claude" | "codex" | "pi";
 
 export interface TurnRequest {
   turnId: string;
   cwd: string;
-  prompt: string;              // includes the room context block, see below
+  prompt: string; // includes the room context block, see below
   model?: string;
-  reasoning?: 'low' | 'medium' | 'high' | 'xhigh';
-  resumeSessionId?: string;    // the participant's harnessSessionId
-  editsEnabled: boolean;       // the room's edit switch when the turn started
+  reasoning?: "low" | "medium" | "high" | "xhigh";
+  resumeSessionId?: string; // the participant's harnessSessionId
+  editsEnabled: boolean; // the room's edit switch when the turn started
   independentReview?: boolean; // fresh session, snapshot, no execution tools
   mcpServers: McpServerSpec[];
 }
@@ -207,24 +207,33 @@ export interface TurnRequest {
 // The live channel into a running turn. The runner creates one per turn.
 export interface TurnInput {
   onQuestion(card: QuestionCard): Promise<QuestionAnswer>; // raises a question card
-  steer: (text: string) => Promise<'steered' | 'rejected'>;
+  steer: (text: string) => Promise<"steered" | "rejected">;
   setEditsEnabled: (on: boolean) => void;
 }
 
 export type HarnessEvent =
-  | { type: 'session'; sessionId: string }
-  | { type: 'text_delta'; text: string }
-  | { type: 'tool_call'; id: string; name: string; summary: string }
-  | { type: 'tool_result'; id: string; ok: boolean }
-  | { type: 'usage'; inputTokens: number; outputTokens: number; costUsd?: number }
-  | { type: 'final'; text: string }
-  | { type: 'error'; message: string; retryable: boolean };
+  | { type: "session"; sessionId: string }
+  | { type: "text_delta"; text: string }
+  | { type: "tool_call"; id: string; name: string; summary: string }
+  | { type: "tool_result"; id: string; ok: boolean }
+  | {
+      type: "usage";
+      inputTokens: number;
+      outputTokens: number;
+      costUsd?: number;
+    }
+  | { type: "final"; text: string }
+  | { type: "error"; message: string; retryable: boolean };
 
 export interface Harness {
   id: HarnessId;
   capabilities: { canRaiseCards: boolean };
   version(): Promise<string>;
-  runTurn(req: TurnRequest, signal: AbortSignal, input: TurnInput): AsyncIterable<HarnessEvent>;
+  runTurn(
+    req: TurnRequest,
+    signal: AbortSignal,
+    input: TurnInput
+  ): AsyncIterable<HarnessEvent>;
 }
 ```
 
@@ -322,11 +331,11 @@ anchoring on the first answer that arrives.
 The runner serves a local MCP server, scoped to the turn's room, and adds it to
 every harness's MCP config for that turn.
 
-| Tool | What it does |
-|---|---|
+| Tool                             | What it does                                                                                                                                                                            |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `raise_hand(question, options?)` | Creates a `hand` and sends a push. The turn can carry on, or end and wait for the answer. Not built: question cards now come from each harness's own question tool (Claude only so far) |
-| `read_handbook()` | Returns the room's handbook |
-| `recent_decisions(limit?)` | Returns the room's latest decisions and their rationale |
+| `read_handbook()`                | Returns the room's handbook                                                                                                                                                             |
+| `recent_decisions(limit?)`       | Returns the room's latest decisions and their rationale                                                                                                                                 |
 
 `post_finding` and `ask_peer` come later. `ask_peer` would be peer mode, which
 is out of scope.

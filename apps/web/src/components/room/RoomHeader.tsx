@@ -1,15 +1,22 @@
-import { api } from '@atelier/backend/api';
-import type { Id } from '@atelier/backend/dataModel';
-import { Link } from '@tanstack/react-router';
-import { useMutation } from 'convex/react';
-import { ChevronLeftIcon, MessagesSquareIcon, UsersIcon, WifiOffIcon } from 'lucide-react';
-import { useState } from 'react';
-import { Button } from '~/components/ui/button';
-import { Switch } from '~/components/ui/switch';
-import { errorText } from './errors';
+import { api } from "@atelier/backend/api";
+import type { Id } from "@atelier/backend/dataModel";
+import { Link } from "@tanstack/react-router";
+import { useMutation } from "convex/react";
+import {
+  ChevronLeftIcon,
+  MessagesSquareIcon,
+  UsersIcon,
+  WifiOffIcon,
+} from "lucide-react";
+import { useState } from "react";
+
+import { Button } from "~/components/ui/button";
+import { Switch } from "~/components/ui/switch";
+
+import { errorText } from "./errors";
 
 interface RoomHeaderProps {
-  roomId: Id<'rooms'>;
+  roomId: Id<"rooms">;
   name: string;
   isOwner: boolean;
   /** Undefined until the agent pane has loaded. */
@@ -20,45 +27,23 @@ interface RoomHeaderProps {
   onOpenTeam?: () => void;
 }
 
-export function RoomHeader({ roomId, name, isOwner, editsEnabled, offline, onOpenMembers, onOpenTeam }: RoomHeaderProps) {
-  return (
-    <div className="shrink-0">
-      <header className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
-        <Button variant="ghost" size="icon-sm" aria-label="Your rooms" render={<Link to="/" />}>
-          <ChevronLeftIcon />
-        </Button>
-        <h1 className="mr-auto truncate text-base font-medium tracking-tight">{name}</h1>
-        {editsEnabled === undefined ? null : <EditSwitch roomId={roomId} on={editsEnabled} isOwner={isOwner} />}
-        {isOwner ? (
-          <Button size="sm" variant="outline" onClick={onOpenMembers}>
-            <UsersIcon />
-            Members
-          </Button>
-        ) : null}
-        {onOpenTeam ? (
-          <Button size="sm" variant="outline" onClick={onOpenTeam}>
-            <MessagesSquareIcon />
-            Team chat
-          </Button>
-        ) : null}
-      </header>
-      {offline ? (
-        <div role="alert" className="flex items-center gap-2 border-b bg-warning-surface px-4 py-2 text-sm text-warning-foreground">
-          <WifiOffIcon className="size-4 shrink-0" />
-          The agents' machine is offline: no heartbeat for over 45 seconds. Messages to agents are refused until it's back.
-          Team chat still works.
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 /** "Agents may edit files in this folder": the owner's toggle; everyone else sees its state. */
-function EditSwitch({ roomId, on, isOwner }: { roomId: Id<'rooms'>; on: boolean; isOwner: boolean }) {
+const EditSwitch = ({
+  roomId,
+  on,
+  isOwner,
+}: {
+  roomId: Id<"rooms">;
+  on: boolean;
+  isOwner: boolean;
+}) => {
   const setEditsEnabled = useMutation(api.rooms.setEditsEnabled);
   const [error, setError] = useState<string | null>(null);
   return (
-    <label className="flex items-center gap-2 text-xs text-muted-foreground" title={error ?? undefined}>
+    <label
+      className="text-muted-foreground flex items-center gap-2 text-xs"
+      title={error ?? undefined}
+    >
       <Switch
         size="sm"
         aria-label="Agents may edit files in this folder"
@@ -66,13 +51,70 @@ function EditSwitch({ roomId, on, isOwner }: { roomId: Id<'rooms'>; on: boolean;
         disabled={!isOwner}
         onCheckedChange={(next) => {
           setError(null);
-          setEditsEnabled({ roomId, on: next }).catch((e: unknown) => setError(errorText(e)));
+          setEditsEnabled({ on: next, roomId }).catch((error_: unknown) => {
+            setError(errorText(error_));
+          });
         }}
       />
       <span>
-        Agents may edit files: <span className="font-medium text-foreground">{on ? 'on' : 'off'}</span>
+        Agents may edit files:{" "}
+        <span className="text-foreground font-medium">{on ? "on" : "off"}</span>
       </span>
-      {error ? <span className="text-destructive-foreground">{error}</span> : null}
+      {error !== null && error !== "" ? (
+        <span className="text-destructive-foreground">{error}</span>
+      ) : null}
     </label>
   );
-}
+};
+
+export const RoomHeader = ({
+  roomId,
+  name,
+  isOwner,
+  editsEnabled,
+  offline,
+  onOpenMembers,
+  onOpenTeam,
+}: RoomHeaderProps) => (
+  <div className="shrink-0">
+    <header className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Your rooms"
+        render={<Link to="/" />}
+      >
+        <ChevronLeftIcon />
+      </Button>
+      <h1 className="mr-auto truncate text-base font-medium tracking-tight">
+        {name}
+      </h1>
+      {editsEnabled === undefined ? null : (
+        <EditSwitch roomId={roomId} on={editsEnabled} isOwner={isOwner} />
+      )}
+      {isOwner ? (
+        <Button size="sm" variant="outline" onClick={onOpenMembers}>
+          <UsersIcon />
+          Members
+        </Button>
+      ) : null}
+      {onOpenTeam ? (
+        <Button size="sm" variant="outline" onClick={onOpenTeam}>
+          <MessagesSquareIcon />
+          Team chat
+        </Button>
+      ) : null}
+    </header>
+    {offline ? (
+      <div
+        role="alert"
+        className="bg-warning-surface text-warning-foreground flex items-center gap-2 border-b px-4 py-2 text-sm"
+      >
+        <WifiOffIcon className="size-4 shrink-0" />
+        The agents&apos; machine is offline: no heartbeat for over 45 seconds.
+        Messages to agents are refused until it&apos;s back. Team chat still
+        works.
+      </div>
+    ) : null}
+  </div>
+);

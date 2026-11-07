@@ -201,3 +201,36 @@ How to set up and run shared rooms is in [docs/shared-rooms.md](docs/shared-room
   Sonnet followed. Test steering with Sonnet before concluding it is broken,
   and keep sending the person's text as typed (see the Claude probe notes
   above).
+
+## Quality tooling (2026-11-06)
+
+- TypeScript stays on 6.0.3, the version Expo SDK 58 pins. TS 7 ships no
+  compiler API and Expo flags it. Type-aware lint still works:
+  `oxlint-tsgolint` ships its own type checker and ignores the installed
+  `typescript`.
+- `ultracite init` and `ultracite upgrade` pin oxfmt below the installed
+  version (`^0.75` meant <0.76). Re-check `oxfmt` in `package.json` after
+  either command.
+- The Convex tsconfig has `noUncheckedIndexedAccess` on, matching the runner,
+  which also compiles backend files. Without it, type-aware lint (reading the
+  Convex config) removes `!` assertions the runner build still needs.
+- vitest fakes `clearTimeout` and `clearInterval` only when they are listed in
+  `toFake`. Node's `mock.timers` covered them implicitly; leaving them out
+  made a paused deadline fire anyway.
+- `noUnnecessaryTypeAssertion` fixes can remove a cast that contextual typing
+  needed. Type the variable instead of restoring the cast.
+- Git worktrees share `.git/hooks`, so `lefthook install` in one worktree
+  installs the hooks for all of them. Worktrees without `lefthook.yml` just
+  print "No config files" and pass.
+- A path-limited commit (`git commit -- <paths>`) commits lefthook's fixed
+  files but leaves the pre-fix copy in the index. Plain `git commit` does not.
+- Codex runs project hooks (`.codex/hooks.json`) only after the repo's
+  `.codex/` folder is trusted in Codex. Do this once per machine. Start agent
+  sessions at the repo root so the post-edit hook covers every file.
+- The runner sets `ATELIER_ROOM_TURN=1` for every harness it starts, and the
+  post-edit hooks in `.claude/settings.json` and `.codex/hooks.json` skip
+  themselves when it is set. Without that, a room agent with edits on could
+  write `node_modules/.bin/ultracite` or `oxlint.config.mts` and have the hook
+  run it outside the runner's permission checks. Keep the guard inside the
+  hook command (those folders are protected from room edits), not in a script
+  a room agent could rewrite.

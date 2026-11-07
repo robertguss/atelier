@@ -7,22 +7,14 @@
     "skipLibCheck": true,
     "allowSyntheticDefaultImports": true,
     "target": "ESNext",
-    "lib": [
-      "ES2023",
-      "dom"
-    ],
+    "lib": ["ES2023", "dom"],
     "forceConsistentCasingInFileNames": true,
     "module": "ESNext",
     "isolatedModules": true,
     "noEmit": true,
-    "types": [
-      "node"
-    ]
+    "types": ["node"],
+    "noUncheckedIndexedAccess": true
   },
-  "include": [
-    "./**/*"
-  ],
-  "exclude": [
-    "./_generated"
-  ]
+  "include": ["./**/*"],
+  "exclude": ["./_generated"]
 }

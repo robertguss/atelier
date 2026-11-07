@@ -10,35 +10,52 @@ const animations = new Map<Element, ObservedAnimation>();
 let observer: IntersectionObserver | null = null;
 let reducedMotion: MediaQueryList | null = null;
 
-function updateAnimation(animation: ObservedAnimation) {
+const updateAnimation = (animation: ObservedAnimation) => {
   const running =
-    animation.intersecting && document.visibilityState === "visible" && !reducedMotion?.matches;
-  animation.element.style.setProperty("--visible-animation-state", running ? "running" : "paused");
+    animation.intersecting &&
+    document.visibilityState === "visible" &&
+    reducedMotion?.matches !== true;
+  animation.element.style.setProperty(
+    "--visible-animation-state",
+    running ? "running" : "paused"
+  );
   animation.element.style.setProperty(
     "--visible-animation-will-change",
-    running ? "transform" : "auto",
+    running ? "transform" : "auto"
   );
-}
+};
 
-function updateAnimations() {
-  for (const animation of animations.values()) updateAnimation(animation);
-}
+const updateAnimations = () => {
+  for (const animation of animations.values()) {
+    updateAnimation(animation);
+  }
+};
 
-export function observeVisibleAnimation(element: HTMLElement | SVGElement | null) {
-  if (element === null) return;
+export const observeVisibleAnimation = (
+  element: HTMLElement | SVGElement | null
+): (() => void) | undefined => {
+  if (element === null) {
+    return undefined;
+  }
   element.style.setProperty("--visible-animation-state", "paused");
   element.style.setProperty("--visible-animation-will-change", "auto");
-  if (typeof IntersectionObserver === "undefined") return;
+  if (typeof IntersectionObserver === "undefined") {
+    return undefined;
+  }
 
   if (observer === null) {
     reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     reducedMotion.addEventListener("change", updateAnimations);
     document.addEventListener("visibilitychange", updateAnimations);
     observer = new IntersectionObserver((entries, source) => {
-      if (source !== observer) return;
+      if (source !== observer) {
+        return;
+      }
       for (const entry of entries) {
         const animation = animations.get(entry.target);
-        if (!animation) continue;
+        if (!animation) {
+          continue;
+        }
         animation.intersecting = entry.isIntersecting;
         updateAnimation(animation);
       }
@@ -50,7 +67,9 @@ export function observeVisibleAnimation(element: HTMLElement | SVGElement | null
   observer.observe(element);
 
   return () => {
-    if (animations.get(element) !== animation) return;
+    if (animations.get(element) !== animation) {
+      return;
+    }
     animations.delete(element);
     observer?.unobserve(element);
     element.style.setProperty("--visible-animation-state", "paused");
@@ -63,4 +82,4 @@ export function observeVisibleAnimation(element: HTMLElement | SVGElement | null
       document.removeEventListener("visibilitychange", updateAnimations);
     }
   };
-}
+};

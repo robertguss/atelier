@@ -9,8 +9,9 @@
   },
   "scripts": {
     "dev": "convex dev",
-    "typecheck": "tsc --noEmit -p convex",
-    "test": "vitest run tests"
+    "typecheck": "tsc --noEmit -p convex && tsc --noEmit -p .",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@convex-dev/workflow": "^0.4.10",
@@ -18,8 +19,10 @@
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
+    "@vitest/coverage-v8": "^5.1.0",
     "convex-test": "^0.0.67",
     "typescript": "~6.0.3",
+    "vite": "^8.3.6",
     "vitest": "^5.1.0"
   }
 }

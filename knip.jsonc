@@ -1,0 +1,22 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {},
+    "apps/mobile": {
+      "ignoreDependencies": [
+        // The Expo CLI loads it for `expo start --tunnel`, the launch flow
+        // in LEARNINGS.md.
+        "@expo/ngrok",
+        // Knip's Expo plugin assumes over-the-air updates; this app does not
+        // use them.
+        "expo-updates",
+      ],
+    },
+    "apps/web": {},
+    "packages/backend": {
+      "typescript": { "config": ["convex/tsconfig.json", "tsconfig.json"] },
+    },
+    "packages/shared": {},
+    "runner": {},
+  },
+}
