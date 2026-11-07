@@ -1,4 +1,5 @@
 import type { api } from '@atelier/backend/api';
+import type { Id } from '@atelier/backend/dataModel';
 import type { FunctionReturnType } from 'convex/server';
 import type { Names } from './room';
 
@@ -43,4 +44,41 @@ export function authorText(author: DocBlock['author'], names: Names) {
 
 export function openThreadsText(count: number) {
   return count === 1 ? '1 open thread' : `${count} open threads`;
+}
+
+export type ThreadsData = FunctionReturnType<typeof api.threads.list>;
+export type DocThread = ThreadsData['open'][number];
+export type ThreadComment = DocThread['comments'][number];
+export type MentionState = ThreadComment['mentions'][number]['state'];
+
+/** A passage of a block's stored text, [start, end) in string indices. */
+export interface Passage {
+  blockId: Id<'blocks'>;
+  start: number;
+  end: number;
+}
+
+/** Threads in the order of their blocks, and by place within a block. Threads on blocks no longer in the document go last. */
+export function threadsInBlockOrder(threads: readonly DocThread[], blocks: readonly DocBlock[]): DocThread[] {
+  const index = new Map<string, number>(blocks.map((b, i) => [b._id, i]));
+  const place = (t: DocThread) => index.get(t.blockId) ?? blocks.length;
+  return [...threads].sort((a, b) => place(a) - place(b) || a.position - b.position);
+}
+
+/** Where a mention of a model stands, for its thread card. */
+export function mentionText(state: MentionState, name: string) {
+  switch (state) {
+    case 'waiting':
+      return `waiting for ${name}`;
+    case 'waitingForRunner':
+      return 'waiting for the runner';
+    case 'answering':
+      return `${name} is answering`;
+    case 'replied':
+      return `${name} replied`;
+    case 'failed':
+      return `${name} could not reply`;
+    case 'cancelled':
+      return `mention of ${name} cancelled`;
+  }
 }

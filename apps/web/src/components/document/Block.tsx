@@ -1,16 +1,17 @@
 import { api } from '@atelier/backend/api';
 import type { Id } from '@atelier/backend/dataModel';
 import { useMutation } from 'convex/react';
-import { ArrowDownIcon, ArrowUpIcon, MessageSquareIcon, PencilIcon, PlusIcon, Trash2Icon } from 'lucide-react';
+import { ArrowDownIcon, ArrowUpIcon, MessageSquareIcon, MessageSquarePlusIcon, PencilIcon, PlusIcon, Trash2Icon } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
-import { StreamingMarkdown } from '~/components/markdown/StreamingMarkdown';
 import { errorText } from '~/components/room/errors';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
-import { BLOCK_KINDS, KIND_LABEL, authorText, openThreadsText, type BlockKind, type DocBlock } from '~/lib/document';
-import type { Names } from '~/lib/room';
+import { BLOCK_KINDS, KIND_LABEL, authorText, openThreadsText, type BlockKind, type DocBlock, type Passage } from '~/lib/document';
+import type { Names, Participant } from '~/lib/room';
 import { cn } from '~/lib/utils';
 import { BlockEditor } from './BlockEditor';
+import { BlockText } from './BlockText';
+import { NewComment } from './ThreadCard';
 
 /** Where a new block goes: after a block, at the end of a heading's section, or at the end of the document. */
 export type AddPlace = { afterBlockId: Id<'blocks'> } | { endOfSectionId: Id<'blocks'> } | Record<string, never>;
@@ -27,9 +28,33 @@ interface BlockProps {
   editing: boolean;
   onEditing: (blockId: Id<'blocks'>) => void;
   onDoneEditing: (blockId: Id<'blocks'>) => void;
+  /** The room's model participants, offered as mentions. */
+  models: readonly Participant[];
+  /** Whether the reader has selected text in this block that a comment can anchor to. */
+  commentable: boolean;
+  onComment: () => void;
+  /** The passage of this block a new comment is being written on. */
+  commentDraft: Passage | null;
+  onCommentDone: () => void;
 }
 
-export function Block({ roomId, block, names, meId, holderId, isFirst, isLast, editing, onEditing, onDoneEditing }: BlockProps) {
+export function Block({
+  roomId,
+  block,
+  names,
+  meId,
+  holderId,
+  isFirst,
+  isLast,
+  editing,
+  onEditing,
+  onDoneEditing,
+  models,
+  commentable,
+  onComment,
+  commentDraft,
+  onCommentDone,
+}: BlockProps) {
   const blockId = block._id as Id<'blocks'>;
   const startEdit = useMutation(api.blocks.startEdit);
   const move = useMutation(api.blocks.move);
@@ -58,7 +83,10 @@ export function Block({ roomId, block, names, meId, holderId, isFirst, isLast, e
       {editing ? (
         <BlockEditor block={block} otherHolder={otherHolder} onDone={() => onDoneEditing(blockId)} />
       ) : (
-        <BlockText block={block} />
+        // Comments start from a selection here; the document maps it to the stored text.
+        <div data-block-text={block.text.trim() ? block._id : undefined}>
+          <BlockText kind={block.kind} text={block.text} />
+        </div>
       )}
       <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
         <span className="font-medium text-foreground/80">{authorText(block.author, names)}</span>
@@ -68,6 +96,18 @@ export function Block({ roomId, block, names, meId, holderId, isFirst, isLast, e
             <MessageSquareIcon />
             {openThreadsText(block.openThreads)}
           </Badge>
+        ) : null}
+        {commentable && !editing ? (
+          <Button
+            size="xs"
+            variant="outline"
+            // Keeps the selection while the button is pressed.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onComment}
+          >
+            <MessageSquarePlusIcon />
+            Comment
+          </Button>
         ) : null}
         <div
           role="toolbar"
@@ -115,6 +155,9 @@ export function Block({ roomId, block, names, meId, holderId, isFirst, isLast, e
           </Button>
         </div>
       ) : null}
+      {commentDraft && !editing ? (
+        <NewComment passage={commentDraft} exact={block.text.slice(commentDraft.start, commentDraft.end)} models={models} onDone={onCommentDone} />
+      ) : null}
       {adding ? (
         <AddChoices
           roomId={roomId}
@@ -126,16 +169,6 @@ export function Block({ roomId, block, names, meId, holderId, isFirst, isLast, e
       ) : null}
     </div>
   );
-}
-
-function BlockText({ block }: { block: DocBlock }) {
-  if (!block.text.trim()) {
-    return <p className="text-sm text-muted-foreground italic">Empty {KIND_LABEL[block.kind].toLowerCase()}</p>;
-  }
-  if (block.kind === 'heading') {
-    return <h3 className="text-base font-semibold tracking-tight [overflow-wrap:anywhere]">{block.text}</h3>;
-  }
-  return <StreamingMarkdown text={block.kind === 'listItem' ? `- ${block.text}` : block.text} />;
 }
 
 function ToolButton({
