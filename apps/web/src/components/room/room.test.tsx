@@ -23,6 +23,11 @@ type Pane = {
 };
 
 let pane: Pane;
+let teamMessages: { _id: string; at: number; authorParticipantId: string; body: string }[];
+
+function teamMessage(_id: string, authorParticipantId: string, body: string) {
+  return { _id, at: 1_000, authorParticipantId, body };
+}
 
 function agent(participantId: string, harness: string, displayName: string, overrides: Record<string, unknown> = {}) {
   return { participantId, displayName, harness, status: 'idle', activeTurnId: null, queued: 0, canRaiseCards: true, ...overrides };
@@ -108,8 +113,9 @@ function room(access: 'owner' | 'member' = 'owner') {
     ],
   });
   backend.queries['agent:pane'] = () => pane;
-  backend.queries['team:list'] = () => [];
+  backend.queries['team:list'] = () => teamMessages;
   backend.queries['members:list'] = () => ({ members: [], invites: [] });
+  backend.queries['documents:get'] = () => ({ documentId: 'd1', rev: 1, blocks: [] });
 }
 
 async function openRoom(access: 'owner' | 'member' = 'owner') {
@@ -119,8 +125,14 @@ async function openRoom(access: 'owner' | 'member' = 'owner') {
   return rendered;
 }
 
+function showTeam() {
+  fireEvent.click(screen.getByRole('button', { name: /^Show team chat/ }));
+}
+
 beforeEach(() => {
   resetBackend();
+  window.localStorage.clear();
+  teamMessages = [];
   pane = {
     runner: { lastHeartbeatAt: Date.now(), offlineAfterMs: 45_000 },
     editsEnabled: false,
@@ -132,15 +144,76 @@ beforeEach(() => {
   };
 });
 
+describe('layout', () => {
+  it('opens on the document, with the agent pane expanded and team chat collapsed the first time', async () => {
+    await openRoom();
+    expect(screen.getByRole('main')).toContainElement(screen.getByRole('region', { name: 'Room document' }));
+    expect(screen.getByRole('region', { name: 'Agents' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Team chat' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show team chat' })).toBeInTheDocument();
+  });
+
+  it('reopens the side panels as they were last left', async () => {
+    const first = await openRoom();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide agents' }));
+    showTeam();
+    first.unmount();
+
+    await openRoom();
+    expect(screen.queryByRole('region', { name: 'Agents' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show agents' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Team chat' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Room document' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show agents' }));
+    expect(screen.getByRole('textbox', { name: 'To Claude' })).toBeInTheDocument();
+  });
+
+  it('flags a pending question card on the collapsed agent pane', async () => {
+    pane.agents = [agent(CLAUDE, 'claude', 'Claude', { status: 'waiting', activeTurnId: 't1' })];
+    pane.turns = [turn({ waitingOnHandId: 'h1' })];
+    pane.cards = [card({})];
+    await openRoom();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide agents' }));
+    const handle = screen.getByRole('button', { name: 'Show agents: 1 question' });
+    expect(within(handle).getByText('1 question')).toBeInTheDocument();
+  });
+
+  it('flags a running turn on the collapsed agent pane', async () => {
+    pane.agents = [agent(CLAUDE, 'claude', 'Claude', { status: 'running', activeTurnId: 't1' })];
+    pane.turns = [turn({})];
+    await openRoom();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide agents' }));
+    expect(screen.getByRole('button', { name: 'Show agents: Working' })).toBeInTheDocument();
+  });
+
+  it("counts unread team messages on the collapsed team chat, leaving out the person's own", async () => {
+    teamMessages = [teamMessage('tm1', DANA, 'Too big?'), teamMessage('tm2', ROBERT, 'Maybe'), teamMessage('tm3', DANA, 'Cut it')];
+    await openRoom();
+    expect(screen.getByRole('button', { name: 'Show team chat: 2 unread' })).toBeInTheDocument();
+
+    showTeam();
+    expect(screen.getByText('Cut it')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide team chat' }));
+    expect(screen.getByRole('button', { name: 'Show team chat' })).toBeInTheDocument();
+
+    teamMessages = [...teamMessages, teamMessage('tm4', DANA, 'Agreed then')];
+    act(() => pushBackend());
+    expect(screen.getByRole('button', { name: 'Show team chat: 1 unread' })).toBeInTheDocument();
+  });
+});
+
 describe('composers', () => {
   it('labels each composer by its audience', async () => {
     await openRoom();
+    showTeam();
     expect(screen.getByRole('textbox', { name: 'To Claude' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'To team only' })).toBeInTheDocument();
   });
 
   it('sends Enter in the team composer to the team only and keeps focus there', async () => {
     await openRoom();
+    showTeam();
     const team = screen.getByRole('textbox', { name: 'To team only' });
     team.focus();
     fireEvent.change(team, { target: { value: 'between us, this plan is too big' } });

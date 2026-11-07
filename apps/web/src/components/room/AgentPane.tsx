@@ -1,5 +1,5 @@
 import type { Id } from '@atelier/backend/dataModel';
-import { BotIcon } from 'lucide-react';
+import { BotIcon, PanelLeftCloseIcon } from 'lucide-react';
 import { useLayoutEffect, useRef, useState } from 'react';
 import { StreamingMarkdown } from '~/components/markdown/StreamingMarkdown';
 import { Badge } from '~/components/ui/badge';
@@ -29,9 +29,11 @@ interface AgentPaneProps {
   names: Names;
   offline: boolean;
   onShowEarlier: () => void;
+  /** Folds the pane away beside the document. */
+  onCollapse?: () => void;
 }
 
-export function AgentPane({ roomId, pane, names, offline, onShowEarlier }: AgentPaneProps) {
+export function AgentPane({ roomId, pane, names, offline, onShowEarlier, onCollapse }: AgentPaneProps) {
   const { scrollRef, contentRef } = useStickToBottom<HTMLDivElement, HTMLOListElement>();
   const [picked, setPicked] = useState<Id<'participants'> | null>(null);
   const [lastTarget, setLastTarget] = useState(() => readLastTarget(roomId));
@@ -76,6 +78,11 @@ export function AgentPane({ roomId, pane, names, offline, onShowEarlier }: Agent
         {pane.agents.map((agent) => (
           <AgentStatus key={agent.participantId} agent={agent} />
         ))}
+        {onCollapse ? (
+          <Button size="icon-xs" variant="ghost-muted" className="ml-auto" aria-label="Hide agents" title="Hide agents" onClick={onCollapse}>
+            <PanelLeftCloseIcon />
+          </Button>
+        ) : null}
       </header>
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]">
         <ol ref={contentRef} className="mx-auto max-w-3xl space-y-5 px-4 py-4">

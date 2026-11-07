@@ -160,20 +160,78 @@ export function useStickToBottom<Scroll extends HTMLElement, Content extends HTM
   return { scrollRef, contentRef };
 }
 
-const lastTargetKey = (roomId: string) => `atelier:last-target:${roomId}`;
-
-export function readLastTarget(roomId: string): string | null {
+function readStored(key: string): string | null {
   try {
-    return window.localStorage.getItem(lastTargetKey(roomId));
+    return window.localStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-export function writeLastTarget(roomId: string, participantId: string) {
+function writeStored(key: string, value: string) {
   try {
-    window.localStorage.setItem(lastTargetKey(roomId), participantId);
+    window.localStorage.setItem(key, value);
   } catch {
     // Storage can be unavailable (private windows); the default still applies.
   }
+}
+
+const lastTargetKey = (roomId: string) => `atelier:last-target:${roomId}`;
+
+export function readLastTarget(roomId: string): string | null {
+  return readStored(lastTargetKey(roomId));
+}
+
+export function writeLastTarget(roomId: string, participantId: string) {
+  writeStored(lastTargetKey(roomId), participantId);
+}
+
+/** Which side panels are expanded beside the document. */
+export interface SidePanels {
+  agent: boolean;
+  team: boolean;
+}
+
+// A room opened for the first time shows the agents and keeps team chat folded away.
+const FIRST_VISIT_PANELS: SidePanels = { agent: true, team: false };
+const panelsKey = (roomId: string) => `atelier:panels:${roomId}`;
+
+export function readPanels(roomId: string): SidePanels {
+  const stored = readStored(panelsKey(roomId));
+  if (!stored) return FIRST_VISIT_PANELS;
+  try {
+    const parsed = JSON.parse(stored) as Partial<SidePanels>;
+    return { agent: parsed.agent ?? FIRST_VISIT_PANELS.agent, team: parsed.team ?? FIRST_VISIT_PANELS.team };
+  } catch {
+    return FIRST_VISIT_PANELS;
+  }
+}
+
+export function writePanels(roomId: string, panels: SidePanels) {
+  writeStored(panelsKey(roomId), JSON.stringify(panels));
+}
+
+// How many team messages this browser has shown, so a folded team chat can
+// count the rest as unread.
+const teamSeenKey = (roomId: string) => `atelier:team-seen:${roomId}`;
+
+export function readTeamSeen(roomId: string): number {
+  return Number(readStored(teamSeenKey(roomId))) || 0;
+}
+
+export function writeTeamSeen(roomId: string, count: number) {
+  writeStored(teamSeenKey(roomId), String(count));
+}
+
+/** Team messages after the first `seen`, leaving out the person's own. */
+export function unreadTeamCount(messages: readonly { authorParticipantId: string }[], seen: number, meId: string | null) {
+  return messages.slice(seen).filter((m) => m.authorParticipantId !== meId).length;
+}
+
+/** What a folded agent pane flags: open question cards first, then agents at work. */
+export function agentAttention(pane: Pane): string | null {
+  const questions = pane.cards.filter((c) => c.status === 'raised').length;
+  if (questions) return questions === 1 ? '1 question' : `${questions} questions`;
+  if (pane.agents.some((a) => a.status === 'running' || a.status === 'starting')) return 'Working';
+  return null;
 }
