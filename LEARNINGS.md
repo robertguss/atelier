@@ -330,14 +330,39 @@ Findings from the browser pass are in
   capabilities ("Codex can't raise question cards") and agents get the old
   room tools. Ask an agent to list its `atelier` tools to see what is live.
 - `ssh aurora-but-gold.exe.xyz '<cmd>'` works for checks from the Mac, but its
-  non-login shell has no `node` or `npx` on PATH, so `npx convex env list`
-  fails there. Run Convex commands from an interactive VM shell.
+  non-login shell has no `node`, `npx` or harness CLIs on PATH. Borrow the
+  runner's PATH from `/proc/<runner pid>/environ` (print only `PATH=`), or run
+  Convex commands from an interactive VM shell.
+- The runner runs detached from `~/Projects/atelier/runner` as
+  `node --env-file-if-exists=.env.local src/index.ts`, logging to
+  `~/.atelier/logs/runner.log`. To restart it, kill only that pid and start it
+  again with `setsid nohup` and the same PATH; the log then shows a fresh
+  `runner "exe-vm" registered` line.
 - Claude in Chrome's `resize_window` does nothing on a maximized window. To
   check the narrow layout, inject a 390 px same-origin iframe of the page; the
   Clerk session carries over.
-- A Claude turn that backgrounds a command (Claude Code does this for
-  `sleep`) emits two `result` messages. Use one to reproduce steer and
-  streamed-text edge cases.
+- Claude Code moves `sleep` and other long commands to the background, then
+  ends its turn with a `result` and starts another when the command
+  finishes, so one room turn can hold several results. A probe with Sonnet
+  (Agent SDK 0.3.318) showed:
+  - a `priority: 'next'` message pushed after the first result, while the
+    background task runs, starts at once as its own result, and the task
+    keeps running;
+  - `background_tasks_changed` carries the live set (REPLACE semantics) with
+    an `ambient` flag; `q.stopTask(taskId)` stops one task;
+  - closing the input does not end the query while a background task lives:
+    a backgrounded `sleep 600` held the query open past the close, so a
+    command that never exits holds the room turn until the turn deadline.
+    That was true before the steering change too.
+- A steer that lands in the instant between Claude's single final `result`
+  and the adapter closing its input can hang the turn: the adapter waits on
+  `cancelAsyncMessage` inside its message loop and the reply never arrives.
+  Seen only in the fake-CLI test, not live.
+- The Agent tool's `isolation: "worktree"` cut worktrees from `main`, not
+  from the current branch, and removed them once a worker stopped without
+  changes. For parallel workers on an unmerged branch, create the worktrees
+  yourself (`git worktree add --detach <dir> <sha>`) and point each worker at
+  its own.
 
 ## Quality tooling (2026-11-06)
 

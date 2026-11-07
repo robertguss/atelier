@@ -34,6 +34,11 @@ signed in with another address sees which address the invite was for, partly
 masked, and cannot join. Pending invites are listed in **Members**, where
 **Revoke** cancels one. An invite to a second room is a second invite.
 
+**Members** refuses an invite to someone already in the room, the owner
+included, and to an address that already has an unexpired pending invite. A
+removed teammate can be invited again. If the server has no Clerk key or web
+address set, **Members** says invites aren't set up yet.
+
 ### The join notice
 
 Before a teammate enters a room for the first time, they must accept a notice
@@ -103,6 +108,12 @@ harness can no longer take it, for example because the turn just ended, the
 message goes back to the queue and runs as the next turn. A follow-up to an
 independent review never takes a steer.
 
+The steer buttons appear only while the agent's turn can take a steer: not
+during a scribe run, a turn answering a thread mention or a review follow-up.
+While Claude waits on a command it moved to the background, it still takes a
+steer, which starts at once. A steered message shows inside the turn it went
+into, before that turn's answer.
+
 Anyone in the room can stop a running turn. The agent's next prompt says who
 stopped it.
 
@@ -117,8 +128,9 @@ message as the free answer.
 
 Each answer on the card is recorded as one decision per question, linked to
 the team messages posted while the card was open (by id only). A chat answer
-reaches the agent as the answer to every question but is recorded as one
-decision for the whole card. Recent decisions appear in every agent's room
+reaches the agent as the answer to every question, and Claude is told that the
+one message answers them all. It is recorded as one decision for the whole
+card. Recent decisions appear in every agent's room
 context. A card left unanswered for 2 hours closes with no decision, and
 stopping the turn cancels its card.
 
