@@ -293,6 +293,19 @@ test('an ordinary turn gets a room tools token, and it is revoked before the tur
   assert.equal(s.roomTools.live.size, 0);
 });
 
+test('a finish that Convex rejects fails the turn at once, so a scribe run does not hold the document until its lease lapses', async () => {
+  const s = setup();
+  const turn = s.turns.handle('c-run');
+  await until(() => s.runs[0]);
+  s.replies['runner:finish'] = () => { throw new Error('Too many writes in one mutation'); };
+  mock.method(console, 'error', () => {});
+  end(s.runs[0]!, { type: 'final', text: 'done' });
+  await turn;
+  assert.equal(s.named('runner:fail').length, 1);
+  assert.match(s.named('runner:fail')[0].error, /could not save its result/);
+  assert.equal(s.named('runner:fail')[0].interrupted, undefined);
+});
+
 test('a failed turn revokes its room tools token', async () => {
   const s = setup();
   const turn = s.turns.handle('c-run');

@@ -4,8 +4,10 @@ import { internal } from './_generated/api';
 import type { Doc, Id } from './_generated/dataModel';
 import { requireMember } from './lib/auth';
 import {
+  DOCUMENT_BLOCKS,
   LEASE_MS,
   SCRIBE_WORKING,
+  blockTextProblem,
   clearLease,
   deleteBlock,
   getDocument,
@@ -106,6 +108,8 @@ export const save = mutation({
   handler: async (ctx, { blockId, text }) => {
     const { block, participant, now } = await loadForEdit(ctx, blockId);
     await requireOwnLease(ctx, block, participant._id, now);
+    const problem = blockTextProblem(text);
+    if (problem) throw new Error(problem);
     if (text === block.text) {
       await grantLease(ctx, blockId, participant._id, now, block.leaseChangeSetId);
       return;
@@ -135,7 +139,10 @@ export const add = mutation({
     if (!document) throw new Error('This room has no document yet');
     const now = Date.now();
     if (scribeWorking(document, now)) throw new Error(SCRIBE_WORKING);
+    const problem = blockTextProblem(text);
+    if (problem) throw new Error(problem);
     const blocks = await liveBlocks(ctx, document._id);
+    if (blocks.length >= DOCUMENT_BLOCKS) throw new Error(`The document holds at most ${DOCUMENT_BLOCKS} blocks. Merge or remove some first.`);
     const anchorId = afterBlockId ?? endOfSectionId;
     let index = blocks.length - 1;
     if (anchorId) {

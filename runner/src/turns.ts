@@ -241,9 +241,20 @@ export function createTurns({ client, secret, harnesses, roomTools, appendTransc
     await flushItems().catch((e) => console.error('saving tool activity failed:', e));
 
     if (finalText !== null && !error) {
-      await client.mutation(api.runner.finish, {
-        secret, turnId, commandId, finalText: finalText || text, sessionId, usage, transcriptRef, model: effectiveModel,
-      });
+      try {
+        await client.mutation(api.runner.finish, {
+          secret, turnId, commandId, finalText: finalText || text, sessionId, usage, transcriptRef, model: effectiveModel,
+        });
+      } catch (e) {
+        // Convex saved nothing (a mutation is all-or-nothing), so the turn is still open and a scribe
+        // run still holds the document lock. Fail the turn now rather than wait for its lease to lapse;
+        // if the finish did commit and only the reply was lost, `fail` finds the turn ended and does nothing.
+        console.error(`turn ${turnId}: saving the result failed:`, e);
+        await client.mutation(api.runner.fail, {
+          secret, turnId, commandId, error: 'The turn finished, but Atelier could not save its result', transcriptRef,
+        });
+        return;
+      }
       console.log(`turn ${turnId}: done${usage?.costUsd ? ` ($${usage.costUsd.toFixed(4)})` : ''}`);
     } else {
       await client.mutation(api.runner.fail, {

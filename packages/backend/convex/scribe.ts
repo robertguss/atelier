@@ -3,7 +3,7 @@ import { internal } from './_generated/api';
 import type { Doc } from './_generated/dataModel';
 import { internalMutation, mutation, query, type MutationCtx } from './_generated/server';
 import { requireMember } from './lib/auth';
-import { isActiveTurnStatus, requireRunnerOnline } from './lib/dispatch';
+import { activeOrdinaryTurn, isActiveTurnStatus, requireRunnerOnline } from './lib/dispatch';
 import { SCRIBE_WORKING, ensureDocument, getDocument, leaseHolder, liveBlocks, participantName, scribeWorking, takeCheckpoint } from './lib/document';
 import { record } from './lib/ledger';
 import { agentName, contextBlock, loadRoomContext, neutralize, roomMembers, turnPrompt } from './lib/prompt';
@@ -65,6 +65,10 @@ export const begin = mutation({
     for (const block of await liveBlocks(ctx, document._id)) {
       const holder = leaseHolder(block, now);
       if (holder) throw new Error(`${await participantName(ctx, holder)} is editing a block`);
+    }
+    // The scribe's turn would run beside the model's current one, in the same folder.
+    if (await activeOrdinaryTurn(ctx, participantId)) {
+      throw new Error(`${scribe.displayName} is still answering. Call in the scribe when its turn ends.`);
     }
     const room = await requireRunnerOnline(ctx, await ctx.db.get(roomId));
 

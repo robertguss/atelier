@@ -135,6 +135,17 @@ test('Claude cannot edit a block Codex wrote, and can comment on its passage ins
   expect((await t.run(ctx => ctx.db.query('messages').collect())).filter(m => m.threadId)).toHaveLength(0);
 });
 
+test('a comment whose quote appears twice in the block is refused, so the model can quote a longer passage', async () => {
+  const { t, owner, roomId, documentId, claude, codex } = await setup();
+  const blockId = await t.run(async ctx => {
+    const changeSetId = await openChangeSet(ctx, documentId, { kind: 'model_turn', actorParticipantId: codex._id });
+    return await insertBlock(ctx, changeSetId, { order: 'a0V', kind: 'paragraph', text: 'We ship it Friday. Then, we ship it Monday.', author: { kind: 'participant', participantId: codex._id } });
+  });
+  const { turnId } = await runningTurn(t, owner, roomId, claude._id);
+  expect(await tools(t, turnId).comment(blockId, 'ship it', 'Which one?')).toMatchObject({ ok: false, reason: 'quote_ambiguous' });
+  expect(await tools(t, turnId).comment(blockId, 'ship it Monday', 'Why wait?')).toMatchObject({ ok: true });
+});
+
 test('a comment whose quote is not in the block is refused, so the model can quote it again', async () => {
   const { t, owner, roomId, happened, claude } = await setup();
   const { turnId } = await runningTurn(t, owner, roomId, claude._id);

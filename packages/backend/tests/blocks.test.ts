@@ -239,6 +239,23 @@ test('a person moves a block up and down past its neighbours and removes it', as
   expect(ops).toEqual([['delete'], ['move'], ['move'], ['move']]);
 });
 
+test('a person cannot save or add a block longer than a model may write, or add past the document\'s block limit', async () => {
+  const s = await setup();
+  const long = 'x'.repeat(4_001);
+  await s.owner.mutation(api.blocks.startEdit, { blockId: s.ideas._id });
+  await expect(s.owner.mutation(api.blocks.save, { blockId: s.ideas._id, text: long })).rejects.toThrow('at most 4000 characters');
+  await s.owner.mutation(api.blocks.save, { blockId: s.ideas._id, text: 'x'.repeat(4_000) });
+  await expect(s.owner.mutation(api.blocks.add, { roomId: s.roomId, kind: 'paragraph', text: long })).rejects.toThrow('at most 4000 characters');
+
+  await s.t.run(async ctx => {
+    const live = (await ctx.db.query('blocks').collect()).length;
+    for (let i = live; i < 600; i++) {
+      await ctx.db.insert('blocks', { documentId: s.documentId, roomId: s.roomId, order: `b${String(i).padStart(4, '0')}`, kind: 'paragraph', text: 'filler', author: { kind: 'participant', participantId: s.robert._id }, rev: 0 });
+    }
+  });
+  await expect(s.owner.mutation(api.blocks.add, { roomId: s.roomId, kind: 'paragraph', text: 'one too many' })).rejects.toThrow('at most 600 blocks');
+});
+
 test('someone outside the room cannot edit its blocks', async () => {
   const { t, ideas } = await setup();
   const eve = t.withIdentity({ email: 'eve@example.com', subject: 'eve', name: 'Eve' });

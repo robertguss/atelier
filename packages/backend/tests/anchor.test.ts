@@ -46,3 +46,11 @@ test('a two-word quote that appears twice anchors to the occurrence nearest the 
   expect(matchQuote(text, selector)!.start).toBe(second);
   expect(matchQuote(text, { ...selector, position: 0 })!.start).toBe(0);
 });
+
+test('a longest-allowed passage rewritten in a longest-allowed block is found gone within a fraction of a second', () => {
+  const words = (seed: number) => Array.from({ length: 800 }, (_, i) => `w${(i * 7919 + seed) % 977}`).join(' ').slice(0, 4_000);
+  const original = words(1);
+  const started = performance.now();
+  expect(matchQuote(words(2), selectorAt(original, 0, 3_900))).toBeNull();
+  expect(performance.now() - started).toBeLessThan(1_000);
+});

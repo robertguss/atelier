@@ -270,6 +270,16 @@ test('calling in the scribe while the teammate edits a block is refused, naming 
   expect(await s.t.run(ctx => ctx.db.query('scribeRuns').collect())).toEqual([]);
 });
 
+test('calling in the scribe is refused while that model is answering, and allowed once its turn ends', async () => {
+  const s = await setup();
+  const busy = await ordinaryTurn(s.t, s.owner, s.roomId, s.claude._id);
+  await expect(s.owner.mutation(api.scribe.begin, { roomId: s.roomId, participantId: s.claude._id })).rejects.toThrow('Claude is still answering');
+  expect(await s.t.run(ctx => ctx.db.query('scribeRuns').collect())).toEqual([]);
+  await finish(s.t, busy.turnId, busy.commandId);
+  await beginScribe(s.t, s.owner, s.roomId, s.claude._id);
+  expect(await s.t.run(ctx => ctx.db.query('scribeRuns').collect())).toHaveLength(1);
+});
+
 test('calling in the scribe with the runner offline, or while a run is working, is refused', async () => {
   const s = await setup();
   vi.advanceTimersByTime(46_000);

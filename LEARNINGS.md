@@ -187,7 +187,7 @@ Claude Code 2.1.318 through Agent SDK 0.3.318 (Haiku and Sonnet), Codex CLI
 ## Room document tool probes (2026-11-07)
 
 Run live with Robert's logins in throwaway git repos under `/tmp`, using
-`runner/scripts/probe-room-tools.ts`: Claude Code through Agent SDK 0.3.318
+a throwaway probe script (not kept): Claude Code through Agent SDK 0.3.318
 (Haiku), Codex CLI 0.166.0 `app-server` (`gpt-6.1-sol`, low effort) and Pi
 1.4.0 (`openai/gpt-6-astra`, low thinking). Each harness got one stub `echo`
 tool from the runner, on a fresh session and then on a resumed one.

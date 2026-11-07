@@ -433,7 +433,9 @@ export default defineSchema({
     sourceBlockIds: v.optional(v.array(v.id('blocks'))),
   })
     // Reading the document in order.
-    .index('by_document_order', ['documentId', 'order']),
+    .index('by_document_order', ['documentId', 'order'])
+    // Live blocks only, in order: removed blocks stay as rows for history and never slow a read.
+    .index('by_document_live', ['documentId', 'deletedAt', 'order']),
 
   changeSets: defineTable({
     documentId: v.id('documents'),

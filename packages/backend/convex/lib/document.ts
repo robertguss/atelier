@@ -34,13 +34,24 @@ export async function getDocument(ctx: QueryCtx, roomId: Id<'rooms'>) {
   return await ctx.db.query('documents').withIndex('by_room', (q) => q.eq('roomId', roomId)).unique();
 }
 
+// Limits on one block and on the whole document, for people and models alike.
+// Passage matching, the scribe commit and the tools' reads are sized for them.
+export const BLOCK_CHARS = 4_000;
+export const DOCUMENT_BLOCKS = 600;
+
+// A reason the text cannot be a block, or null.
+export function blockTextProblem(text: string) {
+  return text.length > BLOCK_CHARS
+    ? `A block holds at most ${BLOCK_CHARS} characters; this one has ${text.length}. Split it into several blocks.`
+    : null;
+}
+
 // The document's blocks in order, without deleted ones.
 export async function liveBlocks(ctx: QueryCtx, documentId: Id<'documents'>) {
-  const rows = await ctx.db
+  return await ctx.db
     .query('blocks')
-    .withIndex('by_document_order', (q) => q.eq('documentId', documentId))
+    .withIndex('by_document_live', (q) => q.eq('documentId', documentId).eq('deletedAt', undefined))
     .collect();
-  return rows.filter((b) => b.deletedAt === undefined);
 }
 
 type ChangeSetSpec = {

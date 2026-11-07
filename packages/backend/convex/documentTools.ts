@@ -3,7 +3,10 @@ import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/s
 import type { Doc, Id } from './_generated/dataModel';
 import { requireRunnerSecret } from './lib/auth';
 import {
+  BLOCK_CHARS,
+  DOCUMENT_BLOCKS,
   SCRIBE_WORKING,
+  blockTextProblem,
   deleteBlock,
   getDocument,
   insertBlock,
@@ -31,7 +34,7 @@ import { blockKind } from './schema';
 // each is a compare-and-set against the block's rev that refuses while a
 // person holds the block. Nothing here reads team chat.
 
-export const MODEL_LIMITS = { blockWritesPerTurn: 20, commentsPerTurn: 10, blockChars: 4_000, documentBlocks: 600 };
+export const MODEL_LIMITS = { blockWritesPerTurn: 20, commentsPerTurn: 10, blockChars: BLOCK_CHARS, documentBlocks: DOCUMENT_BLOCKS };
 
 type Reason =
   | 'turn_ended'
@@ -48,6 +51,7 @@ type Reason =
   | 'empty'
   | 'document_full'
   | 'quote_not_found'
+  | 'quote_ambiguous'
   | 'not_scribe'
   | 'draft_full'
   | 'bad_request';
@@ -108,10 +112,8 @@ async function loadForWrite(ctx: MutationCtx, secret: string, turnId: Id<'turns'
 
 function checkText(text: string) {
   if (!text.trim()) return refuse('empty', 'A block needs some text. To remove a block, delete it.');
-  if (text.length > MODEL_LIMITS.blockChars) {
-    return refuse('too_long', `A block holds at most ${MODEL_LIMITS.blockChars} characters; this one has ${text.length}. Split it into several blocks.`);
-  }
-  return null;
+  const problem = blockTextProblem(text);
+  return problem ? refuse('too_long', problem) : null;
 }
 
 // A live block of the turn's room, from an id the model passed.
@@ -315,6 +317,9 @@ export const commentForTurn = mutation({
     if (!block) return refuse('not_found', NOT_FOUND);
     const start = quote ? block.text.indexOf(quote) : -1;
     if (start < 0) return refuse('quote_not_found', 'That passage is not in the block\'s text. Quote it exactly as it appears in the block.');
+    if (block.text.indexOf(quote, start + 1) >= 0) {
+      return refuse('quote_ambiguous', 'That passage appears more than once in the block. Quote a longer passage that appears only once.');
+    }
     const thread = await createThread(ctx, block, start, start + quote.length);
     const author = (await ctx.db.get(turn.participantId))!;
     const commentId = await postComment(ctx, thread, author, text, turn._id);

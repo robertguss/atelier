@@ -135,8 +135,8 @@ Either person in the room can call it in.
 2. Choose which model acts as scribe.
 
 It is refused, with the reason, while someone is editing a block ("*name* is
-editing a block"), while the runner is offline, and while a scribe is already
-working.
+editing a block"), while that model is still answering a message, while the
+runner is offline, and while a scribe is already working.
 
 While the scribe works, a banner reads "The scribe is working", with the model,
 who started it and how long it has run. The document is read-only for everyone:
@@ -250,10 +250,13 @@ phone always starts from the default template.
 The models work within caps for each turn:
 
 - at most 20 block writes (each add, update or delete counts);
-- at most 10 comments;
-- at most 4,000 characters in a block or a comment;
+- at most 10 comments.
+
+Everyone, people and models alike, works within the size of the document:
+
+- at most 4,000 characters in a block (models also in a comment);
 - no new blocks once the document has 600.
 
 The scribe's changes must also leave the document at 600 blocks or fewer. A
-write past a cap is refused, and the model is told why. These caps apply to
-models, not to people.
+write past a cap is refused, and the model or person is told why. A comment's
+quote must appear once in its block, so it lands where the model meant.
