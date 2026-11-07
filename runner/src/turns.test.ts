@@ -1,33 +1,70 @@
-import { test, mock, afterEach } from 'node:test';
-import assert from 'node:assert/strict';
-import { getFunctionName } from 'convex/server';
-import type { Harness, HarnessEvent, QuestionCard, TurnInput, TurnRequest } from '@atelier/shared';
-import { eventQueue } from './adapters/events.ts';
-import { documentTools, scribeTools, type RoomToolSet } from './roomTools.ts';
-import { createTurns, type TurnsClient } from './turns.ts';
+import { setImmediate } from "node:timers/promises";
 
-afterEach(() => mock.timers.reset());
+import type {
+  Harness,
+  HarnessEvent,
+  QuestionCard,
+  SteerOutcome,
+  TurnInput,
+  TurnRequest,
+} from "@atelier/shared";
+import { getFunctionName } from "convex/server";
+import type {
+  FunctionArgs,
+  FunctionReference,
+  FunctionReference_future,
+  FunctionReturnType,
+} from "convex/server";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
+
+import { eventQueue } from "./adapters/events.ts";
+import { documentTools, scribeTools } from "./room-tools.ts";
+import type { RoomToolSet } from "./room-tools.ts";
+import { createTurns } from "./turns.ts";
+import type { TurnsClient } from "./turns.ts";
 
 const MINUTE = 60_000;
 
+type MutationArgs = Record<string, unknown>;
+
 // Records every mutation by name and answers the ones the runner reads.
-function fakeConvex(jobs: Record<string, unknown>) {
-  const calls: { name: string; args: any }[] = [];
-  const replies: Record<string, (args: any) => unknown> = {
-    'runner:claim': (args) => jobs[args.commandId] ?? null,
-    'runner:start': () => ({ editsEnabled: false }),
-    'runner:progress': () => true,
-    'runner:raiseHand': () => 'hand-1',
-  };
-  const client = {
-    async mutation(ref: any, args: any) {
-      const name = getFunctionName(ref);
-      calls.push({ name, args });
-      return replies[name]?.(args);
-    },
-  };
-  const named = (name: string) => calls.filter((c) => c.name === name).map((c) => c.args);
-  return { client: client as unknown as TurnsClient, calls, replies, named };
+class FakeConvex {
+  readonly calls: { name: string; args: MutationArgs }[] = [];
+  readonly replies: Record<string, (args: MutationArgs) => unknown>;
+
+  constructor(jobs: Record<string, unknown>) {
+    this.replies = {
+      "runner:claim": (args) =>
+        typeof args.commandId === "string"
+          ? (jobs[args.commandId] ?? null)
+          : null,
+      "runner:progress": () => true,
+      "runner:raiseHand": () => "hand-1",
+      "runner:start": () => ({ editsEnabled: false }),
+    };
+  }
+
+  mutation<
+    Mutation extends
+      | FunctionReference<"mutation">
+      | FunctionReference_future<"mutation">,
+  >(
+    ref: Mutation,
+    args: FunctionArgs<Mutation>
+  ): Promise<Awaited<FunctionReturnType<Mutation>>>;
+  // oxlint-disable-next-line require-await -- timer tests advance fake time right after a call is recorded, so replies must settle within one microtask; an added await breaks them
+  async mutation(
+    ref: FunctionReference<"mutation"> | FunctionReference_future<"mutation">,
+    args: MutationArgs
+  ): Promise<unknown> {
+    const name = getFunctionName(ref);
+    this.calls.push({ args, name });
+    return this.replies[name]?.(args);
+  }
+
+  named(name: string) {
+    return this.calls.filter((c) => c.name === name).map((c) => c.args);
+  }
 }
 
 interface FakeRun {
@@ -42,378 +79,694 @@ interface FakeRun {
 }
 
 // A harness the test drives by pushing events into the running turn.
-function fakeHarness() {
+const fakeHarness = () => {
   const runs: FakeRun[] = [];
   const harness: Harness = {
-    id: 'claude',
     capabilities: { canRaiseCards: true },
-    async version() { return 'fake 1.0'; },
+    id: "claude",
     async *runTurn(req, signal, input) {
       const events = eventQueue();
-      const run: FakeRun = { req, signal, input, events, steers: [], edits: [] };
-      input.steer = async (text) => { run.steers.push(text); return 'steered'; };
-      input.setEditsEnabled = (on) => { run.edits.push(on); };
-      signal.addEventListener('abort', () => {
-        events.push({ type: 'error', message: 'Interrupted', retryable: false });
+      const run: FakeRun = {
+        edits: [],
+        events,
+        input,
+        req,
+        signal,
+        steers: [],
+      };
+      input.steer = async (text) => {
+        run.steers.push(text);
+        return await Promise.resolve<SteerOutcome>("steered");
+      };
+      input.setEditsEnabled = (on) => {
+        run.edits.push(on);
+      };
+      signal.addEventListener("abort", () => {
+        events.push({
+          message: "Interrupted",
+          retryable: false,
+          type: "error",
+        });
         events.end();
       });
       runs.push(run);
       yield* events;
-      if (run.crash) throw run.crash;
+      if (run.crash) {
+        throw run.crash;
+      }
+    },
+    async version() {
+      return await Promise.resolve("fake 1.0");
     },
   };
   return { harness, runs };
-}
+};
 
-function runJob(turnId: string) {
-  return {
-    commandId: 'c-run',
-    type: 'run_turn',
-    turn: { id: turnId, prompt: 'Plan the launch', independentReview: false },
-    participant: { id: 'p-claude', harness: 'claude', sessionId: undefined },
-    room: { id: 'r1', cwd: '/tmp/room', name: 'Room', handbook: '', editsEnabled: false },
-  };
-}
+const runJob = (turnId: string) => ({
+  commandId: "c-run",
+  participant: { harness: "claude", id: "p-claude", sessionId: undefined },
+  room: {
+    cwd: "/tmp/room",
+    editsEnabled: false,
+    handbook: "",
+    id: "r1",
+    name: "Room",
+  },
+  turn: { id: turnId, independentReview: false, prompt: "Plan the launch" },
+  type: "run_turn",
+});
 
 // Issues one token per turn and records what is still live.
-function fakeRoomTools() {
+const fakeRoomTools = () => {
   const live = new Map<string, string>();
   const issued: { turnId: string; token: string; tools?: RoomToolSet }[] = [];
   let next = 0;
   return {
-    live,
-    issued,
     async issue(turnId: string, tools?: RoomToolSet) {
-      const token = `room-token-${++next}`;
+      next += 1;
+      const token = `room-token-${next}`;
       live.set(token, turnId);
-      issued.push({ turnId, token, tools });
-      return { url: 'http://127.0.0.1:40123/mcp', token };
+      issued.push({ token, tools, turnId });
+      return await Promise.resolve({
+        token,
+        url: "http://127.0.0.1:40123/mcp",
+      });
     },
-    revoke(token: string) { live.delete(token); },
+    issued,
+    live,
+    revoke(token: string) {
+      live.delete(token);
+    },
   };
-}
+};
 
-function setup(extraJobs: Record<string, unknown> = {}) {
-  const convex = fakeConvex({ 'c-run': runJob('t1'), ...extraJobs });
+const setup = (extraJobs: Record<string, unknown> = {}) => {
+  const convex = new FakeConvex({ "c-run": runJob("t1"), ...extraJobs });
+  const client: TurnsClient = convex;
   const { harness, runs } = fakeHarness();
   const roomTools = fakeRoomTools();
   const transcript: unknown[] = [];
   const turns = createTurns({
-    client: convex.client,
-    secret: 's3cret',
+    appendTranscript(_turnId, record) {
+      transcript.push(record);
+    },
+    client,
     harnesses: { claude: harness },
     roomTools,
-    appendTranscript(_turnId, record) { transcript.push(record); },
+    secret: "s3cret",
     transcriptPath: (turnId) => `/tmp/${turnId}.ndjson`,
   });
-  return { ...convex, runs, turns, roomTools, transcript };
-}
-
-async function until(condition: () => unknown) {
-  for (let i = 0; i < 2000; i++) {
-    if (condition()) return;
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-  throw new Error('condition never held');
-}
-
-// Lets the runner consume what the test just pushed.
-async function idle() {
-  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
-}
-
-const card: QuestionCard = {
-  requestId: 'req-1',
-  questions: [{ id: 'scope', header: 'Scope', text: 'Which scope?', options: [{ label: 'Small' }, { label: 'Large' }], multiSelect: false, allowFreeText: true }],
+  return {
+    calls: convex.calls,
+    named: (name: string) => convex.named(name),
+    replies: convex.replies,
+    roomTools,
+    runs,
+    transcript,
+    turns,
+  };
 };
 
-function end(run: FakeRun, ...events: HarnessEvent[]) {
-  for (const event of events) run.events.push(event);
+const until = async (condition: () => boolean) => {
+  for (let i = 0; i < 2000; i += 1) {
+    if (condition()) {
+      return;
+    }
+    // oxlint-disable-next-line no-await-in-loop -- polling: each check must wait for the runner to make progress
+    await setImmediate();
+  }
+  throw new Error("condition never held");
+};
+
+// Lets the runner consume what the test just pushed.
+const idle = async () => {
+  for (let i = 0; i < 20; i += 1) {
+    // oxlint-disable-next-line no-await-in-loop -- each turn of the event loop must finish before the next
+    await setImmediate();
+  }
+};
+
+const card: QuestionCard = {
+  questions: [
+    {
+      allowFreeText: true,
+      header: "Scope",
+      id: "scope",
+      multiSelect: false,
+      options: [{ label: "Small" }, { label: "Large" }],
+      text: "Which scope?",
+    },
+  ],
+  requestId: "req-1",
+};
+
+const end = (run: FakeRun, ...events: HarnessEvent[]) => {
+  for (const event of events) {
+    run.events.push(event);
+  }
   run.events.end();
-}
+};
 
-test('a question raises a card, and an answer command resolves the harness with the payload', async () => {
-  const payload = {
-    handId: 'hand-1', requestId: 'req-1', answeredBy: 'Dana', via: 'card',
-    answers: [{ questionId: 'scope', question: 'Which scope?', labels: ['Small'] }],
+const startScribe = async () => {
+  const scribe = {
+    ...runJob("t-scribe"),
+    commandId: "c-scribe",
+    documentMode: "scribe",
+    participant: {
+      harness: "claude",
+      id: "p-claude",
+      sessionId: "ordinary-session",
+    },
   };
-  const s = setup({ 'c-answer': { commandId: 'c-answer', type: 'answer', turn: { id: 't1' }, payload } });
-  const turn = s.turns.handle('c-run');
-  await until(() => s.runs[0]);
-  const run = s.runs[0]!;
+  const s = setup({ "c-scribe": scribe });
+  s.replies["runner:start"] = () => ({ editsEnabled: true });
+  const turn = s.turns.handle("c-scribe");
+  await until(() => s.runs.length > 0);
+  const [run] = s.runs;
+  assert(run);
+  return { run, s, turn };
+};
 
-  const answer = run.input.onQuestion(card);
-  await until(() => s.named('runner:raiseHand').length);
-  assert.deepEqual(s.named('runner:raiseHand'), [{ secret: 's3cret', turnId: 't1', requestId: 'req-1', questions: card.questions }]);
-
-  await s.turns.handle('c-answer');
-  assert.deepEqual(await answer, payload);
-  assert.deepEqual(s.named('runner:commandHandled'), [{ secret: 's3cret', commandId: 'c-answer', ok: true }]);
-
-  end(run, { type: 'final', text: 'Small it is' });
-  await turn;
-  assert.equal(s.named('runner:finish').length, 1);
-});
-
-test('a steer for a turn not running here is rejected without reaching a harness', async () => {
-  const s = setup({ 'c-steer': { commandId: 'c-steer', type: 'steer', turn: { id: 't-elsewhere' }, payload: { messageId: 'm1', text: 'Use Postgres' } } });
-  await s.turns.handle('c-steer');
-  assert.deepEqual(s.named('runner:steerResult'), [{ secret: 's3cret', messageId: 'm1', outcome: 'rejected' }]);
-  assert.equal(s.named('runner:commandHandled').length, 1);
-  assert.equal(s.named('runner:commandHandled')[0].ok, false);
-  assert.equal(s.runs.length, 0);
-});
-
-test('a steer for a running turn goes to the harness and its outcome is reported', async () => {
-  const s = setup({ 'c-steer': { commandId: 'c-steer', type: 'steer', turn: { id: 't1' }, payload: { messageId: 'm1', text: 'Use Postgres' } } });
-  const turn = s.turns.handle('c-run');
-  await until(() => s.runs[0]);
-  await s.turns.handle('c-steer');
-  assert.deepEqual(s.runs[0]!.steers, ['Use Postgres']);
-  assert.deepEqual(s.named('runner:steerResult'), [{ secret: 's3cret', messageId: 'm1', outcome: 'steered' }]);
-  assert.deepEqual(s.named('runner:commandHandled'), [{ secret: 's3cret', commandId: 'c-steer', ok: true }]);
-  end(s.runs[0]!, { type: 'final', text: 'done' });
-  await turn;
-});
-
-test('start applies the current edit switch, and a settings command changes it live', async () => {
-  const s = setup({ 'c-settings': { commandId: 'c-settings', type: 'settings', turn: { id: 't1' }, payload: { editsEnabled: false } } });
-  s.replies['runner:start'] = () => ({ editsEnabled: true });
-  const turn = s.turns.handle('c-run');
-  await until(() => s.runs[0]);
-  assert.equal(s.runs[0]!.req.editsEnabled, true);
-  await s.turns.handle('c-settings');
-  assert.deepEqual(s.runs[0]!.edits, [false]);
-  assert.deepEqual(s.named('runner:commandHandled'), [{ secret: 's3cret', commandId: 'c-settings', ok: true }]);
-  end(s.runs[0]!, { type: 'final', text: 'done' });
-  await turn;
-});
-
-test('an interrupt command aborts the running turn, which ends interrupted', async () => {
-  const s = setup({ 'c-stop': { commandId: 'c-stop', type: 'interrupt', turn: { id: 't1' }, payload: { reason: 'File edits were turned off' } } });
-  const turn = s.turns.handle('c-run');
-  await until(() => s.runs[0]);
-  await s.turns.handle('c-stop');
-  assert.equal(s.runs[0]!.signal.aborted, true);
-  await turn;
-  const [failed] = s.named('runner:fail');
-  assert.equal(failed.interrupted, true);
-  assert.equal(failed.error, 'File edits were turned off');
-  assert.equal(s.named('runner:finish').length, 0);
-  assert.deepEqual(s.named('runner:commandHandled'), [{ secret: 's3cret', commandId: 'c-stop', ok: true }]);
-});
-
-test('an open question pauses the 30-minute deadline, and the card expires at 2 hours', async () => {
-  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] });
-  const noDecision = { handId: 'hand-1', requestId: 'req-1', noDecision: true, message: 'No one answered' };
-  const s = setup({ 'c-expired': { commandId: 'c-expired', type: 'answer', turn: { id: 't1' }, payload: noDecision } });
-  const turn = s.turns.handle('c-run');
-  await until(() => s.runs[0]);
-  const run = s.runs[0]!;
-
-  mock.timers.tick(10 * MINUTE);
-  const answer = run.input.onQuestion(card);
-  await until(() => s.named('runner:raiseHand').length);
-
-  mock.timers.tick(31 * MINUTE);
-  assert.equal(run.signal.aborted, false, 'the deadline is paused while the card is open');
-  // The lease is still renewed while the turn waits.
-  const renewals = s.named('runner:progress').length;
-  mock.timers.tick(MINUTE);
-  assert.ok(s.named('runner:progress').length > renewals);
-  assert.equal(s.named('runner:handTimedOut').length, 0);
-
-  mock.timers.tick(2 * 60 * MINUTE - 32 * MINUTE);
-  await until(() => s.named('runner:handTimedOut').length);
-  assert.deepEqual(s.named('runner:handTimedOut'), [{ secret: 's3cret', handId: 'hand-1' }]);
-
-  // Convex closes the card and tells the agent no decision was made.
-  await s.turns.handle('c-expired');
-  assert.deepEqual(await answer, noDecision);
-
-  // The deadline resumes with the 20 minutes the turn had left.
-  mock.timers.tick(19 * MINUTE);
-  assert.equal(run.signal.aborted, false);
-  mock.timers.tick(MINUTE);
-  assert.equal(run.signal.aborted, true);
-  await turn;
-  assert.equal(s.named('runner:fail')[0].interrupted, true);
-});
-
-test('tool activity reaches Convex as items with one-line summaries, not raw output', async () => {
-  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] });
-  const s = setup();
-  const turn = s.turns.handle('c-run');
-  await until(() => s.runs[0]);
-  const run = s.runs[0]!;
-
-  run.events.push({ type: 'tool_call', id: 'call-1', name: 'Read', summary: 'src/plan.md' });
-  await idle();
-  assert.equal(s.named('runner:recordTurnItems').length, 0, 'items wait for the next flush');
-  mock.timers.tick(500);
-  await until(() => s.named('runner:recordTurnItems').length);
-  assert.deepEqual(s.named('runner:recordTurnItems')[0], {
-    secret: 's3cret', turnId: 't1', items: [{ callId: 'call-1', seq: 0, name: 'Read', summary: 'src/plan.md' }],
+describe(createTurns, () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
-  // Whatever else an adapter attaches to a result stays on the runner.
-  run.events.push({ type: 'tool_result', id: 'call-1', ok: true, output: 'RAW FILE CONTENTS' } as HarnessEvent);
-  await idle();
-  mock.timers.tick(500);
-  await until(() => s.named('runner:recordTurnItems').length === 2);
-  assert.deepEqual(s.named('runner:recordTurnItems')[1].items, [{ callId: 'call-1', seq: 0, name: 'Read', summary: 'src/plan.md', ok: true }]);
+  it("a question raises a card, and an answer command resolves the harness with the payload", async () => {
+    const payload = {
+      answeredBy: "Dana",
+      answers: [
+        { labels: ["Small"], question: "Which scope?", questionId: "scope" },
+      ],
+      handId: "hand-1",
+      requestId: "req-1",
+      via: "card",
+    };
+    const s = setup({
+      "c-answer": {
+        commandId: "c-answer",
+        payload,
+        turn: { id: "t1" },
+        type: "answer",
+      },
+    });
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
 
-  end(run, { type: 'final', text: 'done' });
-  await turn;
-  assert.ok(!JSON.stringify(s.calls).includes('RAW FILE CONTENTS'));
-});
+    const answer = run.input.onQuestion(card);
+    await until(() => s.named("runner:raiseHand").length > 0);
+    expect(s.named("runner:raiseHand")).toStrictEqual([
+      {
+        questions: card.questions,
+        requestId: "req-1",
+        secret: "s3cret",
+        turnId: "t1",
+      },
+    ]);
 
-test('the session id is saved as soon as it arrives, before the turn finishes', async () => {
-  const s = setup();
-  const turn = s.turns.handle('c-run');
-  await until(() => s.runs[0]);
-  end(s.runs[0]!, { type: 'session', sessionId: 'sess-1' }, { type: 'final', text: 'done' });
-  await turn;
-  const names = s.calls.map((c) => c.name);
-  assert.deepEqual(s.named('runner:sessionStarted'), [{ secret: 's3cret', turnId: 't1', sessionId: 'sess-1' }]);
-  assert.ok(names.indexOf('runner:sessionStarted') < names.indexOf('runner:finish'));
-});
+    await s.turns.handle("c-answer");
+    await expect(answer).resolves.toStrictEqual(payload);
+    expect(s.named("runner:commandHandled")).toStrictEqual([
+      { commandId: "c-answer", ok: true, secret: "s3cret" },
+    ]);
 
-test('an ordinary turn gets a room tools token, and it is revoked before the turn finishes', async () => {
-  const s = setup();
-  const turn = s.turns.handle('c-run');
-  await until(() => s.runs[0]);
-  const [issued] = s.roomTools.issued;
-  assert.equal(issued!.turnId, 't1');
-  assert.deepEqual(s.runs[0]!.req.roomTools, { url: 'http://127.0.0.1:40123/mcp', token: issued!.token });
-  s.replies['runner:finish'] = () => { assert.equal(s.roomTools.live.size, 0, 'revoked before Convex hears the turn finished'); };
-  end(s.runs[0]!, { type: 'final', text: 'done' });
-  await turn;
-  assert.equal(s.named('runner:finish').length, 1);
-  assert.equal(s.roomTools.live.size, 0);
-});
-
-test('a finish that Convex rejects fails the turn at once, so a scribe run does not hold the document until its lease lapses', async () => {
-  const s = setup();
-  const turn = s.turns.handle('c-run');
-  await until(() => s.runs[0]);
-  s.replies['runner:finish'] = () => { throw new Error('Too many writes in one mutation'); };
-  mock.method(console, 'error', () => {});
-  end(s.runs[0]!, { type: 'final', text: 'done' });
-  await turn;
-  assert.equal(s.named('runner:fail').length, 1);
-  assert.match(s.named('runner:fail')[0].error, /could not save its result/);
-  assert.equal(s.named('runner:fail')[0].interrupted, undefined);
-});
-
-test('a failed turn revokes its room tools token', async () => {
-  const s = setup();
-  const turn = s.turns.handle('c-run');
-  await until(() => s.runs[0]);
-  assert.equal(s.roomTools.live.size, 1);
-  end(s.runs[0]!, { type: 'error', message: 'Model overloaded', retryable: true });
-  await turn;
-  assert.equal(s.named('runner:fail')[0].error, 'Model overloaded');
-  assert.equal(s.roomTools.live.size, 0);
-});
-
-test('a cancelled turn revokes its room tools token', async () => {
-  const s = setup({ 'c-stop': { commandId: 'c-stop', type: 'interrupt', turn: { id: 't1' }, payload: { reason: 'Stopped by Robert' } } });
-  const turn = s.turns.handle('c-run');
-  await until(() => s.runs[0]);
-  assert.equal(s.roomTools.live.size, 1);
-  await s.turns.handle('c-stop');
-  await turn;
-  assert.equal(s.named('runner:fail')[0].interrupted, true);
-  assert.equal(s.roomTools.live.size, 0);
-});
-
-test('an adapter that throws still has its room tools token revoked', async () => {
-  const s = setup();
-  const turn = s.turns.handle('c-run');
-  await until(() => s.runs[0]);
-  assert.equal(s.roomTools.live.size, 1);
-  s.runs[0]!.crash = new Error('claude exited with code 1');
-  s.runs[0]!.events.end();
-  await turn;
-  assert.equal(s.named('runner:fail')[0].error, 'claude exited with code 1');
-  assert.equal(s.roomTools.live.size, 0);
-});
-
-test('an independent review gets no room tools token', async () => {
-  const review = { ...runJob('t-review'), commandId: 'c-review', turn: { id: 't-review', prompt: 'Review', independentReview: true } };
-  const s = setup({ 'c-review': review });
-  const turn = s.turns.handle('c-review');
-  await until(() => s.runs[0]);
-  assert.equal(s.runs[0]!.req.roomTools, undefined);
-  assert.equal(s.roomTools.issued.length, 0);
-  end(s.runs[0]!, { type: 'final', text: 'Looks fine' });
-  await turn;
-});
-
-test('the room tools token never reaches Convex, the transcript or the logs', async () => {
-  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] });
-  const logged: unknown[] = [];
-  const log = mock.method(console, 'log', (...args: unknown[]) => { logged.push(args); });
-  const error = mock.method(console, 'error', (...args: unknown[]) => { logged.push(args); });
-  try {
-    const s = setup();
-    const turn = s.turns.handle('c-run');
-    await until(() => s.runs[0]);
-    const run = s.runs[0]!;
-    run.events.push({ type: 'tool_call', id: 'call-1', name: 'mcp__atelier__add_block', summary: 'add_block paragraph' });
-    run.events.push({ type: 'tool_result', id: 'call-1', ok: true });
-    await idle();
-    mock.timers.tick(500);
-    await until(() => s.named('runner:recordTurnItems').length);
-    end(run, { type: 'final', text: 'done' });
+    end(run, { text: "Small it is", type: "final" });
     await turn;
-    const { token } = s.roomTools.issued[0]!;
-    assert.ok(logged.length > 0);
-    for (const [where, value] of [['Convex', s.calls], ['the transcript', s.transcript], ['the logs', logged]] as const) {
-      assert.ok(!JSON.stringify(value).includes(token), `token found in ${where}`);
+    expect(s.named("runner:finish")).toHaveLength(1);
+  });
+
+  it("a steer for a turn not running here is rejected without reaching a harness", async () => {
+    const s = setup({
+      "c-steer": {
+        commandId: "c-steer",
+        payload: { messageId: "m1", text: "Use Postgres" },
+        turn: { id: "t-elsewhere" },
+        type: "steer",
+      },
+    });
+    await s.turns.handle("c-steer");
+    expect(s.named("runner:steerResult")).toStrictEqual([
+      { messageId: "m1", outcome: "rejected", secret: "s3cret" },
+    ]);
+    // Exactly one handled command, and it failed.
+    expect(s.named("runner:commandHandled")).toMatchObject([{ ok: false }]);
+    expect(s.runs).toHaveLength(0);
+  });
+
+  it("a steer for a running turn goes to the harness and its outcome is reported", async () => {
+    const s = setup({
+      "c-steer": {
+        commandId: "c-steer",
+        payload: { messageId: "m1", text: "Use Postgres" },
+        turn: { id: "t1" },
+        type: "steer",
+      },
+    });
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+    await s.turns.handle("c-steer");
+    expect(run.steers).toStrictEqual(["Use Postgres"]);
+    expect(s.named("runner:steerResult")).toStrictEqual([
+      { messageId: "m1", outcome: "steered", secret: "s3cret" },
+    ]);
+    expect(s.named("runner:commandHandled")).toStrictEqual([
+      { commandId: "c-steer", ok: true, secret: "s3cret" },
+    ]);
+    end(run, { text: "done", type: "final" });
+    await turn;
+  });
+
+  it("start applies the current edit switch, and a settings command changes it live", async () => {
+    const s = setup({
+      "c-settings": {
+        commandId: "c-settings",
+        payload: { editsEnabled: false },
+        turn: { id: "t1" },
+        type: "settings",
+      },
+    });
+    s.replies["runner:start"] = () => ({ editsEnabled: true });
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+    expect(run.req.editsEnabled).toBeTruthy();
+    await s.turns.handle("c-settings");
+    expect(run.edits).toStrictEqual([false]);
+    expect(s.named("runner:commandHandled")).toStrictEqual([
+      { commandId: "c-settings", ok: true, secret: "s3cret" },
+    ]);
+    end(run, { text: "done", type: "final" });
+    await turn;
+  });
+
+  it("an interrupt command aborts the running turn, which ends interrupted", async () => {
+    const s = setup({
+      "c-stop": {
+        commandId: "c-stop",
+        payload: { reason: "File edits were turned off" },
+        turn: { id: "t1" },
+        type: "interrupt",
+      },
+    });
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+    await s.turns.handle("c-stop");
+    expect(run.signal.aborted).toBeTruthy();
+    await turn;
+    expect(s.named("runner:fail")[0]).toMatchObject({
+      error: "File edits were turned off",
+      interrupted: true,
+    });
+    expect(s.named("runner:finish")).toHaveLength(0);
+    expect(s.named("runner:commandHandled")).toStrictEqual([
+      { commandId: "c-stop", ok: true, secret: "s3cret" },
+    ]);
+  });
+
+  it("an open question pauses the 30-minute deadline, and the card expires at 2 hours", async () => {
+    vi.useFakeTimers({
+      now: 0,
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+        "Date",
+      ],
+    });
+    const noDecision = {
+      handId: "hand-1",
+      message: "No one answered",
+      noDecision: true,
+      requestId: "req-1",
+    };
+    const s = setup({
+      "c-expired": {
+        commandId: "c-expired",
+        payload: noDecision,
+        turn: { id: "t1" },
+        type: "answer",
+      },
+    });
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+
+    vi.advanceTimersByTime(10 * MINUTE);
+    const answer = run.input.onQuestion(card);
+    await until(() => s.named("runner:raiseHand").length > 0);
+
+    vi.advanceTimersByTime(31 * MINUTE);
+    // The deadline is paused while the card is open.
+    const abortedWhileOpen = run.signal.aborted;
+    // The lease is still renewed while the turn waits.
+    const renewals = s.named("runner:progress").length;
+    vi.advanceTimersByTime(MINUTE);
+    expect({
+      abortedWhileOpen,
+      renewed: s.named("runner:progress").length > renewals,
+      timedOut: s.named("runner:handTimedOut"),
+    }).toStrictEqual({ abortedWhileOpen: false, renewed: true, timedOut: [] });
+
+    vi.advanceTimersByTime(2 * 60 * MINUTE - 32 * MINUTE);
+    await until(() => s.named("runner:handTimedOut").length > 0);
+    expect(s.named("runner:handTimedOut")).toStrictEqual([
+      { handId: "hand-1", secret: "s3cret" },
+    ]);
+
+    // Convex closes the card and tells the agent no decision was made.
+    await s.turns.handle("c-expired");
+    await expect(answer).resolves.toStrictEqual(noDecision);
+
+    // The deadline resumes with the 20 minutes the turn had left.
+    vi.advanceTimersByTime(19 * MINUTE);
+    const abortedAfter19 = run.signal.aborted;
+    vi.advanceTimersByTime(MINUTE);
+    const abortedAfter20 = run.signal.aborted;
+    await turn;
+    expect({
+      abortedAfter19,
+      abortedAfter20,
+      fail: s.named("runner:fail")[0],
+    }).toMatchObject({
+      abortedAfter19: false,
+      abortedAfter20: true,
+      fail: { interrupted: true },
+    });
+  });
+
+  it("tool activity reaches Convex as items with one-line summaries, not raw output", async () => {
+    vi.useFakeTimers({
+      now: 0,
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+        "Date",
+      ],
+    });
+    const s = setup();
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+
+    run.events.push({
+      id: "call-1",
+      name: "Read",
+      summary: "src/plan.md",
+      type: "tool_call",
+    });
+    await idle();
+    expect(s.named("runner:recordTurnItems")).toHaveLength(0);
+    vi.advanceTimersByTime(500);
+    await until(() => s.named("runner:recordTurnItems").length > 0);
+    expect(s.named("runner:recordTurnItems")[0]).toStrictEqual({
+      items: [
+        { callId: "call-1", name: "Read", seq: 0, summary: "src/plan.md" },
+      ],
+      secret: "s3cret",
+      turnId: "t1",
+    });
+
+    // Whatever else an adapter attaches to a result stays on the runner.
+    run.events.push({
+      id: "call-1",
+      ok: true,
+      output: "RAW FILE CONTENTS",
+      type: "tool_result",
+    });
+    await idle();
+    vi.advanceTimersByTime(500);
+    await until(() => s.named("runner:recordTurnItems").length === 2);
+    expect(s.named("runner:recordTurnItems")[1]?.items).toStrictEqual([
+      {
+        callId: "call-1",
+        name: "Read",
+        ok: true,
+        seq: 0,
+        summary: "src/plan.md",
+      },
+    ]);
+
+    end(run, { text: "done", type: "final" });
+    await turn;
+    expect(!JSON.stringify(s.calls).includes("RAW FILE CONTENTS")).toBeTruthy();
+  });
+
+  it("the session id is saved as soon as it arrives, before the turn finishes", async () => {
+    const s = setup();
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+    end(
+      run,
+      { sessionId: "sess-1", type: "session" },
+      { text: "done", type: "final" }
+    );
+    await turn;
+    const names = s.calls.map((c) => c.name);
+    expect(s.named("runner:sessionStarted")).toStrictEqual([
+      { secret: "s3cret", sessionId: "sess-1", turnId: "t1" },
+    ]);
+    expect(
+      names.indexOf("runner:sessionStarted") < names.indexOf("runner:finish")
+    ).toBeTruthy();
+  });
+
+  it("an ordinary turn gets a room tools token, and it is revoked before the turn finishes", async () => {
+    const s = setup();
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [issued] = s.roomTools.issued;
+    const [run] = s.runs;
+    assert(issued && run);
+    expect(issued.turnId).toBe("t1");
+    expect(run.req.roomTools).toStrictEqual({
+      token: issued.token,
+      url: "http://127.0.0.1:40123/mcp",
+    });
+    let liveAtFinish = -1;
+    s.replies["runner:finish"] = () => {
+      liveAtFinish = s.roomTools.live.size;
+    };
+    end(run, { text: "done", type: "final" });
+    await turn;
+    expect(s.named("runner:finish")).toHaveLength(1);
+    // Revoked before Convex hears the turn finished.
+    expect(liveAtFinish).toBe(0);
+    expect(s.roomTools.live.size).toBe(0);
+  });
+
+  it("a finish that Convex rejects fails the turn at once, so a scribe run does not hold the document until its lease lapses", async () => {
+    const s = setup();
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+    s.replies["runner:finish"] = () => {
+      throw new Error("Too many writes in one mutation");
+    };
+    vi.spyOn(console, "error").mockImplementation(() => {
+      // The runner reports the failure; the test only checks what Convex hears.
+    });
+    end(run, { text: "done", type: "final" });
+    await turn;
+    const failures = s.named("runner:fail");
+    expect(failures).toHaveLength(1);
+    expect(String(failures[0]?.error)).toMatch(/could not save its result/u);
+    expect(failures[0]?.interrupted).toBeUndefined();
+  });
+
+  it("a failed turn revokes its room tools token", async () => {
+    const s = setup();
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+    expect(s.roomTools.live.size).toBe(1);
+    end(run, { message: "Model overloaded", retryable: true, type: "error" });
+    await turn;
+    expect(s.named("runner:fail")[0]?.error).toBe("Model overloaded");
+    expect(s.roomTools.live.size).toBe(0);
+  });
+
+  it("a cancelled turn revokes its room tools token", async () => {
+    const s = setup({
+      "c-stop": {
+        commandId: "c-stop",
+        payload: { reason: "Stopped by Robert" },
+        turn: { id: "t1" },
+        type: "interrupt",
+      },
+    });
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    expect(s.roomTools.live.size).toBe(1);
+    await s.turns.handle("c-stop");
+    await turn;
+    expect(s.named("runner:fail")[0]?.interrupted).toBeTruthy();
+    expect(s.roomTools.live.size).toBe(0);
+  });
+
+  it("an adapter that throws still has its room tools token revoked", async () => {
+    const s = setup();
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+    expect(s.roomTools.live.size).toBe(1);
+    run.crash = new Error("claude exited with code 1");
+    run.events.end();
+    await turn;
+    expect(s.named("runner:fail")[0]?.error).toBe("claude exited with code 1");
+    expect(s.roomTools.live.size).toBe(0);
+  });
+
+  it("an independent review gets no room tools token", async () => {
+    const review = {
+      ...runJob("t-review"),
+      commandId: "c-review",
+      turn: { id: "t-review", independentReview: true, prompt: "Review" },
+    };
+    const s = setup({ "c-review": review });
+    const turn = s.turns.handle("c-review");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+    expect(run.req.roomTools).toBeUndefined();
+    expect(s.roomTools.issued).toHaveLength(0);
+    end(run, { text: "Looks fine", type: "final" });
+    await turn;
+  });
+
+  it("the room tools token never reaches Convex, the transcript or the logs", async () => {
+    vi.useFakeTimers({
+      now: 0,
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+        "Date",
+      ],
+    });
+    const logged: unknown[] = [];
+    vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      logged.push(args);
+    });
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      logged.push(args);
+    });
+    const s = setup();
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+    const toolEvents: HarnessEvent[] = [
+      {
+        id: "call-1",
+        name: "mcp__atelier__add_block",
+        summary: "add_block paragraph",
+        type: "tool_call",
+      },
+      { id: "call-1", ok: true, type: "tool_result" },
+    ];
+    for (const event of toolEvents) {
+      run.events.push(event);
     }
-  } finally {
-    log.mock.restore();
-    error.mock.restore();
-  }
-});
+    await idle();
+    vi.advanceTimersByTime(500);
+    await until(() => s.named("runner:recordTurnItems").length > 0);
+    end(run, { text: "done", type: "final" });
+    await turn;
+    const [issued] = s.roomTools.issued;
+    assert(issued);
+    expect(logged.length).toBeGreaterThan(0);
+    for (const where of [s.calls, s.transcript, logged]) {
+      expect(JSON.stringify(where)).not.toContain(issued.token);
+    }
+  });
 
-test('a scribe turn runs on a fresh session it never saves, with edits off, the scribe tools and no question cards', async () => {
-  const scribe = {
-    ...runJob('t-scribe'),
-    commandId: 'c-scribe',
-    documentMode: 'scribe',
-    participant: { id: 'p-claude', harness: 'claude', sessionId: 'ordinary-session' },
-  };
-  const s = setup({ 'c-scribe': scribe });
-  s.replies['runner:start'] = () => ({ editsEnabled: true });
-  const turn = s.turns.handle('c-scribe');
-  await until(() => s.runs[0]);
-  const run = s.runs[0]!;
-  assert.equal(run.req.scribe, true);
-  assert.equal(run.req.resumeSessionId, undefined);
-  assert.equal(run.req.editsEnabled, false);
-  assert.equal(s.roomTools.issued[0]!.tools, scribeTools);
-  assert.deepEqual(scribeTools.map((t) => t.name), ['read_document', 'draft_keep', 'draft_replace', 'draft_add', 'draft_remove', 'draft_move']);
-  assert.ok(!scribeTools.some((t) => documentTools.includes(t) && t.name !== 'read_document'));
+  describe("a scribe turn", () => {
+    it("starts fresh with edits off and the scribe tools, and no write tool beside the draft", async () => {
+      const { run, s, turn } = await startScribe();
+      expect({
+        editsEnabled: run.req.editsEnabled,
+        resumeSessionId: run.req.resumeSessionId,
+        scribe: run.req.scribe,
+        tools: s.roomTools.issued[0]?.tools === scribeTools,
+      }).toStrictEqual({
+        editsEnabled: false,
+        resumeSessionId: undefined,
+        scribe: true,
+        tools: true,
+      });
+      expect(scribeTools.map((t) => t.name)).toStrictEqual([
+        "read_document",
+        "draft_keep",
+        "draft_replace",
+        "draft_add",
+        "draft_remove",
+        "draft_move",
+      ]);
+      expect(
+        scribeTools.some(
+          (t) => documentTools.includes(t) && t.name !== "read_document"
+        )
+      ).toBeFalsy();
+      end(run, { text: "Tidied", type: "final" });
+      await turn;
+    });
 
-  await assert.rejects(run.input.onQuestion(card), /without asking questions/);
-  end(run, { type: 'session', sessionId: 'scribe-session' }, { type: 'final', text: 'Tidied' });
-  await turn;
-  assert.equal(s.named('runner:raiseHand').length, 0);
-  assert.equal(s.named('runner:sessionStarted').length, 0);
-  const [finished] = s.named('runner:finish');
-  assert.equal(finished.sessionId, undefined);
-  assert.equal(s.transcript.some((r) => JSON.stringify(r).includes('ordinary-session')), false);
-});
+    it("raises no question cards and never saves a session", async () => {
+      const { run, s, turn } = await startScribe();
+      await expect(run.input.onQuestion(card)).rejects.toThrow(
+        /without asking questions/u
+      );
+      end(
+        run,
+        { sessionId: "scribe-session", type: "session" },
+        { text: "Tidied", type: "final" }
+      );
+      await turn;
+      const [finished] = s.named("runner:finish");
+      expect({
+        finishedSession: finished?.sessionId,
+        hands: s.named("runner:raiseHand"),
+        savedSessions: s.named("runner:sessionStarted"),
+        transcriptHoldsOrdinarySession: JSON.stringify(s.transcript).includes(
+          "ordinary-session"
+        ),
+      }).toStrictEqual({
+        finishedSession: undefined,
+        hands: [],
+        savedSessions: [],
+        transcriptHoldsOrdinarySession: false,
+      });
+    });
+  });
 
-test('an ordinary turn gets the ordinary document tools', async () => {
-  const s = setup();
-  const turn = s.turns.handle('c-run');
-  await until(() => s.runs[0]);
-  assert.equal(s.runs[0]!.req.scribe, undefined);
-  assert.equal(s.roomTools.issued[0]!.tools, undefined);
-  end(s.runs[0]!, { type: 'final', text: 'done' });
-  await turn;
+  it("an ordinary turn gets the ordinary document tools", async () => {
+    const s = setup();
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+    expect(run.req.scribe).toBeUndefined();
+    expect(s.roomTools.issued[0]?.tools).toBeUndefined();
+    end(run, { text: "done", type: "final" });
+    await turn;
+  });
 });

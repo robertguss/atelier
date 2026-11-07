@@ -1,31 +1,24 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm, mkdir, symlink } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import type { HarnessEvent, TurnInput, TurnRequest } from '@atelier/shared';
-import { piHarness } from './pi.ts';
-import { blockedEditReason } from './pi-guard-extension.ts';
-import atelierRoomTools from './pi-room-tools-extension.ts';
-import { turnInput } from './events.ts';
-import { getFunctionName } from 'convex/server';
-import type { RoomToolsClient } from '../roomTools.ts';
-import { createRoomToolsServer } from '../roomToolsServer.ts';
+import {
+  mkdtemp,
+  writeFile,
+  readFile,
+  rm,
+  mkdir,
+  symlink,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
-test('Pi prompt rejection terminates instead of waiting for agent_end', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'atelier-pi-'));
-  const cliPath = join(dir, 'fake.mjs');
-  await writeFile(cliPath, `import {createInterface} from 'node:readline';
-createInterface({input:process.stdin}).on('line', line => {
-const command=JSON.parse(line);
-console.log(JSON.stringify({type:'response',id:command.id,command:command.type,success:false,error:'No API key. Please log in.'}));
-});`);
-  try {
-    await assert.rejects(async () => {
-      for await (const event of piHarness({ cliPath, onRaw() {} }).runTurn({ turnId: 'test', cwd: dir, prompt: 'hello', editsEnabled: false, mcpServers: [] }, new AbortController().signal, turnInput())) void event;
-    }, /Please log in/);
-  } finally { await rm(dir, { recursive: true, force: true }); }
-});
+import type { HarnessEvent, TurnInput, TurnRequest } from "@atelier/shared";
+import { assert, describe, expect, it, vi } from "vitest";
+
+import { FakeRoomConvex } from "../fake-room-convex.ts";
+import { createRoomToolsServer } from "../room-tools-server.ts";
+import type { RoomToolsClient } from "../room-tools.ts";
+import { turnInput } from "./events.ts";
+import { blockedEditReason } from "./pi-guard-extension.ts";
+import atelierRoomTools from "./pi-room-tools-extension.ts";
+import { piHarness } from "./pi.ts";
 
 // A fake Pi RPC process. It records its arguments and every line it reads,
 // and acts out a scenario chosen by the prompt text.
@@ -65,188 +58,551 @@ createInterface({input:process.stdin}).on('line', (line) => {
   else ok(undefined);
 });`;
 
-async function withFakePi(fn: (fake: { dir: string; run(req: Partial<TurnRequest>, input?: TurnInput, onEvent?: (ev: HarnessEvent, input: TurnInput) => Promise<void>): Promise<HarnessEvent[]>; argv(): Promise<string[]>; env(): Promise<{ url: string | null; token: string | null }>; stdin(): Promise<any[]> }) => Promise<void>) {
-  const dir = await mkdtemp(join(tmpdir(), 'atelier-pi-'));
-  const cliPath = join(dir, 'fake.mjs');
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+// The value at `keys` inside parsed JSON, or undefined where the path breaks.
+const at = (value: unknown, ...keys: string[]): unknown => {
+  let current = value;
+  for (const key of keys) {
+    current = isRecord(current) ? current[key] : undefined;
+  }
+  return current;
+};
+
+const parseJson = (text: string): unknown => JSON.parse(text);
+
+interface FakePi {
+  dir: string;
+  run: (
+    req: Partial<TurnRequest>,
+    input?: TurnInput,
+    onEvent?: (ev: HarnessEvent, input: TurnInput) => Promise<void>
+  ) => Promise<HarnessEvent[]>;
+  argv: () => Promise<string[]>;
+  env: () => Promise<unknown>;
+  stdin: () => Promise<unknown[]>;
+}
+
+const withFakePi = async (fn: (fake: FakePi) => Promise<void>) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "atelier-pi-"));
+  const cliPath = path.join(dir, "fake.mjs");
   await writeFile(cliPath, FAKE_PI);
   const harness = piHarness({ cliPath, onRaw() {} });
   try {
     await fn({
+      async argv() {
+        const argv = parseJson(
+          await readFile(path.join(dir, "argv.json"), "utf-8")
+        );
+        if (
+          !Array.isArray(argv) ||
+          !argv.every((arg): arg is string => typeof arg === "string")
+        ) {
+          throw new Error("argv.json should hold an array of strings");
+        }
+        return argv;
+      },
       dir,
-      async run(req, input = turnInput(), onEvent) {
+      async env() {
+        return parseJson(await readFile(path.join(dir, "env.json"), "utf-8"));
+      },
+      async run(req, input, onEvent) {
+        const activeInput = input ?? turnInput();
         const events: HarnessEvent[] = [];
-        for await (const ev of harness.runTurn({ turnId: 'test', cwd: dir, prompt: 'plain', editsEnabled: false, mcpServers: [], ...req }, new AbortController().signal, input)) {
+        for await (const ev of harness.runTurn(
+          {
+            cwd: dir,
+            editsEnabled: false,
+            mcpServers: [],
+            prompt: "plain",
+            turnId: "test",
+            ...req,
+          },
+          new AbortController().signal,
+          activeInput
+        )) {
           events.push(ev);
-          await onEvent?.(ev, input);
+          await onEvent?.(ev, activeInput);
         }
         return events;
       },
-      async argv() { return JSON.parse(await readFile(join(dir, 'argv.json'), 'utf8')); },
-      async env() { return JSON.parse(await readFile(join(dir, 'env.json'), 'utf8')); },
-      async stdin() { return (await readFile(join(dir, 'stdin.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line)); },
+      async stdin() {
+        const text = await readFile(path.join(dir, "stdin.jsonl"), "utf-8");
+        return text
+          .trim()
+          .split("\n")
+          .map((line) => parseJson(line));
+      },
     });
-  } finally { await rm(dir, { recursive: true, force: true }); }
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+};
+
+const roomTools = {
+  token: "ROOM-TOKEN-SECRET",
+  url: "http://127.0.0.1:40123/mcp",
+};
+
+// What the extension registered with Pi, as far as these tests look.
+interface RegisteredTool {
+  name: string;
+  parameters: Record<string, unknown>;
+  execute: (callId: string, params: unknown) => Promise<unknown>;
 }
 
-test('Pi steers a running turn, reports its tools, and rejects a steer once the run has settled', async () => {
-  await withFakePi(async (fake) => {
-    const outcomes: string[] = [];
-    const events = await fake.run({ prompt: 'steer' }, turnInput(), async (ev, input) => {
-      if (ev.type === 'tool_call') outcomes.push(await input.steer('Use the other file'));
-    });
-    const input = turnInput();
-    await fake.run({ prompt: 'plain' }, input);
-    outcomes.push(await input.steer('Too late'));
-
-    assert.deepEqual(outcomes, ['steered', 'rejected']);
-    assert.ok((await fake.stdin()).some((c) => c.type === 'steer' && c.message === 'Use the other file'));
-    assert.ok(!(await fake.stdin()).some((c) => c.type === 'steer' && c.message === 'Too late'));
-    assert.deepEqual(events.filter((ev) => ev.type === 'tool_call' || ev.type === 'tool_result'), [
-      { type: 'tool_call', id: 'call-1', name: 'bash', summary: 'sleep 5 && echo one' },
-      { type: 'tool_result', id: 'call-1', ok: true },
-    ]);
-    assert.deepEqual(events.at(-1), { type: 'final', text: 'steered by Use the other file' });
+// Serves the tools from a real endpoint, as the runner does, and points
+// the extension at it through its environment.
+const withEndpoint = async (
+  fn: (endpoint: {
+    calls: FakeRoomConvex["calls"];
+    revoke: () => void;
+    tools: RegisteredTool[];
+  }) => Promise<void> | void
+) => {
+  const convex = new FakeRoomConvex({
+    "documentTools:addBlockForTurn": () => ({
+      blockId: "b9",
+      ok: true,
+      rev: 1,
+    }),
   });
-});
-
-test('Pi with edits on adds edit and write plus the guard extension; with edits off its arguments are unchanged', async () => {
-  await withFakePi(async (fake) => {
-    await fake.run({ editsEnabled: false, resumeSessionId: '/tmp/s.jsonl', model: 'openai/gpt-6-astra' });
-    assert.deepEqual(await fake.argv(), ['--mode', 'rpc', '--model', 'openai/gpt-6-astra', '--tools', 'read,grep,find,ls', '--session', '/tmp/s.jsonl']);
-
-    await fake.run({ editsEnabled: true, resumeSessionId: '/tmp/s.jsonl', model: 'openai/gpt-6-astra' });
-    const argv = await fake.argv();
-    assert.deepEqual(argv.slice(0, 6), ['--mode', 'rpc', '--model', 'openai/gpt-6-astra', '--tools', 'read,grep,find,ls,edit,write']);
-    const extension = argv[argv.indexOf('--extension') + 1];
-    assert.match(extension ?? '', /\/pi-guard-extension\.ts$/);
-    assert.deepEqual(argv.slice(-2), ['--session', '/tmp/s.jsonl']);
-  });
-});
-
-const roomTools = { url: 'http://127.0.0.1:40123/mcp', token: 'ROOM-TOKEN-SECRET' };
-
-test('Pi loads the room document extension and allows its tools with edits off and on, with the token only in its environment', async () => {
-  await withFakePi(async (fake) => {
-    await fake.run({ editsEnabled: false, roomTools, resumeSessionId: '/tmp/s.jsonl' });
-    let argv = await fake.argv();
-    const extension = argv[argv.indexOf('--extension') + 1]!;
-    assert.match(extension, /\/pi-room-tools-extension\.ts$/);
-    assert.deepEqual(argv, ['--mode', 'rpc', '--tools', 'read,grep,find,ls,atelier_*', '--extension', extension, '--session', '/tmp/s.jsonl']);
-    assert.deepEqual(await fake.env(), roomTools);
-    assert.doesNotMatch(JSON.stringify(argv), /ROOM-TOKEN-SECRET/);
-
-    await fake.run({ editsEnabled: true, roomTools });
-    argv = await fake.argv();
-    assert.deepEqual(argv.slice(0, 4), ['--mode', 'rpc', '--tools', 'read,grep,find,ls,edit,write,atelier_*']);
-    const extensions = argv.flatMap((arg, i) => (argv[i - 1] === '--extension' ? [arg] : []));
-    assert.equal(extensions.length, 2);
-    assert.ok(extensions.some((e) => /\/pi-guard-extension\.ts$/.test(e)));
-    assert.ok(extensions.includes(extension));
-    assert.deepEqual(await fake.env(), roomTools);
-    assert.doesNotMatch(JSON.stringify(argv), /ROOM-TOKEN-SECRET/);
-  });
-});
-
-test('a Pi review runs with no tools, extensions or MCP and gets no document route, even if one is passed', async () => {
-  await withFakePi(async (fake) => {
-    await fake.run({ independentReview: true, roomTools, resumeSessionId: '/tmp/s.jsonl' });
-    assert.deepEqual(await fake.argv(), ['--mode', 'rpc', '--no-tools', '--no-extensions', '--no-mcp', '--no-session']);
-    assert.deepEqual(await fake.env(), { url: null, token: null });
-  });
-});
-
-test('a Pi document tool call shows up as a turn item with the tool name and no token', async () => {
-  await withFakePi(async (fake) => {
-    const events = await fake.run({ prompt: 'doc', roomTools });
-    assert.deepEqual(events.filter((ev) => ev.type === 'tool_call' || ev.type === 'tool_result'), [
-      { type: 'tool_call', id: 'doc-1', name: 'atelier_add_block', summary: '' },
-      { type: 'tool_result', id: 'doc-1', ok: true },
-    ]);
-    assert.doesNotMatch(JSON.stringify(events), /ROOM-TOKEN-SECRET/);
-  });
-});
-
-test('the Pi room tools extension registers the endpoint\'s tools and forwards calls as this turn', async () => {
-  const calls: { name: string; args: any }[] = [];
-  const answer = async (ref: any, args: any) => {
-    calls.push({ name: getFunctionName(ref), args });
-    return { ok: true, blockId: 'b9', rev: 1 };
-  };
-  const server = createRoomToolsServer({ client: { query: answer, mutation: answer } as unknown as RoomToolsClient, secret: 's3cret' });
-  const saved = { url: process.env.ATELIER_ROOM_URL, token: process.env.ATELIER_ROOM_TOKEN };
+  const client: RoomToolsClient = convex;
+  const server = createRoomToolsServer({ client, secret: "s3cret" });
   try {
-    const route = await server.issue('turn-7');
-    process.env.ATELIER_ROOM_URL = route.url;
-    process.env.ATELIER_ROOM_TOKEN = route.token;
-    const registered: any[] = [];
-    await atelierRoomTools({ registerTool: (tool) => registered.push(tool) });
-    assert.deepEqual(registered.map((t) => t.name), [
-      'atelier_read_document', 'atelier_read_thread', 'atelier_add_block', 'atelier_update_block', 'atelier_delete_block', 'atelier_comment',
-    ]);
-    const add = registered.find((t) => t.name === 'atelier_add_block');
-    assert.equal(add.parameters.type, 'object');
-    assert.deepEqual(add.parameters.required, ['kind', 'text']);
-
-    const result = await add.execute('call-1', { kind: 'paragraph', text: 'We chose blue.' });
-    assert.deepEqual(result, { content: [{ type: 'text', text: 'Added block b9 at rev 1. Pass that rev as baseRev to change it later.' }], isError: false, details: undefined });
-    assert.deepEqual(calls, [{ name: 'documentTools:addBlockForTurn', args: { kind: 'paragraph', text: 'We chose blue.', secret: 's3cret', turnId: 'turn-7' } }]);
-
-    const refused = await add.execute('call-2', { kind: 'paragraph' });
-    assert.equal(refused.isError, true);
-    assert.equal(calls.length, 1, 'bad arguments never reach Convex');
-
-    server.revoke(route.token);
-    await assert.rejects(add.execute('call-3', { kind: 'paragraph', text: 'Late' }), /no longer work/);
+    const route = await server.issue("turn-7");
+    vi.stubEnv("ATELIER_ROOM_URL", route.url);
+    vi.stubEnv("ATELIER_ROOM_TOKEN", route.token);
+    const tools: RegisteredTool[] = [];
+    await atelierRoomTools({
+      registerTool: (tool) => {
+        tools.push(tool);
+      },
+    });
+    await fn({
+      calls: convex.calls,
+      revoke: () => {
+        server.revoke(route.token);
+      },
+      tools,
+    });
   } finally {
-    for (const [key, value] of [['ATELIER_ROOM_URL', saved.url], ['ATELIER_ROOM_TOKEN', saved.token]] as const) {
-      if (value === undefined) delete process.env[key]; else process.env[key] = value;
-    }
+    vi.unstubAllEnvs();
     await server.close();
   }
-});
+};
 
-test('Pi cancels an extension UI request so the turn completes', async () => {
-  await withFakePi(async (fake) => {
-    const events = await fake.run({ prompt: 'ui' });
-    assert.deepEqual(events.at(-1), { type: 'final', text: 'ui answered' });
-    assert.deepEqual((await fake.stdin()).find((c) => c.type === 'extension_ui_response'), { type: 'extension_ui_response', id: 'ui-1', cancelled: true });
+const addBlock = (tools: RegisteredTool[]) => {
+  const add = tools.find((t) => t.name === "atelier_add_block");
+  assert(add, "the extension registers atelier_add_block");
+  return add;
+};
+
+describe(piHarness, () => {
+  it("Pi prompt rejection terminates instead of waiting for agent_end", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "atelier-pi-"));
+    const cliPath = path.join(dir, "fake.mjs");
+    await writeFile(
+      cliPath,
+      `import {createInterface} from 'node:readline';
+  createInterface({input:process.stdin}).on('line', line => {
+  const command=JSON.parse(line);
+  console.log(JSON.stringify({type:'response',id:command.id,command:command.type,success:false,error:'No API key. Please log in.'}));
+  });`
+    );
+    try {
+      await expect(
+        (async () => {
+          for await (const event of piHarness({ cliPath, onRaw() {} }).runTurn(
+            {
+              cwd: dir,
+              editsEnabled: false,
+              mcpServers: [],
+              prompt: "hello",
+              turnId: "test",
+            },
+            new AbortController().signal,
+            turnInput()
+          )) {
+            void event;
+          }
+        })()
+      ).rejects.toThrow(/Please log in/u);
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
+  });
+
+  it("Pi steers a running turn, reports its tools, and rejects a steer once the run has settled", async () => {
+    await withFakePi(async (fake) => {
+      const outcomes: string[] = [];
+      const events = await fake.run(
+        { prompt: "steer" },
+        turnInput(),
+        async (ev, input) => {
+          if (ev.type === "tool_call") {
+            outcomes.push(await input.steer("Use the other file"));
+          }
+        }
+      );
+      const input = turnInput();
+      await fake.run({ prompt: "plain" }, input);
+      outcomes.push(await input.steer("Too late"));
+
+      expect(outcomes).toStrictEqual(["steered", "rejected"]);
+      const stdin = await fake.stdin();
+      expect(
+        stdin.some(
+          (c) =>
+            isRecord(c) &&
+            c.type === "steer" &&
+            c.message === "Use the other file"
+        )
+      ).toBeTruthy();
+      expect(
+        !stdin.some(
+          (c) => isRecord(c) && c.type === "steer" && c.message === "Too late"
+        )
+      ).toBeTruthy();
+      expect(
+        events.filter(
+          (ev) => ev.type === "tool_call" || ev.type === "tool_result"
+        )
+      ).toStrictEqual([
+        {
+          id: "call-1",
+          name: "bash",
+          summary: "sleep 5 && echo one",
+          type: "tool_call",
+        },
+        { id: "call-1", ok: true, type: "tool_result" },
+      ]);
+      expect(events.at(-1)).toStrictEqual({
+        text: "steered by Use the other file",
+        type: "final",
+      });
+    });
+  });
+
+  it("Pi with edits on adds edit and write plus the guard extension; with edits off its arguments are unchanged", async () => {
+    await withFakePi(async (fake) => {
+      await fake.run({
+        editsEnabled: false,
+        model: "openai/gpt-6-astra",
+        resumeSessionId: "/tmp/s.jsonl",
+      });
+      await expect(fake.argv()).resolves.toStrictEqual([
+        "--mode",
+        "rpc",
+        "--model",
+        "openai/gpt-6-astra",
+        "--tools",
+        "read,grep,find,ls",
+        "--session",
+        "/tmp/s.jsonl",
+      ]);
+
+      await fake.run({
+        editsEnabled: true,
+        model: "openai/gpt-6-astra",
+        resumeSessionId: "/tmp/s.jsonl",
+      });
+      const argv = await fake.argv();
+      expect(argv.slice(0, 6)).toStrictEqual([
+        "--mode",
+        "rpc",
+        "--model",
+        "openai/gpt-6-astra",
+        "--tools",
+        "read,grep,find,ls,edit,write",
+      ]);
+      const extension = argv[argv.indexOf("--extension") + 1];
+      expect(extension ?? "").toMatch(/\/pi-guard-extension\.ts$/u);
+      expect(argv.slice(-2)).toStrictEqual(["--session", "/tmp/s.jsonl"]);
+    });
+  });
+
+  describe("the room document extension", () => {
+    const environment = {
+      token: roomTools.token,
+      url: roomTools.url,
+    };
+
+    it("is loaded and its tools allowed with edits off, the token only in its environment", async () => {
+      await withFakePi(async (fake) => {
+        await fake.run({
+          editsEnabled: false,
+          resumeSessionId: "/tmp/s.jsonl",
+          roomTools,
+        });
+        const argv = await fake.argv();
+        const extension = argv[argv.indexOf("--extension") + 1] ?? "";
+        expect({
+          argv,
+          argvHoldsToken: JSON.stringify(argv).includes("ROOM-TOKEN-SECRET"),
+          env: await fake.env(),
+          isRoomExtension: extension.endsWith("/pi-room-tools-extension.ts"),
+        }).toStrictEqual({
+          argv: [
+            "--mode",
+            "rpc",
+            "--tools",
+            "read,grep,find,ls,atelier_*",
+            "--extension",
+            extension,
+            "--session",
+            "/tmp/s.jsonl",
+          ],
+          argvHoldsToken: false,
+          env: environment,
+          isRoomExtension: true,
+        });
+      });
+    });
+
+    it("is loaded beside the edit guard with edits on, the token only in its environment", async () => {
+      await withFakePi(async (fake) => {
+        await fake.run({ editsEnabled: true, roomTools });
+        const argv = await fake.argv();
+        const extensions = argv.filter((_, i) => argv[i - 1] === "--extension");
+        expect({
+          argvHoldsToken: JSON.stringify(argv).includes("ROOM-TOKEN-SECRET"),
+          env: await fake.env(),
+          extensions: extensions.map((e) => path.basename(e)).toSorted(),
+          tools: argv.slice(0, 4),
+        }).toStrictEqual({
+          argvHoldsToken: false,
+          env: environment,
+          extensions: ["pi-guard-extension.ts", "pi-room-tools-extension.ts"],
+          tools: [
+            "--mode",
+            "rpc",
+            "--tools",
+            "read,grep,find,ls,edit,write,atelier_*",
+          ],
+        });
+      });
+    });
+  });
+
+  it("a Pi review runs with no tools, extensions or MCP and gets no document route, even if one is passed", async () => {
+    await withFakePi(async (fake) => {
+      await fake.run({
+        independentReview: true,
+        resumeSessionId: "/tmp/s.jsonl",
+        roomTools,
+      });
+      await expect(fake.argv()).resolves.toStrictEqual([
+        "--mode",
+        "rpc",
+        "--no-tools",
+        "--no-extensions",
+        "--no-mcp",
+        "--no-session",
+      ]);
+      await expect(fake.env()).resolves.toStrictEqual({
+        token: null,
+        url: null,
+      });
+    });
+  });
+
+  it("a Pi document tool call shows up as a turn item with the tool name and no token", async () => {
+    await withFakePi(async (fake) => {
+      const events = await fake.run({ prompt: "doc", roomTools });
+      expect(
+        events.filter(
+          (ev) => ev.type === "tool_call" || ev.type === "tool_result"
+        )
+      ).toStrictEqual([
+        {
+          id: "doc-1",
+          name: "atelier_add_block",
+          summary: "",
+          type: "tool_call",
+        },
+        { id: "doc-1", ok: true, type: "tool_result" },
+      ]);
+      expect(JSON.stringify(events)).not.toMatch(/ROOM-TOKEN-SECRET/u);
+    });
+  });
+
+  it("a Pi scribe turn starts a fresh session it never saves, with edits off and the room tools extension", async () => {
+    await withFakePi(async (fake) => {
+      await fake.run({ editsEnabled: false, roomTools, scribe: true });
+      const argv = await fake.argv();
+      const extension = argv[argv.indexOf("--extension") + 1] ?? "";
+      expect(argv).toStrictEqual([
+        "--mode",
+        "rpc",
+        "--tools",
+        "read,grep,find,ls,atelier_*",
+        "--extension",
+        extension,
+        "--no-session",
+      ]);
+      expect(extension).toMatch(/\/pi-room-tools-extension\.ts$/u);
+    });
+  });
+
+  describe("the Pi room tools extension", () => {
+    it("registers the endpoint's tools with their schemas", async () => {
+      await withEndpoint(({ tools }) => {
+        const add = addBlock(tools);
+        expect({
+          names: tools.map((t) => t.name),
+          required: add.parameters.required,
+          type: add.parameters.type,
+        }).toStrictEqual({
+          names: [
+            "atelier_read_document",
+            "atelier_read_thread",
+            "atelier_add_block",
+            "atelier_update_block",
+            "atelier_delete_block",
+            "atelier_comment",
+          ],
+          required: ["kind", "text"],
+          type: "object",
+        });
+      });
+    });
+
+    it("forwards a call as this turn, and keeps bad arguments from Convex", async () => {
+      await withEndpoint(async ({ calls, tools }) => {
+        const add = addBlock(tools);
+        const added = await add.execute("call-1", {
+          kind: "paragraph",
+          text: "We chose blue.",
+        });
+        const callsAfterGoodCall = [...calls];
+        const refused = await add.execute("call-2", { kind: "paragraph" });
+        expect({
+          added,
+          callsAfterBadCall: calls.length,
+          callsAfterGoodCall,
+          refused: at(refused, "isError"),
+        }).toStrictEqual({
+          added: {
+            content: [
+              {
+                text: "Added block b9 at rev 1. Pass that rev as baseRev to change it later.",
+                type: "text",
+              },
+            ],
+            details: undefined,
+            isError: false,
+          },
+          callsAfterBadCall: 1,
+          callsAfterGoodCall: [
+            {
+              args: {
+                kind: "paragraph",
+                secret: "s3cret",
+                text: "We chose blue.",
+                turnId: "turn-7",
+              },
+              name: "documentTools:addBlockForTurn",
+            },
+          ],
+          refused: true,
+        });
+      });
+    });
+
+    it("fails once the turn's token is revoked", async () => {
+      await withEndpoint(async ({ revoke, tools }) => {
+        revoke();
+        await expect(
+          addBlock(tools).execute("call-3", { kind: "paragraph", text: "Late" })
+        ).rejects.toThrow(/no longer work/u);
+      });
+    });
+  });
+
+  it("Pi cancels an extension UI request so the turn completes", async () => {
+    await withFakePi(async (fake) => {
+      const events = await fake.run({ prompt: "ui" });
+      expect(events.at(-1)).toStrictEqual({
+        text: "ui answered",
+        type: "final",
+      });
+      const stdin = await fake.stdin();
+      expect(
+        stdin.find((c) => isRecord(c) && c.type === "extension_ui_response")
+      ).toStrictEqual({
+        cancelled: true,
+        id: "ui-1",
+        type: "extension_ui_response",
+      });
+    });
   });
 });
 
-test('Pi edit guard allows in-folder files and blocks outside, control folders and symlinks out', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'atelier-pi-guard-'));
-  const outside = await mkdtemp(join(tmpdir(), 'atelier-pi-outside-'));
-  try {
-    const cwd = join(dir, 'room');
-    await mkdir(join(cwd, 'docs'), { recursive: true });
-    await mkdir(join(cwd, '.git'));
-    await symlink(outside, join(cwd, 'escape'));
-    await symlink(join(cwd, '.git'), join(cwd, 'gitlink'));
-    await symlink(join(outside, 'not-yet.txt'), join(cwd, 'dangling.txt'));
+describe(blockedEditReason, () => {
+  it("Pi edit guard allows in-folder files and blocks outside, control folders and symlinks out", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "atelier-pi-guard-"));
+    const outside = await mkdtemp(path.join(tmpdir(), "atelier-pi-outside-"));
+    try {
+      const cwd = path.join(dir, "room");
+      await mkdir(path.join(cwd, "docs"), { recursive: true });
+      await mkdir(path.join(cwd, ".git"));
+      await symlink(outside, path.join(cwd, "escape"));
+      await symlink(path.join(cwd, ".git"), path.join(cwd, "gitlink"));
+      await symlink(
+        path.join(outside, "not-yet.txt"),
+        path.join(cwd, "dangling.txt")
+      );
 
-    for (const path of ['notes.md', 'docs/plan.md', join(cwd, 'docs/new.md'), '@docs/at.md']) {
-      assert.equal(blockedEditReason(cwd, path), undefined, path);
+      const allowed = [
+        "notes.md",
+        "docs/plan.md",
+        path.join(cwd, "docs/new.md"),
+        "@docs/at.md",
+      ];
+      // Each path paired with its reason, so a failure names the path.
+      expect(
+        allowed.map((file) => [file, blockedEditReason(cwd, file)])
+      ).toStrictEqual(allowed.map((file) => [file, undefined]));
+      const blocked = [
+        "/tmp/outside",
+        "../outside.txt",
+        "escape/x.txt",
+        "dangling.txt",
+        "~/x.txt",
+        ".pi/settings.json",
+        ".git/HEAD",
+        ".git/hooks/pre-commit",
+        "gitlink/config",
+        ".claude/settings.json",
+        ".mcp.json",
+        ".codex/config.toml",
+        ".agents/skills/x.md",
+        "docs/../.git/config",
+        "sub/.git/x",
+        "docs/.claude/settings.json",
+        "packages/app/.mcp.json",
+      ];
+      // Lists every blocked path that was let through.
+      expect(
+        blocked.filter((file) => {
+          const reason = blockedEditReason(cwd, file);
+          return reason === undefined || reason === "";
+        })
+      ).toStrictEqual([]);
+      expect(blockedEditReason(cwd, undefined)).toBeTruthy();
+      // The room folder itself may be reached through a symlink.
+      await symlink(cwd, path.join(dir, "roomlink"));
+      expect(
+        blockedEditReason(path.join(dir, "roomlink"), "notes.md")
+      ).toBeUndefined();
+      expect(
+        blockedEditReason(path.join(dir, "roomlink"), ".git/HEAD")
+      ).toBeTruthy();
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+      await rm(outside, { force: true, recursive: true });
     }
-    for (const path of ['/tmp/outside', '../outside.txt', 'escape/x.txt', 'dangling.txt', '~/x.txt', '.pi/settings.json', '.git/HEAD', '.git/hooks/pre-commit', 'gitlink/config', '.claude/settings.json', '.mcp.json', '.codex/config.toml', '.agents/skills/x.md', 'docs/../.git/config', 'sub/.git/x', 'docs/.claude/settings.json', 'packages/app/.mcp.json']) {
-      assert.ok(blockedEditReason(cwd, path), path);
-    }
-    assert.ok(blockedEditReason(cwd, undefined));
-    // The room folder itself may be reached through a symlink.
-    await symlink(cwd, join(dir, 'roomlink'));
-    assert.equal(blockedEditReason(join(dir, 'roomlink'), 'notes.md'), undefined);
-    assert.ok(blockedEditReason(join(dir, 'roomlink'), '.git/HEAD'));
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-    await rm(outside, { recursive: true, force: true });
-  }
-});
-
-test('a Pi scribe turn starts a fresh session it never saves, with edits off and the room tools extension', async () => {
-  await withFakePi(async (fake) => {
-    await fake.run({ scribe: true, editsEnabled: false, roomTools });
-    const argv = await fake.argv();
-    const extension = argv[argv.indexOf('--extension') + 1]!;
-    assert.deepEqual(argv, ['--mode', 'rpc', '--tools', 'read,grep,find,ls,atelier_*', '--extension', extension, '--no-session']);
-    assert.match(extension, /\/pi-room-tools-extension\.ts$/);
   });
 });

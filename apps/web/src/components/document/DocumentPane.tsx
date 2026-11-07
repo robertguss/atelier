@@ -1,22 +1,40 @@
-import { api } from '@atelier/backend/api';
-import type { Id } from '@atelier/backend/dataModel';
-import { useMutation, useQuery } from 'convex/react';
-import { FileTextIcon, PlusIcon } from 'lucide-react';
-import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
-import { PageSpinner } from '~/components/page';
-import { errorText } from '~/components/room/errors';
-import { Button } from '~/components/ui/button';
-import { Input } from '~/components/ui/input';
-import { leaseHolder, scribeLocked, sectionsOf, type DocBlock, type Passage, type Section, type ThreadsData } from '~/lib/document';
-import { useNow, type Names, type Participant } from '~/lib/room';
-import { renderedRange, selectionIn, sourceRange } from '~/lib/selection';
-import { AddChoices, Block, type AddPlace } from './Block';
-import { HistoryControl, type HistoryView } from './HistoryPanel';
-import { ScribeBanner, ScribeControl, ScribeNotice, useEndedRun } from './ScribeControl';
-import { ThreadMargin } from './ThreadMargin';
+import { api } from "@atelier/backend/api";
+import type { Id } from "@atelier/backend/dataModel";
+import { useMutation, useQuery } from "convex/react";
+import { FileTextIcon, PlusIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import type { RefObject, SyntheticEvent } from "react";
+
+import { PageSpinner } from "~/components/page";
+import { errorText } from "~/components/room/errors";
+import { Button } from "~/components/ui/button";
+import { Input } from "~/components/ui/input";
+import { leaseHolder, scribeLocked, sectionsOf } from "~/lib/document";
+import type { DocBlock, Passage, Section, ThreadsData } from "~/lib/document";
+import { useNow } from "~/lib/room";
+import type { Names, Participant } from "~/lib/room";
+import { renderedRange, selectionIn, sourceRange } from "~/lib/selection";
+import { hasContent, logFailure } from "~/lib/utils";
+
+import { AddChoices, Block } from "./Block";
+import type { AddPlace } from "./Block";
+import { HistoryControl } from "./HistoryPanel";
+import type { HistoryView } from "./HistoryPanel";
+import {
+  ScribeBanner,
+  ScribeControl,
+  ScribeNotice,
+  useEndedRun,
+} from "./ScribeControl";
+import { ThreadMargin } from "./ThreadMargin";
+
+// Names of the CSS highlights that mark commented passages and the one a
+// new comment is being written on; index.css styles them.
+const COMMENT_HIGHLIGHT = "atelier-comment";
+const DRAFT_HIGHLIGHT = "atelier-comment-draft";
 
 interface DocumentPaneProps {
-  roomId: Id<'rooms'>;
+  roomId: Id<"rooms">;
   names: Names;
   /** The person's own participant in this room. */
   meId: string | null;
@@ -26,14 +44,247 @@ interface DocumentPaneProps {
   isOwner: boolean;
 }
 
+/** The passage of a read-view block the reader has selected, as offsets in its stored text. */
+const useBlockSelection = (
+  blocks: readonly DocBlock[] | undefined
+): Passage | null => {
+  const [selected, setSelected] = useState<Passage | null>(null);
+  const blocksRef = useRef(blocks);
+  useEffect(() => {
+    blocksRef.current = blocks;
+  });
+  useEffect(() => {
+    const onChange = () => {
+      const selection = document.getSelection();
+      const anchor = selection?.anchorNode;
+      const element = (
+        anchor instanceof Element ? anchor : anchor?.parentElement
+      )?.closest<HTMLElement>("[data-block-text]");
+      const block =
+        element &&
+        blocksRef.current?.find((b) => b._id === element.dataset.blockText);
+      const read = element && selectionIn(element, selection ?? null);
+      const range =
+        block && read
+          ? sourceRange(block.text, read.selected, read.before)
+          : null;
+      const next = block && range ? { blockId: block._id, ...range } : null;
+      setSelected((current) =>
+        current?.blockId === next?.blockId &&
+        current?.start === next?.start &&
+        current?.end === next?.end
+          ? current
+          : next
+      );
+    };
+    document.addEventListener("selectionchange", onChange);
+    return () => {
+      document.removeEventListener("selectionchange", onChange);
+    };
+  }, []);
+  return selected;
+};
+
+/**
+ * Marks the passages of open threads, and of the comment being written,
+ * with the CSS Custom Highlight API, so the rendered text is left as it is.
+ * Browsers without the API show no marks.
+ */
+const markPassages = (
+  root: HTMLElement,
+  registry: HighlightRegistry,
+  blocks: readonly DocBlock[] | undefined,
+  threads: ThreadsData | undefined,
+  draft: Passage | null
+) => {
+  const byId = new Map<string, DocBlock>((blocks ?? []).map((b) => [b._id, b]));
+  const rangeOf = (blockId: string, start: number, end: number) => {
+    const block = byId.get(blockId);
+    const element = root.querySelector(`[data-block-text="${blockId}"]`);
+    return block && element
+      ? renderedRange(element, block.text, start, end)
+      : null;
+  };
+  const marked = (threads?.open ?? [])
+    .filter((t) => !t.detachedBeforeChangeSetId)
+    .map((t) => rangeOf(t.blockId, t.position, t.position + t.exact.length))
+    .filter((r): r is Range => r !== null);
+  registry.set(COMMENT_HIGHLIGHT, new Highlight(...marked));
+  const drafting = draft && rangeOf(draft.blockId, draft.start, draft.end);
+  if (drafting) {
+    registry.set(DRAFT_HIGHLIGHT, new Highlight(drafting));
+  }
+};
+
+const useCommentHighlights = (
+  rootRef: RefObject<HTMLElement | null>,
+  blocks: readonly DocBlock[] | undefined,
+  threads: ThreadsData | undefined,
+  draft: Passage | null
+) => {
+  useEffect(() => {
+    const root = rootRef.current;
+    const registry =
+      typeof CSS !== "undefined" &&
+      "highlights" in CSS &&
+      typeof Highlight !== "undefined"
+        ? CSS.highlights
+        : null;
+    if (root && registry) {
+      markPassages(root, registry, blocks, threads, draft);
+    }
+    return () => {
+      registry?.delete(COMMENT_HIGHLIGHT);
+      registry?.delete(DRAFT_HIGHLIGHT);
+    };
+  });
+};
+
+const sectionBlocks = (section: Section) =>
+  section.heading ? [section.heading, ...section.blocks] : section.blocks;
+const SectionAdd = ({
+  roomId,
+  label,
+  place,
+  locked,
+  onAdded,
+}: {
+  roomId: Id<"rooms">;
+  label: string;
+  place: AddPlace;
+  locked: boolean;
+  onAdded: (blockId: Id<"blocks">) => void;
+}) => {
+  const [open, setOpen] = useState(false);
+  if (open && !locked) {
+    return (
+      <AddChoices
+        roomId={roomId}
+        place={place}
+        label={label}
+        onClose={() => {
+          setOpen(false);
+        }}
+        onAdded={onAdded}
+        className="px-2"
+      />
+    );
+  }
+  return (
+    <Button
+      size="xs"
+      variant="ghost-muted"
+      className="ml-1"
+      disabled={locked}
+      onClick={() => {
+        setOpen(true);
+      }}
+    >
+      <PlusIcon />
+      {label}
+    </Button>
+  );
+};
+
+/** Saves the document's headings, and any template guidance under them, as a new template. */
+const SaveAsTemplate = ({ roomId }: { roomId: Id<"rooms"> }) => {
+  const save = useMutation(api.templates.saveFromRoom);
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+
+  const submit = async (e: SyntheticEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!name.trim()) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await save({ name: name.trim(), roomId });
+      setSaved(name.trim());
+      setName("");
+      setOpen(false);
+    } catch (error_) {
+      setError(errorText(error_));
+    }
+    setBusy(false);
+  };
+
+  if (!open) {
+    return (
+      <div className="flex items-center gap-2">
+        {saved === null ? null : (
+          <span className="text-muted-foreground text-xs">
+            “{saved}” saved as a template.
+          </span>
+        )}
+        <Button
+          size="xs"
+          variant="ghost-muted"
+          onClick={() => {
+            setSaved(null);
+            setOpen(true);
+          }}
+        >
+          Save as template
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <form
+      className="flex items-center gap-2"
+      onSubmit={(e) => {
+        submit(e).catch(logFailure);
+      }}
+    >
+      {hasContent(error) ? (
+        <span className="text-destructive-foreground text-xs">{error}</span>
+      ) : null}
+      <Input
+        size="sm"
+        aria-label="Template name"
+        placeholder="Template name"
+        value={name}
+        onChange={(e) => {
+          setName(e.target.value);
+        }}
+        autoFocus
+      />
+      <Button type="submit" size="xs" disabled={!name.trim() || busy}>
+        Save
+      </Button>
+      <Button
+        type="button"
+        size="xs"
+        variant="ghost"
+        onClick={() => {
+          setOpen(false);
+        }}
+      >
+        Cancel
+      </Button>
+    </form>
+  );
+};
+
 /** The room's shared document, edited one block at a time. */
-export function DocumentPane({ roomId, names, meId, models, isOwner }: DocumentPaneProps) {
+export const DocumentPane = ({
+  roomId,
+  names,
+  meId,
+  models,
+  isOwner,
+}: DocumentPaneProps) => {
   const doc = useQuery(api.documents.get, { roomId });
   const threads = useQuery(api.threads.list, { roomId });
   const scribeRun = useQuery(api.scribe.latest, { roomId });
   const ensure = useMutation(api.documents.ensure);
   const [ensureError, setEnsureError] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<Id<'blocks'> | null>(null);
+  const [editingId, setEditingId] = useState<Id<"blocks"> | null>(null);
   // Leases lapse on the clock; re-check who holds a block now and then.
   const now = useNow(10_000);
   const blocks = doc?.blocks;
@@ -50,31 +301,45 @@ export function DocumentPane({ roomId, names, meId, models, isOwner }: DocumentP
   // Rooms made before documents existed get theirs seeded on first open.
   const ensuredFor = useRef<string | null>(null);
   useEffect(() => {
-    if (ensuredFor.current === roomId) return;
+    if (ensuredFor.current === roomId) {
+      return;
+    }
     ensuredFor.current = roomId;
-    ensure({ roomId }).catch((e: unknown) => setEnsureError(errorText(e)));
+    ensure({ roomId }).catch((error_: unknown) => {
+      setEnsureError(errorText(error_));
+    });
   }, [ensure, roomId]);
 
-  const doneEditing = (blockId: Id<'blocks'>) => setEditingId((current) => (current === blockId ? null : current));
+  const doneEditing = (blockId: Id<"blocks">) => {
+    setEditingId((current) => (current === blockId ? null : current));
+  };
 
   let body;
-  if (doc === undefined || (doc === null && !ensureError)) {
+  if (doc === undefined || (doc === null && !hasContent(ensureError))) {
     body = <PageSpinner />;
   } else if (doc === null) {
     body = (
-      <p role="alert" className="py-6 text-center text-sm text-destructive-foreground">
+      <p
+        role="alert"
+        className="text-destructive-foreground py-6 text-center text-sm"
+      >
         {ensureError}
       </p>
     );
   } else {
-    const blocks = doc.blocks;
-    const sections = sectionsOf(blocks);
+    const sections = sectionsOf(doc.blocks);
     const onlyLoose = sections.every((s) => s.heading === null);
     body = (
       <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-5 @4xl:flex-row @4xl:items-start">
-        <div ref={textRef} className="w-full min-w-0 max-w-3xl flex-1 space-y-4">
+        <div
+          ref={textRef}
+          className="w-full max-w-3xl min-w-0 flex-1 space-y-4"
+        >
           {sections.map((section, index) => (
-            <div key={section.heading?._id ?? `loose-${index}`} className="space-y-0.5">
+            <div
+              key={section.heading?._id ?? `loose-${index}`}
+              className="space-y-0.5"
+            >
               {sectionBlocks(section).map((block) => (
                 <Block
                   key={block._id}
@@ -84,207 +349,97 @@ export function DocumentPane({ roomId, names, meId, models, isOwner }: DocumentP
                   meId={meId}
                   holderId={leaseHolder(block, now)}
                   locked={locked}
-                  isFirst={block._id === blocks[0]?._id}
-                  isLast={block._id === blocks[blocks.length - 1]?._id}
+                  isFirst={block._id === doc.blocks[0]?._id}
+                  isLast={block._id === doc.blocks.at(-1)?._id}
                   editing={editingId === block._id}
                   onEditing={setEditingId}
                   onDoneEditing={doneEditing}
                   models={models}
                   commentable={selected?.blockId === block._id}
-                  onComment={() => setCommentDraft(selected)}
-                  commentDraft={commentDraft?.blockId === block._id ? commentDraft : null}
-                  onCommentDone={() => setCommentDraft(null)}
+                  onComment={() => {
+                    setCommentDraft(selected);
+                  }}
+                  commentDraft={
+                    commentDraft?.blockId === block._id ? commentDraft : null
+                  }
+                  onCommentDone={() => {
+                    setCommentDraft(null);
+                  }}
                 />
               ))}
               {section.heading ? (
                 <SectionAdd
                   roomId={roomId}
-                  label={`Add to ${section.heading.text || 'this section'}`}
-                  place={{ endOfSectionId: section.heading._id as Id<'blocks'> }}
+                  label={`Add to ${section.heading.text || "this section"}`}
+                  place={{ endOfSectionId: section.heading._id }}
                   locked={locked}
                   onAdded={setEditingId}
                 />
               ) : null}
             </div>
           ))}
-          {onlyLoose ? <SectionAdd roomId={roomId} label="Add to the document" place={{}} locked={locked} onAdded={setEditingId} /> : null}
+          {onlyLoose ? (
+            <SectionAdd
+              roomId={roomId}
+              label="Add to the document"
+              place={{}}
+              locked={locked}
+              onAdded={setEditingId}
+            />
+          ) : null}
         </div>
         {threads ? (
-          <ThreadMargin threads={threads} blocks={blocks} names={names} models={models} className="w-full @4xl:w-72 @4xl:shrink-0" />
+          <ThreadMargin
+            threads={threads}
+            blocks={doc.blocks}
+            names={names}
+            models={models}
+            className="w-full @4xl:w-72 @4xl:shrink-0"
+          />
         ) : null}
       </div>
     );
   }
 
   return (
-    <section aria-label="Room document" className="flex h-full min-h-0 flex-col">
+    <section
+      aria-label="Room document"
+      className="flex h-full min-h-0 flex-col"
+    >
       <header className="flex items-center gap-2 border-b px-4 py-2.5">
-        <FileTextIcon className="size-4 text-muted-foreground" />
+        <FileTextIcon className="text-muted-foreground size-4" />
         <h2 className="text-sm font-medium">Document</h2>
-        <span className="text-xs text-muted-foreground">Shared with everyone in the room, agents included.</span>
+        <span className="text-muted-foreground text-xs">
+          Shared with everyone in the room, agents included.
+        </span>
         <div className="ml-auto flex items-center gap-1">
           <ScribeControl roomId={roomId} models={models} locked={locked} />
-          <HistoryControl roomId={roomId} names={names} view={historyView} onView={setHistoryView} />
+          <HistoryControl
+            roomId={roomId}
+            names={names}
+            view={historyView}
+            onView={setHistoryView}
+          />
           {isOwner ? <SaveAsTemplate roomId={roomId} /> : null}
         </div>
       </header>
-      {locked ? <ScribeBanner run={scribeRun?.runId === doc.scribeRunId ? scribeRun : undefined} names={names} /> : null}
+      {locked ? (
+        <ScribeBanner
+          run={scribeRun?.runId === doc.scribeRunId ? scribeRun : undefined}
+          names={names}
+        />
+      ) : null}
       {ended && !locked ? (
         <ScribeNotice
           run={ended}
           names={names}
-          onOpenHistory={(changeSetId) => setHistoryView({ open: true, changeSetId })}
+          onOpenHistory={(changeSetId) => {
+            setHistoryView({ changeSetId, open: true });
+          }}
           onDismiss={dismiss}
         />
       ) : null}
       <div className="@container min-h-0 flex-1 overflow-y-auto">{body}</div>
     </section>
   );
-}
-
-/** The passage of a read-view block the reader has selected, as offsets in its stored text. */
-function useBlockSelection(blocks: readonly DocBlock[] | undefined): Passage | null {
-  const [selected, setSelected] = useState<Passage | null>(null);
-  const blocksRef = useRef(blocks);
-  blocksRef.current = blocks;
-  useEffect(() => {
-    const onChange = () => {
-      const selection = document.getSelection();
-      const anchor = selection?.anchorNode;
-      const element = (anchor instanceof Element ? anchor : anchor?.parentElement)?.closest<HTMLElement>('[data-block-text]');
-      const block = element && blocksRef.current?.find((b) => b._id === element.dataset.blockText);
-      const read = element && selectionIn(element, selection ?? null);
-      const range = block && read ? sourceRange(block.text, read.selected, read.before) : null;
-      const next = block && range ? { blockId: block._id as Id<'blocks'>, ...range } : null;
-      setSelected((current) =>
-        current?.blockId === next?.blockId && current?.start === next?.start && current?.end === next?.end ? current : next,
-      );
-    };
-    document.addEventListener('selectionchange', onChange);
-    return () => document.removeEventListener('selectionchange', onChange);
-  }, []);
-  return selected;
-}
-
-// Names of the CSS highlights that mark commented passages and the one a
-// new comment is being written on; index.css styles them.
-const COMMENT_HIGHLIGHT = 'atelier-comment';
-const DRAFT_HIGHLIGHT = 'atelier-comment-draft';
-
-/**
- * Marks the passages of open threads, and of the comment being written,
- * with the CSS Custom Highlight API, so the rendered text is left as it is.
- * Browsers without the API show no marks.
- */
-function useCommentHighlights(
-  rootRef: RefObject<HTMLElement | null>,
-  blocks: readonly DocBlock[] | undefined,
-  threads: ThreadsData | undefined,
-  draft: Passage | null,
-) {
-  useEffect(() => {
-    const root = rootRef.current;
-    if (!root || typeof CSS === 'undefined' || !CSS.highlights || typeof Highlight === 'undefined') return;
-    const registry = CSS.highlights;
-    const byId = new Map<string, DocBlock>((blocks ?? []).map((b) => [b._id, b]));
-    const rangeOf = (blockId: string, start: number, end: number) => {
-      const block = byId.get(blockId);
-      const element = root.querySelector(`[data-block-text="${blockId}"]`);
-      return block && element ? renderedRange(element, block.text, start, end) : null;
-    };
-    const marked = (threads?.open ?? [])
-      .filter((t) => !t.detachedBeforeChangeSetId)
-      .map((t) => rangeOf(t.blockId, t.position, t.position + t.exact.length))
-      .filter((r): r is Range => r !== null);
-    registry.set(COMMENT_HIGHLIGHT, new Highlight(...marked));
-    const drafting = draft && rangeOf(draft.blockId, draft.start, draft.end);
-    if (drafting) registry.set(DRAFT_HIGHLIGHT, new Highlight(drafting));
-    return () => {
-      registry.delete(COMMENT_HIGHLIGHT);
-      registry.delete(DRAFT_HIGHLIGHT);
-    };
-  });
-}
-
-function sectionBlocks(section: Section) {
-  return section.heading ? [section.heading, ...section.blocks] : section.blocks;
-}
-
-function SectionAdd({
-  roomId,
-  label,
-  place,
-  locked,
-  onAdded,
-}: {
-  roomId: Id<'rooms'>;
-  label: string;
-  place: AddPlace;
-  locked: boolean;
-  onAdded: (blockId: Id<'blocks'>) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  if (open && !locked) return <AddChoices roomId={roomId} place={place} label={label} onClose={() => setOpen(false)} onAdded={onAdded} className="px-2" />;
-  return (
-    <Button size="xs" variant="ghost-muted" className="ml-1" disabled={locked} onClick={() => setOpen(true)}>
-      <PlusIcon />
-      {label}
-    </Button>
-  );
-}
-
-/** Saves the document's headings, and any template guidance under them, as a new template. */
-function SaveAsTemplate({ roomId }: { roomId: Id<'rooms'> }) {
-  const save = useMutation(api.templates.saveFromRoom);
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState<string | null>(null);
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!name.trim()) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await save({ roomId, name: name.trim() });
-      setSaved(name.trim());
-      setName('');
-      setOpen(false);
-    } catch (err) {
-      setError(errorText(err));
-    }
-    setBusy(false);
-  };
-
-  if (!open) {
-    return (
-      <div className="flex items-center gap-2">
-        {saved ? <span className="text-xs text-muted-foreground">“{saved}” saved as a template.</span> : null}
-        <Button
-          size="xs"
-          variant="ghost-muted"
-          onClick={() => {
-            setSaved(null);
-            setOpen(true);
-          }}
-        >
-          Save as template
-        </Button>
-      </div>
-    );
-  }
-  return (
-    <form className="flex items-center gap-2" onSubmit={(e) => void submit(e)}>
-      {error ? <span className="text-xs text-destructive-foreground">{error}</span> : null}
-      <Input size="sm" aria-label="Template name" placeholder="Template name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-      <Button type="submit" size="xs" disabled={!name.trim() || busy}>
-        Save
-      </Button>
-      <Button type="button" size="xs" variant="ghost" onClick={() => setOpen(false)}>
-        Cancel
-      </Button>
-    </form>
-  );
-}
+};

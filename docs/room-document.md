@@ -42,7 +42,7 @@ People can edit any block, whoever wrote it.
 
 - **Edit** opens a block for editing. Enter saves, Shift+Enter adds a line, and
   clicking away also saves.
-- **Add below** adds a block after this one. **Add to** *section name* at the
+- **Add below** adds a block after this one. **Add to** _section name_ at the
   end of each section adds one there. Pick **Heading**, **Paragraph** or
   **List item**; the new block opens for editing and you are its author.
 - **Move up** and **Move down** move a block one place.
@@ -55,7 +55,7 @@ author underneath. Editing someone else's block does not change its author.
 ### Edit locks
 
 Opening a block for editing takes a lock on it. While you hold it, others see
-"*name* is editing" on the block and cannot edit, move or delete it. The
+"_name_ is editing" on the block and cannot edit, move or delete it. The
 browser renews the lock while you type. It lapses about two minutes after your
 last renewal, so a block left open and idle frees itself.
 
@@ -100,13 +100,13 @@ turn of its own once the model is free.
 
 Under the comment, each mention shows where it stands:
 
-- "waiting for *model*": queued until the model is free;
+- "waiting for _model_": queued until the model is free;
 - "waiting for the runner": the runner is offline. The comment is saved, and
   the mention runs when the runner is back;
-- "*model* is answering";
-- "*model* replied";
-- "*model* could not reply": its turn failed or was stopped;
-- "mention of *model* cancelled".
+- "_model_ is answering";
+- "_model_ replied";
+- "_model_ could not reply": its turn failed or was stopped;
+- "mention of _model_ cancelled".
 
 ### Settling threads
 
@@ -134,7 +134,7 @@ Either person in the room can call it in.
 1. Select **Call in the scribe** in the document header.
 2. Choose which model acts as scribe.
 
-It is refused, with the reason, while someone is editing a block ("*name* is
+It is refused, with the reason, while someone is editing a block ("_name_ is
 editing a block"), while that model is still answering a message, while the
 runner is offline, and while a scribe is already working.
 
@@ -156,11 +156,11 @@ time".
 
 When the run ends, the people who had the document open see how it went:
 
-- "*model* finished the scribe run. Its changes are one entry in history." with
+- "_model_ finished the scribe run. Its changes are one entry in history." with
   **See it in history**;
-- "*model* finished the scribe run without changing the document.";
-- "*name* stopped the scribe run. The document is unchanged.";
-- "The scribe run failed: *reason*. The document is unchanged."
+- "_model_ finished the scribe run without changing the document.";
+- "_name_ stopped the scribe run. The document is unchanged.";
+- "The scribe run failed: _reason_. The document is unchanged."
 
 ### Credits
 
@@ -176,12 +176,12 @@ models comment on it like anyone else's. People can edit it as usual.
 
 **History** lists every change to the document, newest first:
 
-- "Template seeding by *name*": the room's starting sections;
-- "Edit by *name*": everything one person wrote in one block under one edit
+- "Template seeding by _name_": the room's starting sections;
+- "Edit by _name_": everything one person wrote in one block under one edit
   lock, or one move or delete;
-- "*model*'s turn": everything a model wrote in one turn;
-- "Scribe run by *model*, started by *name*";
-- "Restore by *name*".
+- "_model_'s turn": everything a model wrote in one turn;
+- "Scribe run by _model_, started by _name_";
+- "Restore by _name_".
 
 **Load older versions** reaches further back. Select an entry to see the
 document as it stood after it, read-only, with the blocks that change touched

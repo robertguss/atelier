@@ -305,13 +305,13 @@ U0 settles the transport, so U5 and U6 wait on it. U1 comes first among the buil
 
 ### Risks
 
-| Risk | Mitigation |
-|---|---|
-| Codex MCP calls through `config` raise an approval or elicitation request the runner cannot answer, or are dropped on `thread/resume`. | U0 probes both. KTD1 stop condition: ask Robert before choosing a fallback. |
-| Robert's own Pi extensions (`pi-mcp-adapter`) or Claude servers clash with the injected tools. | U0 probes with his real configuration loaded, as the shared-rooms LEARNINGS probes did. |
-| Models flood or under-use the document (R8). | KTD4 caps, plus a live per-harness probe in the Verification Contract that records how often an ordinary request produces a write, so the guidance text can be tuned. |
-| Document text is untrusted input to every model, and a teammate can plant instructions. | Authority is enforced server-side (KTD4), so planted text cannot make a model write as someone else, reach review turns or reach team chat. This matches the existing full-reach notice. |
-| A crashed runner or an idle editor leaves the document locked. | Every lock and lease has an expiry and a scheduled release (KTD7, KTD8). |
+| Risk                                                                                                                                   | Mitigation                                                                                                                                                                               |
+| -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Codex MCP calls through `config` raise an approval or elicitation request the runner cannot answer, or are dropped on `thread/resume`. | U0 probes both. KTD1 stop condition: ask Robert before choosing a fallback.                                                                                                              |
+| Robert's own Pi extensions (`pi-mcp-adapter`) or Claude servers clash with the injected tools.                                         | U0 probes with his real configuration loaded, as the shared-rooms LEARNINGS probes did.                                                                                                  |
+| Models flood or under-use the document (R8).                                                                                           | KTD4 caps, plus a live per-harness probe in the Verification Contract that records how often an ordinary request produces a write, so the guidance text can be tuned.                    |
+| Document text is untrusted input to every model, and a teammate can plant instructions.                                                | Authority is enforced server-side (KTD4), so planted text cannot make a model write as someone else, reach review turns or reach team chat. This matches the existing full-reach notice. |
+| A crashed runner or an idle editor leaves the document locked.                                                                         | Every lock and lease has an expiry and a scheduled release (KTD7, KTD8).                                                                                                                 |
 
 ### System-Wide Impact
 
@@ -339,20 +339,20 @@ Considered and not built:
 
 ## Implementation Units
 
-| U-ID | Title | Key files | Depends on |
-|---|---|---|---|
-| U0 | Harness tool probe | `runner/scripts/probe-room-tools.ts` (throwaway) | — |
-| U1 | Document data model, templates and seeding | `convex/schema.ts`, `convex/documents.ts`, `convex/templates.ts`, `convex/rooms.ts` | — |
-| U2 | Human editing, leases, history and restore | `convex/blocks.ts`, `convex/history.ts`, `convex/lib/document.ts` | U1 |
-| U3 | Comment threads, anchoring and mentions | `convex/threads.ts`, `convex/lib/anchor.ts`, `convex/lib/dispatch.ts`, `convex/runner.ts` | U1, U2 |
-| U4 | Runner-facing document functions and the claim digest | `convex/documentTools.ts`, `convex/lib/visibility.ts`, `convex/lib/prompt.ts`, `convex/runner.ts` | U1–U3 |
-| U5 | Runner tool core and loopback endpoint | `runner/src/roomTools.ts`, `runner/src/roomToolsServer.ts`, `runner/src/turns.ts` | U0, U4 |
-| U6 | Adapter wiring for Claude, Codex and Pi | `packages/shared/src/harness.ts`, `runner/src/adapters/*` | U0, U5 |
-| U7 | Scribe runs | `convex/scribe.ts`, `convex/runner.ts`, `convex/messages.ts`, `runner/src/turns.ts` | U2–U6 |
-| U8 | Document-first room layout and block editing | `apps/web/src/components/room/RoomView.tsx`, `apps/web/src/components/document/*` | U1, U2 |
-| U9 | Comments in the web app | `apps/web/src/components/document/Thread*.tsx`, `apps/web/src/lib/selection.ts` | U3, U8 |
-| U10 | History, restore and scribe controls | `apps/web/src/components/document/History*.tsx`, `ScribeControl.tsx` | U2, U7, U8 |
-| U11 | Templates, laptop room creation and join notice | `apps/web/src/routes/rooms.new.tsx`, `apps/web/src/routes/templates.tsx`, `apps/web/src/routes/rooms.$roomId.tsx` | U1, U8 |
+| U-ID | Title                                                 | Key files                                                                                                         | Depends on |
+| ---- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------- |
+| U0   | Harness tool probe                                    | `runner/scripts/probe-room-tools.ts` (throwaway)                                                                  | —          |
+| U1   | Document data model, templates and seeding            | `convex/schema.ts`, `convex/documents.ts`, `convex/templates.ts`, `convex/rooms.ts`                               | —          |
+| U2   | Human editing, leases, history and restore            | `convex/blocks.ts`, `convex/history.ts`, `convex/lib/document.ts`                                                 | U1         |
+| U3   | Comment threads, anchoring and mentions               | `convex/threads.ts`, `convex/lib/anchor.ts`, `convex/lib/dispatch.ts`, `convex/runner.ts`                         | U1, U2     |
+| U4   | Runner-facing document functions and the claim digest | `convex/documentTools.ts`, `convex/lib/visibility.ts`, `convex/lib/prompt.ts`, `convex/runner.ts`                 | U1–U3      |
+| U5   | Runner tool core and loopback endpoint                | `runner/src/roomTools.ts`, `runner/src/roomToolsServer.ts`, `runner/src/turns.ts`                                 | U0, U4     |
+| U6   | Adapter wiring for Claude, Codex and Pi               | `packages/shared/src/harness.ts`, `runner/src/adapters/*`                                                         | U0, U5     |
+| U7   | Scribe runs                                           | `convex/scribe.ts`, `convex/runner.ts`, `convex/messages.ts`, `runner/src/turns.ts`                               | U2–U6      |
+| U8   | Document-first room layout and block editing          | `apps/web/src/components/room/RoomView.tsx`, `apps/web/src/components/document/*`                                 | U1, U2     |
+| U9   | Comments in the web app                               | `apps/web/src/components/document/Thread*.tsx`, `apps/web/src/lib/selection.ts`                                   | U3, U8     |
+| U10  | History, restore and scribe controls                  | `apps/web/src/components/document/History*.tsx`, `ScribeControl.tsx`                                              | U2, U7, U8 |
+| U11  | Templates, laptop room creation and join notice       | `apps/web/src/routes/rooms.new.tsx`, `apps/web/src/routes/templates.tsx`, `apps/web/src/routes/rooms.$roomId.tsx` | U1, U8     |
 
 Backend paths are under `packages/backend/`.
 
@@ -367,6 +367,7 @@ Backend paths are under `packages/backend/`.
 **Files:** `runner/scripts/probe-room-tools.ts` (throwaway; delete before the PR or keep under `runner/scripts/` with a header saying it is a probe).
 
 **Approach:**
+
 1. Stand up a stub tool server in the runner process with one `echo` tool, on the KTD2 loopback rules.
 2. Claude: attach it in-process with `createSdkMcpServer`, beside Robert's own servers, on a fresh session and on `resume`. Check that the tool is listed without tool search and that `canUseTool` sees it.
 3. Codex: pass `mcp_servers.atelier.*` through `config` on `thread/start` and `thread/resume`, under both approval policies and both sandboxes the edit switch uses. Record whether an approval or elicitation request arrives.
@@ -388,12 +389,14 @@ Backend paths are under `packages/backend/`.
 **Dependencies:** none.
 
 **Files:**
+
 - Modify: `packages/backend/convex/schema.ts`, `packages/backend/convex/rooms.ts`
 - Create: `packages/backend/convex/documents.ts`, `packages/backend/convex/templates.ts`, `packages/backend/convex/lib/document.ts`
 - Add dependency: `fractional-indexing` in `packages/backend/package.json` (pnpm here refuses same-day releases; 4.0.0 is older)
 - Test: `packages/backend/tests/document.test.ts`, `packages/backend/tests/templates.test.ts`
 
 **Approach:**
+
 1. Add the KTD5 tables with shared validators at the top of `schema.ts` and `by_<field>` indexes, each with a comment saying why it exists.
 2. `lib/document.ts` holds the shared write path: insert or patch a block, append a revision, bump the document rev, open or extend a change set, and take a checkpoint every 200 revisions.
 3. `templates.ts`: owner-only create, update, delete and list (`requireOwner` then `requireMember` where a room is involved), plus `saveFromRoom`, which copies heading and guidance blocks only (R4).
@@ -402,6 +405,7 @@ Backend paths are under `packages/backend/`.
 **Patterns to follow:** `convex/lib/auth.ts` (`requireOwner`, `requireMember`); `reviewSnapshots` for large rows kept apart from hot ones; `convex/lib/ledger.ts` `record` with ids only; `ensureUser` for idempotent ensure mutations.
 
 **Test scenarios:**
+
 - Creating a room with no template seeds three heading blocks (What's happened, Ideas & notes, Open questions) attributed to Robert, in one `template_seed` change set.
 - Creating a room with a chosen template seeds that template's headings and guidance in order.
 - `documents.ensure` on an older room with no document seeds the default once. A second call changes nothing.
@@ -422,11 +426,13 @@ Backend paths are under `packages/backend/`.
 **Dependencies:** U1.
 
 **Files:**
+
 - Create: `packages/backend/convex/blocks.ts`, `packages/backend/convex/history.ts`
 - Modify: `packages/backend/convex/lib/document.ts`, `packages/backend/convex/members.ts` (release leases on removal), `packages/backend/convex/crons.ts` if a sweep is kept
 - Test: `packages/backend/tests/blocks.test.ts`, `packages/backend/tests/history.test.ts`
 
 **Approach:**
+
 1. `blocks.startEdit` takes a lease, refusing when another person holds an unexpired one or the scribe lock is set. `blocks.renew` extends it, and `blocks.save` writes text, sets `humanEditedAt` on blocks with another author, and closes the lease's change set. `blocks.add`, `blocks.remove` and `blocks.move` use fractional keys.
 2. Schedule the KTD7 cleanup with `runAt(expiresAt)` on every take or renewal. The cleanup ignores leases that were renewed after it was scheduled.
 3. `history.list` pages change sets newest first. `history.version` rebuilds a version per KTD13. `history.diff` returns a change set's revisions.
@@ -435,6 +441,7 @@ Backend paths are under `packages/backend/`.
 **Patterns to follow:** load the row, then `requireMember(ctx, row.roomId)` (`messages.ts` cancel); lease renewal in `runner.progress`; error sentences shown through `apps/web/src/components/room/errors.ts`.
 
 **Test scenarios:**
+
 - Covers AE2. The teammate edits Claude's block: the author stays Claude, `humanEditedAt` is set, and the revision is attributed to the teammate.
 - While Robert holds a block's lease, the teammate's `startEdit` on it is refused, naming Robert.
 - After two minutes without renewal, the teammate's `startEdit` succeeds and Robert's later `save` is refused as expired.
@@ -456,11 +463,13 @@ Backend paths are under `packages/backend/`.
 **Dependencies:** U1, U2.
 
 **Files:**
+
 - Create: `packages/backend/convex/threads.ts`, `packages/backend/convex/lib/anchor.ts`
 - Modify: `packages/backend/convex/schema.ts` (`turns.threadId`, thread deliveries), `packages/backend/convex/lib/document.ts` (re-anchor on every text change), `packages/backend/convex/lib/dispatch.ts`, `packages/backend/convex/runner.ts` (`finish` posts a thread reply), `packages/backend/convex/runners.ts` (re-dispatch on reconnect), `packages/backend/convex/members.ts` (cancel a removed member's deliveries), `packages/backend/convex/messages.ts` (no thread delivery answers a card)
 - Test: `packages/backend/tests/threads.test.ts`, `packages/backend/tests/anchor.test.ts`, additions to `packages/backend/tests/queue.test.ts`
 
 **Approach:**
+
 1. `threads.create` (human) stores the KTD10 selector computed on the server from the block's current text and the client's offsets. `threads.reply`, `threads.settle` and `threads.reopen` (humans only for the last two).
 2. `lib/anchor.ts` ports `matchQuote` and is called by the shared write path in the same mutation as every text change.
 3. Mentions: parse `@Name` in human-written comments only, against the room's harness participants, store `mentions` on the comment, and queue one thread delivery per participant per KTD9, including the offline hold, the reconnect re-dispatch and cancellation on member removal.
@@ -469,6 +478,7 @@ Backend paths are under `packages/backend/`.
 **Patterns to follow:** follow-up handling in `lib/dispatch.ts` (`takeWhile` exclusion); `messages.send` for membership and ledger; privacy assertions with unique tokens in `tests/isolation.test.ts`.
 
 **Test scenarios:**
+
 - Covers AE3. A comment that mentions no one creates no delivery. A comment that mentions @Pi creates exactly one Pi delivery, and Pi's final text lands as a reply in that thread, not in the agent pane.
 - A mention of a model running another turn waits, then runs alone after it. It is never steered in.
 - A mention of a model with an open question card leaves the card open and unanswered.
@@ -490,11 +500,13 @@ Backend paths are under `packages/backend/`.
 **Dependencies:** U1–U3.
 
 **Files:**
+
 - Create: `packages/backend/convex/documentTools.ts`
 - Modify: `packages/backend/convex/lib/visibility.ts` (`canWriteDocument`), `packages/backend/convex/lib/prompt.ts` (`<room_document>`, `neutralize`, the edit-switch line), `packages/backend/convex/runner.ts` (`claim` returns the digest and the tool mode; `finish` records the seen rev with the session), `packages/backend/convex/lib/sessions.ts`, `packages/backend/convex/schema.ts` (`participants.documentRevSeen`, the follow-up session entry's seen rev)
 - Test: `packages/backend/tests/documentTools.test.ts`, additions to `packages/backend/tests/prompt.test.ts` and `packages/backend/tests/isolation.test.ts`
 
 **Approach:**
+
 1. Each `*ForTurn` function checks the runner secret, loads the turn and its claimed command, then applies the KTD4 checks in a fixed order and returns typed refusals.
 2. `claim` returns `documentMode`: `none` for reviews, `read` for follow-ups, `write` for ordinary and mention turns, and `scribe` for scribe turns. It appends the KTD6 digest, except for reviews.
 3. The room context line becomes "File edits: on/off. Room document: you may add and update your own blocks and comment on others." File edits never gate document tools.
@@ -502,6 +514,7 @@ Backend paths are under `packages/backend/`.
 **Patterns to follow:** runner guards in `runner.progress` and `runner.finish`; `visibleTurn` as the single visibility rule; `tests/prompt.test.ts` for envelope-forgery tests.
 
 **Test scenarios:**
+
 - Covers AE1. `updateBlockForTurn` on Codex's block from Claude's turn is refused with "not your block". `commentForTurn` on it succeeds.
 - Covers AE8. Every write function called with a review turn's id, then a follow-up turn's id, is refused, and the document is byte-identical afterwards. A review turn's claim has no `<room_document>`. A follow-up's claim has the digest and `documentMode: read`.
 - An update with a stale `baseRev` is refused and returns the current text and its editor.
@@ -525,11 +538,13 @@ Backend paths are under `packages/backend/`.
 **Dependencies:** U0, U4.
 
 **Files:**
+
 - Create: `runner/src/roomTools.ts` (tool definitions and Convex calls), `runner/src/roomToolsServer.ts` (loopback MCP endpoint and token table)
 - Modify: `runner/src/turns.ts` (issue a token at start, revoke it in every exit path), `runner/package.json` (test script)
 - Test: `runner/src/roomTools.test.ts`, `runner/src/roomToolsServer.test.ts`
 
 **Approach:**
+
 1. One tool core used by every transport. Results and refusals are plain text the model can act on.
 2. The server binds `127.0.0.1` with port `0` and asserts that the chosen port is outside 3000–9999. It checks the bearer on every request, maps it to a `turnId`, and rejects tokens from finished turns.
 3. Tokens are revoked in `turns.ts`'s finish, fail, cancel and crash paths.
@@ -537,6 +552,7 @@ Backend paths are under `packages/backend/`.
 **Patterns to follow:** `fakeConvex` and `fakeHarness` in `runner/src/turns.test.ts`; `node:test` as the runner's test runner.
 
 **Test scenarios:**
+
 - A request with no token, a token from a finished turn, or another turn's token is rejected.
 - A refusal from Convex comes back to the caller as tool text, not as a crash.
 - Revoking happens on finish, fail, cancel and a thrown adapter error.
@@ -554,11 +570,13 @@ Backend paths are under `packages/backend/`.
 **Dependencies:** U0, U5.
 
 **Files:**
+
 - Modify: `packages/shared/src/harness.ts` (`McpServerSpec` gains an HTTP form, or a transport-neutral `roomTools` field, per U0), `runner/src/adapters/claude.ts`, `runner/src/adapters/codex.ts`, `runner/src/adapters/pi.ts`, `runner/src/turns.ts`
 - Create: `runner/src/adapters/pi-room-tools-extension.ts`
 - Test: `runner/src/adapters/claude.test.ts`, `runner/src/adapters/codex.test.ts`, `runner/src/adapters/pi.test.ts`
 
 **Approach:**
+
 1. Remove the two `throw`s and replace them with the U0 route.
 2. Claude: add the server and allow `mcp__atelier__*` in `canUseTool`. Review options stay `tools: []`, `mcpServers: {}`, `strictMcpConfig`.
 3. Codex: add `mcp_servers.atelier.*` to `config` on start and resume. The review config keeps every MCP server disabled.
@@ -568,6 +586,7 @@ Backend paths are under `packages/backend/`.
 **Patterns to follow:** `pi-guard-extension.ts`; the review option builders in each adapter; LEARNINGS notes on Codex dotted keys and Pi's MCP behavior.
 
 **Test scenarios:**
+
 - Covers AE8. Review requests contain no Atelier tool route on any harness, asserted on the exact options, config and args.
 - An ordinary Claude turn's options include the Atelier server, and `canUseTool` allows its tools and still denies other unapproved tools.
 - An ordinary Codex turn's `thread/start` and `thread/resume` both carry the `mcp_servers.atelier` keys.
@@ -585,11 +604,13 @@ Backend paths are under `packages/backend/`.
 **Dependencies:** U2–U6.
 
 **Files:**
+
 - Create: `packages/backend/convex/scribe.ts`
 - Modify: `packages/backend/convex/runner.ts` (`claim`, `sessionStarted`, `finish`, `failTurn`, `recover`, `reclaimExpiredLeases`), `packages/backend/convex/lib/dispatch.ts` (`takesSteer`, `activeOrdinaryTurn`), `packages/backend/convex/rooms.ts` (`setEditsEnabled`), `packages/backend/convex/messages.ts` (`cancel`), `packages/backend/convex/schema.ts` (`turns.scribeRunId`), `runner/src/turns.ts` (fresh unsaved session, edits off, cards denied), `runner/src/roomTools.ts` (draft tools)
 - Test: `packages/backend/tests/scribe.test.ts`, additions to `runner/src/turns.test.ts`
 
 **Approach:**
+
 1. `scribe.begin` implements KTD8's refusals and setup. It puts the run's instructions in the turn prompt, and they say that unmentioned blocks are kept.
 2. Draft tools validate each operation (block ids exist, sources cover what is removed) and return a report: unaccounted blocks, threads that will move, threads that will detach.
 3. `finish` applies the draft in one mutation, computes credits from `sourceBlockIds`, re-anchors open threads including those started mid-run (R36), checkpoints and releases.
@@ -598,6 +619,7 @@ Backend paths are under `packages/backend/`.
 **Patterns to follow:** review turns in `runner/src/turns.ts` (fresh session, never saved); lease reclaim in `runner.reclaimExpiredLeases`.
 
 **Test scenarios:**
+
 - Covers F3 and AE5. A run that merges two blocks and deletes a passage with an open thread leaves a pre-run checkpoint. The merged block is attributed to the scribe with both authors credited. The thread stays open and links to the version before the run. History shows one change set.
 - Covers AE9. During a run, the teammate's edit is refused, and a Codex `update_block` returns "the scribe is working".
 - Covers R35. `scribe.begin` while the teammate holds a lease is refused, naming the teammate.
@@ -623,11 +645,13 @@ Backend paths are under `packages/backend/`.
 **Dependencies:** U1, U2.
 
 **Files:**
+
 - Modify: `apps/web/src/components/room/RoomView.tsx`, `apps/web/src/components/room/RoomHeader.tsx`, `apps/web/src/lib/room.ts`
 - Create: `apps/web/src/components/document/DocumentPane.tsx`, `apps/web/src/components/document/Block.tsx`, `apps/web/src/components/document/BlockEditor.tsx`, `apps/web/src/lib/document.ts`
 - Test: `apps/web/src/components/document/document.test.tsx`, updates to `apps/web/src/components/room/room.test.tsx`
 
 **Approach:**
+
 1. The main column becomes `DocumentPane`. `AgentPane` and `TeamPane` become collapsible asides that reuse the existing separator and sheet logic, generalized from one pane to two. Their open state is kept in localStorage.
 2. A block renders with `react-markdown` and shows its author and any lease holder. Clicking edit calls `blocks.startEdit`, swaps in a `Textarea`, renews the lease while the person types, and saves on blur or Enter; Shift+Enter inserts a newline. A refused or expired save keeps the textarea open with the draft intact, shows the server's sentence, and offers to retake the lease or copy the draft if someone else now holds the block.
 3. `documents.ensure` runs once on open.
@@ -637,6 +661,7 @@ Backend paths are under `packages/backend/`.
 **Patterns to follow:** `RoomView.tsx` separator and `Sheet`; `useComposer` for keyboard handling; `src/test/backend.tsx` query mocks.
 
 **Test scenarios:**
+
 - The room route renders the document as the main column, with the agent pane and team chat collapsed or expanded as last left.
 - A block held by Robert shows "Robert is editing" to the teammate, and its edit control is disabled.
 - A refused `startEdit` shows the server's sentence.
@@ -657,16 +682,19 @@ Backend paths are under `packages/backend/`.
 **Dependencies:** U3, U8.
 
 **Files:**
+
 - Create: `apps/web/src/lib/selection.ts` (DOM selection to block plain-text offsets), `apps/web/src/components/document/ThreadMargin.tsx`, `apps/web/src/components/document/ThreadCard.tsx`, `apps/web/src/components/document/SettledSection.tsx`, `apps/web/src/components/document/MentionInput.tsx`
 - Test: `apps/web/src/lib/selection.test.ts`, `apps/web/src/components/document/threads.test.tsx`
 
 **Approach:**
+
 1. Selecting text in a read-view block shows a "Comment" button. Offsets are measured on the block's plain text, and the server builds the selector.
 2. Highlights use the CSS Custom Highlight API. Detached threads show a "passage removed, view original" link to the version just before the change that removed it.
 3. The settled section is collapsed by default and expandable, reusing the `ToolActivity` disclosure pattern in `TurnView.tsx`.
 4. The mention input suggests the room's model participants. Each mention on a thread card shows its delivery state: waiting for the model, waiting for the runner, answering, replied or failed.
 
 **Test scenarios:**
+
 - Selecting text across markdown emphasis maps to the right plain-text offsets.
 - Posting a comment with "@Claude" calls `threads.create` with Claude in `mentions`. Posting without a mention sends none.
 - Settle moves the thread into the collapsed Settled section. Reopen moves it back.
@@ -685,15 +713,18 @@ Backend paths are under `packages/backend/`.
 **Dependencies:** U2, U7, U8.
 
 **Files:**
+
 - Create: `apps/web/src/components/document/HistoryPanel.tsx`, `apps/web/src/components/document/VersionView.tsx`, `apps/web/src/components/document/ScribeControl.tsx`
 - Test: `apps/web/src/components/document/history.test.tsx`, `apps/web/src/components/document/scribe.test.tsx`
 
 **Approach:**
+
 1. The history panel lists change sets with actor, kind and time, paginated. Selecting one shows that version read-only, with its changes marked.
 2. Restore asks for confirmation and shows any refusal sentence.
 3. The scribe control picks a model participant and starts the run. While the run is active, the document shows "the scribe is working" with elapsed time and a Stop action that uses the cancel path, and edit controls are disabled. When the run ends, a notice says whether it committed (linking its history entry) or stopped or failed with the document unchanged.
 
 **Test scenarios:**
+
 - The history list shows a scribe run as one entry attributed to the scribe and the person who started it.
 - Restore is confirmed, called once, and its refusal ("Robert is editing …") is shown.
 - Starting the scribe while someone edits shows the refusal naming them.
@@ -711,11 +742,13 @@ Backend paths are under `packages/backend/`.
 **Dependencies:** U1, U8 (it adds "Save as template" to the document pane U8 creates).
 
 **Files:**
+
 - Create: `apps/web/src/routes/rooms.new.tsx`, `apps/web/src/routes/templates.tsx`, `apps/web/src/components/templates/TemplateEditor.tsx`
 - Modify: `packages/backend/convex/lib/auth.ts` (bump `NOTICE_VERSION` to 2 so existing teammates re-accept), `apps/web/src/routes/index.tsx` (a "New room" entry for the owner), `apps/web/src/routes/rooms.$roomId.tsx` (join notice text), `apps/web/src/components/document/DocumentPane.tsx` ("Save as template" for the owner), `apps/web/src/routeTree.gen.ts` (regenerated)
 - Test: `apps/web/src/routes/rooms.new.test.tsx`, `apps/web/src/routes/templates.test.tsx`, updates to `apps/web/src/routes/invite.test.tsx` or `rooms.test.tsx` for the notice
 
 **Approach:**
+
 1. `/rooms/new` is owner-only. It shows the name, a folder field defaulting as the phone does, the online runner (or "no runner online"), and a template select with the default preselected. It calls `rooms.create` with `templateId`.
 2. `/templates` lists, creates and edits templates as heading and guidance pairs.
 3. The join notice gains one line about the room document (R30).
@@ -723,6 +756,7 @@ Backend paths are under `packages/backend/`.
 **Patterns to follow:** `apps/mobile/src/app/index.tsx` create form fields; owner gating via `rooms.access` and `isOwner`; route tests in `routes/rooms.test.tsx`.
 
 **Test scenarios:**
+
 - A teammate visiting `/rooms/new` or `/templates` sees the owner-only message.
 - Creating a room with a chosen template calls `rooms.create` with that template, then navigates to the new room.
 - With no runner online, Create is disabled and says so.
@@ -735,16 +769,16 @@ Backend paths are under `packages/backend/`.
 
 ## Verification Contract
 
-| Gate | Command or check | Proves |
-|---|---|---|
-| Backend | `pnpm --filter @atelier/backend test` and `pnpm --filter @atelier/backend typecheck` | U1–U4 and U7 rules, privacy and history |
-| Runner | `pnpm --filter @atelier/runner test` and `pnpm --filter @atelier/runner typecheck` | U5–U7 tool core, tokens and adapter options |
-| Web | `pnpm --filter @atelier/web test` and `pnpm --filter @atelier/web typecheck` | U8–U11 screens |
-| Workspace | `pnpm typecheck` | Shared types across packages |
-| Live parity check | On the VM with Robert's logins: for each of Claude, Codex and Pi, with edits on and off, on a fresh and a resumed session, have the model add a block, update it, delete it and comment on another author's passage | KTD1 end to end. Each write appears live, in the agent pane's tool activity and in history under that model |
-| Live privacy check | Run an independent review and a follow-up in a room with a teammate | AE8: the document and its history are unchanged |
-| Live scribe check | One scribe run per harness, plus one run stopped midway | AE5, AE9, R27 |
-| R8 usage probe | Give each model an ordinary work request that doesn't mention the document, five times | How often models write unprompted, per harness, recorded in `LEARNINGS.md` to tune the guidance text. Not a pass/fail gate |
+| Gate               | Command or check                                                                                                                                                                                                    | Proves                                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Backend            | `pnpm --filter @atelier/backend test` and `pnpm --filter @atelier/backend typecheck`                                                                                                                                | U1–U4 and U7 rules, privacy and history                                                                                    |
+| Runner             | `pnpm --filter @atelier/runner test` and `pnpm --filter @atelier/runner typecheck`                                                                                                                                  | U5–U7 tool core, tokens and adapter options                                                                                |
+| Web                | `pnpm --filter @atelier/web test` and `pnpm --filter @atelier/web typecheck`                                                                                                                                        | U8–U11 screens                                                                                                             |
+| Workspace          | `pnpm typecheck`                                                                                                                                                                                                    | Shared types across packages                                                                                               |
+| Live parity check  | On the VM with Robert's logins: for each of Claude, Codex and Pi, with edits on and off, on a fresh and a resumed session, have the model add a block, update it, delete it and comment on another author's passage | KTD1 end to end. Each write appears live, in the agent pane's tool activity and in history under that model                |
+| Live privacy check | Run an independent review and a follow-up in a room with a teammate                                                                                                                                                 | AE8: the document and its history are unchanged                                                                            |
+| Live scribe check  | One scribe run per harness, plus one run stopped midway                                                                                                                                                             | AE5, AE9, R27                                                                                                              |
+| R8 usage probe     | Give each model an ordinary work request that doesn't mention the document, five times                                                                                                                              | How often models write unprompted, per harness, recorded in `LEARNINGS.md` to tune the guidance text. Not a pass/fail gate |
 
 Live checks use a throwaway room and folder and must not disturb Robert's running runner or Expo processes (LEARNINGS).
 

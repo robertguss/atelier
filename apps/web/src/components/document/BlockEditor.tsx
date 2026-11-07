@@ -1,11 +1,14 @@
-import { api } from '@atelier/backend/api';
-import type { Id } from '@atelier/backend/dataModel';
-import { useMutation } from 'convex/react';
-import { useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
-import { errorText } from '~/components/room/errors';
-import { Button } from '~/components/ui/button';
-import { Textarea } from '~/components/ui/textarea';
-import { KIND_LABEL, RENEW_EVERY_MS, type DocBlock } from '~/lib/document';
+import { api } from "@atelier/backend/api";
+import { useMutation } from "convex/react";
+import { useEffect, useRef, useState } from "react";
+import type { FocusEvent, KeyboardEvent } from "react";
+
+import { errorText } from "~/components/room/errors";
+import { Button } from "~/components/ui/button";
+import { Textarea } from "~/components/ui/textarea";
+import { KIND_LABEL, RENEW_EVERY_MS } from "~/lib/document";
+import type { DocBlock } from "~/lib/document";
+import { hasContent, logFailure } from "~/lib/utils";
 
 interface BlockEditorProps {
   block: DocBlock;
@@ -19,8 +22,12 @@ interface BlockEditorProps {
  * the textarea saves and ends the edit; Shift+Enter adds a line. A refused
  * save keeps the draft here with the server's reason.
  */
-export function BlockEditor({ block, otherHolder, onDone }: BlockEditorProps) {
-  const blockId = block._id as Id<'blocks'>;
+export const BlockEditor = ({
+  block,
+  otherHolder,
+  onDone,
+}: BlockEditorProps) => {
+  const blockId = block._id;
   const save = useMutation(api.blocks.save);
   const renew = useMutation(api.blocks.renew);
   const stopEdit = useMutation(api.blocks.stopEdit);
@@ -29,26 +36,38 @@ export function BlockEditor({ block, otherHolder, onDone }: BlockEditorProps) {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const busy = useRef(false);
-  const lastRenewal = useRef(Date.now());
+  const lastRenewal = useRef(0);
   const boxRef = useRef<HTMLDivElement>(null);
+  // The lease was taken just before this editor opened.
+  useEffect(() => {
+    lastRenewal.current = Date.now();
+  }, []);
 
   const onChange = (value: string) => {
     setDraft(value);
-    if (Date.now() - lastRenewal.current < RENEW_EVERY_MS) return;
+    if (Date.now() - lastRenewal.current < RENEW_EVERY_MS) {
+      return;
+    }
     lastRenewal.current = Date.now();
-    renew({ blockId }).catch((e: unknown) => setError(errorText(e)));
+    renew({ blockId }).catch((error_: unknown) => {
+      setError(errorText(error_));
+    });
   };
 
   const finish = async () => {
-    if (busy.current) return;
+    if (busy.current) {
+      return;
+    }
     busy.current = true;
     setError(null);
     try {
-      if (draft !== block.text) await save({ blockId, text: draft });
+      if (draft !== block.text) {
+        await save({ blockId, text: draft });
+      }
       await stopEdit({ blockId });
       onDone();
-    } catch (e) {
-      setError(errorText(e));
+    } catch (error_) {
+      setError(errorText(error_));
     }
     busy.current = false;
   };
@@ -58,16 +77,18 @@ export function BlockEditor({ block, otherHolder, onDone }: BlockEditorProps) {
     try {
       await startEdit({ blockId });
       lastRenewal.current = Date.now();
-      boxRef.current?.querySelector('textarea')?.focus();
-    } catch (e) {
-      setError(errorText(e));
+      boxRef.current?.querySelector("textarea")?.focus();
+    } catch (error_) {
+      setError(errorText(error_));
     }
   };
 
   // Gives up the draft. A lease still held is released; one that is not
   // lapses on its own, so a failed release changes nothing.
   const discard = () => {
-    stopEdit({ blockId }).catch(() => {});
+    stopEdit({ blockId }).catch(() => {
+      // The lease lapses on its own.
+    });
     onDone();
   };
 
@@ -77,16 +98,23 @@ export function BlockEditor({ block, otherHolder, onDone }: BlockEditorProps) {
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) {
+      return;
+    }
     e.preventDefault();
-    void finish();
+    finish().catch(logFailure);
   };
 
   const onBlur = (e: FocusEvent<HTMLTextAreaElement>) => {
     // Moving to this editor's own buttons is not leaving it, and a refused
     // save waits for the person to choose what to do.
-    if (boxRef.current?.contains(e.relatedTarget as Node | null) || error) return;
-    void finish();
+    if (
+      boxRef.current?.contains(e.relatedTarget) === true ||
+      hasContent(error)
+    ) {
+      return;
+    }
+    finish().catch(logFailure);
   };
 
   return (
@@ -94,23 +122,37 @@ export function BlockEditor({ block, otherHolder, onDone }: BlockEditorProps) {
       <Textarea
         aria-label={`Edit ${KIND_LABEL[block.kind].toLowerCase()}`}
         autoFocus
-        rows={block.kind === 'paragraph' ? 3 : 1}
+        rows={block.kind === "paragraph" ? 3 : 1}
         value={draft}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          onChange(e.target.value);
+        }}
         onKeyDown={onKeyDown}
         onBlur={onBlur}
       />
-      {error ? (
+      {hasContent(error) ? (
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          <p role="alert" className="mr-auto text-destructive-foreground">
+          <p role="alert" className="text-destructive-foreground mr-auto">
             {error}
           </p>
-          {otherHolder ? (
-            <Button size="xs" variant="outline" onClick={() => void copyDraft()}>
-              {copied ? 'Copied' : 'Copy my draft'}
+          {hasContent(otherHolder) ? (
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => {
+                copyDraft().catch(logFailure);
+              }}
+            >
+              {copied ? "Copied" : "Copy my draft"}
             </Button>
           ) : (
-            <Button size="xs" variant="outline" onClick={() => void retake()}>
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => {
+                retake().catch(logFailure);
+              }}
+            >
               Retake the block
             </Button>
           )}
@@ -119,8 +161,10 @@ export function BlockEditor({ block, otherHolder, onDone }: BlockEditorProps) {
           </Button>
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground">Enter saves · Shift+Enter adds a line</p>
+        <p className="text-muted-foreground text-xs">
+          Enter saves · Shift+Enter adds a line
+        </p>
       )}
     </div>
   );
-}
+};

@@ -1,38 +1,58 @@
-import { v } from 'convex/values';
-import { mutation, query, type QueryCtx } from './_generated/server';
-import { ensureUser, getOwner, getUser, requireMember } from './lib/auth';
-import { getDocument, liveBlocks, ownTemplate, type TemplateSection } from './lib/document';
-import { templateSection } from './schema';
+import { v } from "convex/values";
+
+import { mutation, query } from "./_generated/server";
+import type { QueryCtx } from "./_generated/server";
+import { ensureUser, getOwner, getUser, requireMember } from "./lib/auth";
+import { getDocument, liveBlocks, ownTemplate } from "./lib/document";
+import type { TemplateSection } from "./lib/document";
+import { templateSection } from "./schema";
 
 // Robert's document templates. Atelier's default is a constant in
 // lib/document.ts and is used when a room is created without a template.
 
-async function requireTemplateOwner(ctx: QueryCtx) {
-  if (!(await getOwner(ctx))) throw new Error('Only the owner can manage templates');
-}
+const requireTemplateOwner = async (ctx: QueryCtx) => {
+  if (!(await getOwner(ctx))) {
+    throw new Error("Only the owner can manage templates");
+  }
+};
 
-function clean(name: string, sections: TemplateSection[]) {
+const clean = (name: string, sections: TemplateSection[]) => {
   const trimmed = name.trim();
-  if (!trimmed) throw new Error('A template needs a name');
+  if (!trimmed) {
+    throw new Error("A template needs a name");
+  }
   return {
     name: trimmed,
     sections: sections.map(({ heading, guidance }) => {
       const h = heading.trim();
-      if (!h) throw new Error('Every section needs a heading');
+      if (!h) {
+        throw new Error("Every section needs a heading");
+      }
       const g = guidance?.trim();
-      return g ? { heading: h, guidance: g } : { heading: h };
+      return g === undefined || g === ""
+        ? { heading: h }
+        : { guidance: g, heading: h };
     }),
   };
-}
+};
 
 export const list = query({
   args: {},
   handler: async (ctx) => {
     await requireTemplateOwner(ctx);
     const user = await getUser(ctx);
-    if (!user) return [];
-    const rows = await ctx.db.query('templates').withIndex('by_owner', (q) => q.eq('ownerUserId', user._id)).collect();
-    return rows.map((t) => ({ _id: t._id, name: t.name, sections: t.sections }));
+    if (!user) {
+      return [];
+    }
+    const rows = await ctx.db
+      .query("templates")
+      .withIndex("by_owner", (q) => q.eq("ownerUserId", user._id))
+      .collect();
+    return rows.map((t) => ({
+      _id: t._id,
+      name: t.name,
+      sections: t.sections,
+    }));
   },
 });
 
@@ -41,12 +61,19 @@ export const create = mutation({
   handler: async (ctx, { name, sections }) => {
     await requireTemplateOwner(ctx);
     const user = await ensureUser(ctx);
-    return await ctx.db.insert('templates', { ownerUserId: user._id, ...clean(name, sections) });
+    return await ctx.db.insert("templates", {
+      ownerUserId: user._id,
+      ...clean(name, sections),
+    });
   },
 });
 
 export const update = mutation({
-  args: { templateId: v.id('templates'), name: v.string(), sections: v.array(templateSection) },
+  args: {
+    name: v.string(),
+    sections: v.array(templateSection),
+    templateId: v.id("templates"),
+  },
   handler: async (ctx, { templateId, name, sections }) => {
     await requireTemplateOwner(ctx);
     await ownTemplate(ctx, templateId);
@@ -56,7 +83,7 @@ export const update = mutation({
 
 // Rooms seeded from a removed template keep their document.
 export const remove = mutation({
-  args: { templateId: v.id('templates') },
+  args: { templateId: v.id("templates") },
   handler: async (ctx, { templateId }) => {
     await requireTemplateOwner(ctx);
     await ownTemplate(ctx, templateId);
@@ -68,7 +95,7 @@ export const remove = mutation({
 // template guidance under them that nobody has changed. Nothing anyone wrote
 // in the room is copied.
 export const saveFromRoom = mutation({
-  args: { roomId: v.id('rooms'), name: v.string() },
+  args: { name: v.string(), roomId: v.id("rooms") },
   handler: async (ctx, { roomId, name }) => {
     await requireTemplateOwner(ctx);
     await requireMember(ctx, roomId);
@@ -76,12 +103,21 @@ export const saveFromRoom = mutation({
     const document = await getDocument(ctx, roomId);
     const sections: TemplateSection[] = [];
     for (const block of document ? await liveBlocks(ctx, document._id) : []) {
-      if (block.kind === 'heading') sections.push({ heading: block.text });
-      else if (block.fromTemplate && sections.length > 0) {
-        const last = sections[sections.length - 1]!;
-        last.guidance = last.guidance ? `${last.guidance}\n\n${block.text}` : block.text;
+      if (block.kind === "heading") {
+        sections.push({ heading: block.text });
+      } else if (block.fromTemplate === true) {
+        const last = sections.at(-1);
+        if (last !== undefined) {
+          last.guidance =
+            last.guidance === undefined || last.guidance === ""
+              ? block.text
+              : `${last.guidance}\n\n${block.text}`;
+        }
       }
     }
-    return await ctx.db.insert('templates', { ownerUserId: user._id, ...clean(name, sections) });
+    return await ctx.db.insert("templates", {
+      ownerUserId: user._id,
+      ...clean(name, sections),
+    });
   },
 });

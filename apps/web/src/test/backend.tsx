@@ -7,20 +7,35 @@
 // `paginationOpts` and returns `{ page, isDone, continueCursor }`, as the
 // Convex function does; `paginate` builds such a handler from a list.
 
-import { getFunctionName } from 'convex/server';
-import { useState, useSyncExternalStore } from 'react';
-import { vi } from 'vitest';
+import type * as ConvexReact from "convex/react";
+import { getFunctionName } from "convex/server";
+import type {
+  FunctionReference,
+  FunctionReference_future,
+} from "convex/server";
+import { useState, useSyncExternalStore } from "react";
+import { vi } from "vitest";
+import type { Mock } from "vitest";
+
+import type * as ClerkShell from "~/auth/ClerkShell";
 
 type QueryHandler = (args: Record<string, unknown>) => unknown;
+type FunctionHandler = (args?: Record<string, unknown>) => Promise<unknown>;
+type FunctionMock = Mock<FunctionHandler>;
 
-export const backend = {
+export const backend: {
+  actions: Record<string, FunctionMock>;
+  mutations: Record<string, FunctionMock>;
+  queries: Record<string, QueryHandler>;
+  signedIn: boolean;
+} = {
+  actions: {},
+  mutations: {},
+  queries: {},
   signedIn: true,
-  queries: {} as Record<string, QueryHandler>,
-  mutations: {} as Record<string, ReturnType<typeof vi.fn>>,
-  actions: {} as Record<string, ReturnType<typeof vi.fn>>,
 };
 
-export const signOut = vi.fn(async () => {});
+export const signOut = vi.fn<() => Promise<void>>().mockResolvedValue();
 
 let version = 0;
 const listeners = new Set<() => void>();
@@ -29,89 +44,165 @@ const subscribe = (listener: () => void) => {
   return () => listeners.delete(listener);
 };
 
-export function pushBackend() {
-  version++;
-  for (const listener of listeners) listener();
-}
+export const pushBackend = () => {
+  version += 1;
+  for (const listener of listeners) {
+    listener();
+  }
+};
 
-export function resetBackend() {
+export const resetBackend = () => {
   backend.signedIn = true;
   backend.queries = {};
   backend.mutations = {};
   backend.actions = {};
   signOut.mockClear();
-}
-
-function runQuery(ref: never, args?: Record<string, unknown> | 'skip') {
-  if (args === 'skip') return undefined;
-  const handler = backend.queries[getFunctionName(ref)];
-  return handler ? handler(args ?? {}) : undefined;
-}
-
-type PageResult = { page: unknown[]; isDone: boolean; continueCursor: string };
-type PaginationOpts = { numItems: number; cursor: string | null };
-
-/** A paginated query handler over `items`, in the order given. */
-export function paginate(items: () => readonly unknown[]) {
-  return ({ paginationOpts }: Record<string, unknown>): PageResult => {
-    const { numItems, cursor } = paginationOpts as PaginationOpts;
-    const start = cursor ? Number(cursor) : 0;
-    const end = start + numItems;
-    const all = items();
-    return { page: all.slice(start, end), isDone: end >= all.length, continueCursor: String(end) };
-  };
-}
-
-const LOADING_FIRST_PAGE = { results: [], status: 'LoadingFirstPage', isLoading: true, loadMore: () => {} } as const;
-
-export const convexMock = {
-  useConvexAuth: () => ({ isLoading: false, isAuthenticated: backend.signedIn }),
-  // Like Convex, a skipped query returns undefined and never runs; a query
-  // the test did not set up stays loading. A handler that throws behaves like
-  // a server error reaching the component.
-  useQuery: (ref: never, args?: Record<string, unknown> | 'skip') => {
-    useSyncExternalStore(subscribe, () => version);
-    return runQuery(ref, args);
-  },
-  // Loads the first page, then one more page per `loadMore`, each from the
-  // cursor the previous page returned.
-  usePaginatedQuery: (ref: never, args: Record<string, unknown> | 'skip', options: { initialNumItems: number }) => {
-    useSyncExternalStore(subscribe, () => version);
-    const [sizes, setSizes] = useState<number[]>([options.initialNumItems]);
-    const handler = args === 'skip' ? undefined : backend.queries[getFunctionName(ref)];
-    if (!handler || args === 'skip') return LOADING_FIRST_PAGE;
-    const results: unknown[] = [];
-    let cursor: string | null = null;
-    let isDone = false;
-    for (const numItems of sizes) {
-      const result = handler({ ...args, paginationOpts: { numItems, cursor } }) as PageResult;
-      results.push(...result.page);
-      cursor = result.continueCursor;
-      isDone = result.isDone;
-      if (isDone) break;
-    }
-    return {
-      results,
-      status: isDone ? 'Exhausted' : 'CanLoadMore',
-      isLoading: false,
-      loadMore: (numItems: number) => setSizes((current) => [...current, numItems]),
-    };
-  },
-  useMutation: (ref: never) => {
-    const name = getFunctionName(ref);
-    backend.mutations[name] ??= vi.fn(async () => null);
-    return backend.mutations[name];
-  },
-  useAction: (ref: never) => {
-    const name = getFunctionName(ref);
-    backend.actions[name] ??= vi.fn(async () => null);
-    return backend.actions[name];
-  },
-  useConvex: () => ({ query: async (ref: never, args?: Record<string, unknown>) => runQuery(ref, args) }),
 };
 
-export const authMock = {
+const functionMock = (
+  registry: Record<string, FunctionMock>,
+  name: string
+): FunctionMock => {
+  registry[name] ??= vi.fn<FunctionHandler>().mockResolvedValue(null);
+  return registry[name];
+};
+
+/** The mock behind a mutation, by function name. Until a test sets it up it resolves to null. */
+export const mutation = (name: string) => functionMock(backend.mutations, name);
+
+/** The mock behind an action, by function name. Until a test sets it up it resolves to null. */
+export const action = (name: string) => functionMock(backend.actions, name);
+
+/** Makes a mutation run `effect` with its arguments when called, then resolve to `result`. */
+export const mutationEffect = (
+  name: string,
+  effect: (args?: Record<string, unknown>) => void,
+  result: unknown = null
+) =>
+  mutation(name).mockImplementation(async (args) => {
+    effect(args);
+    return await Promise.resolve(result);
+  });
+
+const runQuery = (
+  ref: FunctionReference<"query"> | FunctionReference_future<"query">,
+  args: Record<string, unknown> | "skip" | undefined
+): unknown => {
+  if (args === "skip") {
+    return undefined;
+  }
+  const handler = backend.queries[getFunctionName(ref)];
+  return handler ? handler(args ?? {}) : undefined;
+};
+
+// The registries hold whatever each test set up, keyed by function name, so
+// the hook stand-ins can only claim the result type the real hook declares.
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters, typescript/no-unsafe-type-assertion -- Registries keyed by function name cannot carry each Convex function's result type; this is the one place the stand-ins claim it.
+const asHookResult = <Result,>(value: unknown): Result => value as Result;
+
+interface PageResult {
+  page: unknown[];
+  isDone: boolean;
+  continueCursor: string;
+}
+interface PaginationOpts {
+  numItems: number;
+  cursor: string | null;
+}
+
+/** A paginated query handler over `items`, in the order given. */
+export const paginate =
+  (items: () => readonly unknown[]) =>
+  ({ paginationOpts }: Record<string, unknown>): PageResult => {
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- The handler is called with the paginationOpts the hook below builds.
+    const { numItems, cursor } = paginationOpts as PaginationOpts;
+    const start = cursor === null ? 0 : Number(cursor);
+    const end = start + numItems;
+    const all = items();
+    return {
+      continueCursor: String(end),
+      isDone: end >= all.length,
+      page: all.slice(start, end),
+    };
+  };
+
+const LOADING_FIRST_PAGE = {
+  isLoading: true,
+  loadMore: () => {
+    // Nothing loads until the first page does.
+  },
+  results: [],
+  status: "LoadingFirstPage",
+} as const;
+
+// Like Convex, a skipped query returns undefined and never runs; a query the
+// test did not set up stays loading. A handler that throws behaves like a
+// server error reaching the component.
+const useQuery: typeof ConvexReact.useQuery = (query, ...args) => {
+  useSyncExternalStore(subscribe, () => version);
+  return asHookResult(runQuery(query, args[0]));
+};
+
+// Loads the first page, then one more page per `loadMore`, each from the
+// cursor the previous page returned.
+const usePaginatedQuery: typeof ConvexReact.usePaginatedQuery = (
+  query,
+  args,
+  options
+) => {
+  useSyncExternalStore(subscribe, () => version);
+  const [sizes, setSizes] = useState<number[]>([options.initialNumItems]);
+  const handler =
+    args === "skip" ? undefined : backend.queries[getFunctionName(query)];
+  if (!handler || args === "skip") {
+    return asHookResult(LOADING_FIRST_PAGE);
+  }
+  const results: unknown[] = [];
+  let cursor: string | null = null;
+  let isDone = false;
+  for (const numItems of sizes) {
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- A paginated handler returns a PageResult, as `paginate` builds it.
+    const result = handler({
+      ...args,
+      paginationOpts: { cursor, numItems },
+    }) as PageResult;
+    results.push(...result.page);
+    cursor = result.continueCursor;
+    ({ isDone } = result);
+    if (isDone) {
+      break;
+    }
+  }
+  return asHookResult({
+    isLoading: false,
+    loadMore: (numItems: number) => {
+      setSizes((current) => [...current, numItems]);
+    },
+    results,
+    status: isDone ? "Exhausted" : "CanLoadMore",
+  });
+};
+
+const useMutation: typeof ConvexReact.useMutation = (reference) =>
+  asHookResult(mutation(getFunctionName(reference)));
+
+const useAction: typeof ConvexReact.useAction = (reference) =>
+  asHookResult(action(getFunctionName(reference)));
+
+export const convexMock: Partial<typeof ConvexReact> = {
+  useAction,
+  useConvexAuth: () => ({
+    isAuthenticated: backend.signedIn,
+    isLoading: false,
+    isRefreshing: false,
+  }),
+  useMutation,
+  usePaginatedQuery,
+  useQuery,
+};
+
+export const authMock: Partial<typeof ClerkShell> = {
   SignInPanel: () => <div>Clerk sign-in form</div>,
-  useSignedInEmail: () => (backend.signedIn ? 'sam@other.example' : null),
   useSignOut: () => signOut,
+  useSignedInEmail: () => (backend.signedIn ? "sam@other.example" : null),
 };

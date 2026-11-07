@@ -6,10 +6,10 @@
 // ATELIER_ROOM_TOKEN; the token never appears in arguments or tool output.
 // Pi loads this file itself, so it imports nothing but Node built-ins.
 
-export const TOOL_PREFIX = 'atelier_';
+export const TOOL_PREFIX = "atelier_";
 
 interface TextResult {
-  content: { type: 'text'; text: string }[];
+  content: { type: "text"; text: string }[];
   isError?: boolean;
 }
 
@@ -19,43 +19,97 @@ interface ToolSpec {
   description: string;
   /** Plain JSON Schema, as Pi's own MCP tools use. */
   parameters: Record<string, unknown>;
-  execute(toolCallId: string, params: unknown, signal?: AbortSignal): Promise<TextResult & { details: undefined }>;
+  execute: (
+    toolCallId: string,
+    params: unknown,
+    signal?: AbortSignal
+  ) => Promise<TextResult & { details: undefined }>;
 }
 
 interface ExtensionApi {
-  registerTool(tool: ToolSpec): void;
+  registerTool: (tool: ToolSpec) => void;
 }
 
-export default async function atelierRoomTools(pi: ExtensionApi) {
+interface ListedTool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const isTextResult = (value: unknown): value is TextResult =>
+  isRecord(value) && Array.isArray(value.content);
+
+const isListedTool = (value: unknown): value is ListedTool =>
+  isRecord(value) &&
+  typeof value.name === "string" &&
+  typeof value.description === "string" &&
+  isRecord(value.inputSchema);
+
+const present = (value: string | undefined): value is string =>
+  value !== undefined && value !== "";
+
+const atelierRoomTools = async (pi: ExtensionApi) => {
   const url = process.env.ATELIER_ROOM_URL;
   const token = process.env.ATELIER_ROOM_TOKEN;
-  if (!url || !token) return;
+  if (!present(url) || !present(token)) {
+    return;
+  }
 
   let seq = 0;
   const rpc = async (method: string, params: unknown, signal?: AbortSignal) => {
+    seq += 1;
     const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ jsonrpc: '2.0', id: ++seq, method, params }),
+      body: JSON.stringify({ id: seq, jsonrpc: "2.0", method, params }),
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      method: "POST",
       signal,
     });
-    if (!res.ok) throw new Error('The document tools no longer work for this turn.');
-    const reply = (await res.json()) as { result?: unknown; error?: { message: string } };
-    if (reply.error) throw new Error(reply.error.message);
+    if (!res.ok) {
+      throw new Error("The document tools no longer work for this turn.");
+    }
+    const reply: unknown = await res.json();
+    if (!isRecord(reply)) {
+      throw new Error("The document tools sent a reply Pi could not read.");
+    }
+    if (isRecord(reply.error)) {
+      throw new Error(String(reply.error.message));
+    }
     return reply.result;
   };
 
-  const { tools } = (await rpc('tools/list', {})) as { tools: { name: string; description: string; inputSchema: Record<string, unknown> }[] };
-  for (const tool of tools) {
+  const listed = await rpc("tools/list", {});
+  const tools =
+    isRecord(listed) && Array.isArray(listed.tools) ? listed.tools : [];
+  for (const tool of tools.filter(isListedTool)) {
     pi.registerTool({
-      name: TOOL_PREFIX + tool.name,
-      label: `Room document: ${tool.name}`,
       description: tool.description,
-      parameters: tool.inputSchema,
       async execute(_toolCallId, params, signal) {
-        const result = (await rpc('tools/call', { name: tool.name, arguments: params ?? {} }, signal)) as TextResult;
-        return { content: result.content, isError: result.isError === true, details: undefined };
+        const result = await rpc(
+          "tools/call",
+          { arguments: params ?? {}, name: tool.name },
+          signal
+        );
+        if (!isTextResult(result)) {
+          throw new Error("The document tool sent a result Pi could not read.");
+        }
+        return {
+          content: result.content,
+          details: undefined,
+          isError: result.isError === true,
+        };
       },
+      label: `Room document: ${tool.name}`,
+      name: TOOL_PREFIX + tool.name,
+      parameters: tool.inputSchema,
     });
   }
-}
+};
+
+export default atelierRoomTools;
