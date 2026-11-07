@@ -7,6 +7,11 @@ import { api, internal } from '../convex/_generated/api';
 const modules = import.meta.glob('../convex/**/*.ts');
 beforeEach(() => { vi.useFakeTimers(); process.env.ATELIER_OWNER_EMAILS = 'owner@example.com'; process.env.ATELIER_RUNNER_SECRET = 'test-secret'; });
 afterEach(() => { vi.useRealTimers(); });
+// Draining the workflow advances the fake clock; a live runner keeps beating.
+async function drain(t: ReturnType<typeof convexTest>) {
+  await t.finishAllScheduledFunctions(() => vi.runAllTimers());
+  await t.mutation(api.runners.heartbeat, { secret: 'test-secret', name: 'test', machine: 'test', harnesses: [{ id: 'claude', version: 'test' }, { id: 'pi', version: 'test' }] });
+}
 async function setup() {
   const t = convexTest(schema, modules); workflow.register(t);
   const owner = t.withIdentity({ email: 'owner@example.com', subject: 'owner' });
@@ -29,6 +34,7 @@ test('sealed progress and answers never reach owner; reveal survives failure and
   await t.mutation(api.runner.progress, { secret: 'test-secret', turnId: first.turnId, commandId: first._id, partialText: 'SECRET-PARTIAL' });
   expect(JSON.stringify(await owner.query(api.rituals.get, { ritualId }))).not.toContain('SECRET');
   expect(JSON.stringify(await owner.query(api.messages.timeline, { roomId }))).not.toContain('SECRET');
+  expect(JSON.stringify(await owner.query(api.agent.live, { roomId }))).not.toContain('SECRET');
   const finish = { secret: 'test-secret', turnId: first.turnId, commandId: first._id, finalText: 'SECRET-FINAL', transcriptRef: '/SECRET-TRANSCRIPT', sessionId: 'review-session' };
   await t.mutation(api.runner.finish, finish); await t.mutation(api.runner.finish, finish);
   await t.mutation(api.runner.fail, { secret: 'test-secret', turnId: first.turnId, commandId: first._id, error: 'Late failure' });
@@ -38,7 +44,7 @@ test('sealed progress and answers never reach owner; reveal survives failure and
   await expect(owner.mutation(api.rituals.decide, { ritualId, choice: 'too early', rationale: '' })).rejects.toThrow();
   await t.mutation(api.runner.fail, { secret: 'test-secret', turnId: second.turnId, commandId: second._id, error: 'SECRET-ERROR' });
   expect(JSON.stringify(await owner.query(api.rituals.get, { ritualId }))).not.toContain('SECRET');
-  await t.finishAllScheduledFunctions(() => vi.runAllTimers());
+  await drain(t);
   const revealed = await owner.query(api.rituals.get, { ritualId });
   expect(revealed!.status).toBe('revealed');
   expect(revealed!.turns.map(t => t.answer)).toContain('SECRET-FINAL');
@@ -97,7 +103,7 @@ test('push uses generic reveal text, removes invalid devices, and records retrya
 test('ordinary turns still stream, resume sessions, and show completed answers', async () => {
   const { t, owner, roomId, runnerId, ritualId, commands, participants } = await setup();
   for (const c of commands) await owner.mutation(api.messages.cancel, { turnId: c.turnId });
-  await t.finishAllScheduledFunctions(() => vi.runAllTimers());
+  await drain(t);
   expect((await owner.query(api.rituals.get, { ritualId }))!.status).toBe('revealed');
   const turnId = await owner.mutation(api.messages.send, { roomId, body: 'ordinary request', toParticipantId: participants[0]!._id });
   const c = (await t.query(api.runner.pendingCommands, { secret: 'test-secret', runnerId })).find(c => c.turnId === turnId)!;
@@ -105,7 +111,7 @@ test('ordinary turns still stream, resume sessions, and show completed answers',
   expect(job!.turn.independentReview).toBe(false);
   await t.mutation(api.runner.start, { secret: 'test-secret', turnId, harnessVersion: 'test' });
   await t.mutation(api.runner.progress, { secret: 'test-secret', turnId, commandId: c._id, partialText: 'ordinary stream' });
-  expect(JSON.stringify(await owner.query(api.messages.timeline, { roomId }))).toContain('ordinary stream');
+  expect(JSON.stringify(await owner.query(api.agent.live, { roomId }))).toContain('ordinary stream');
   await t.mutation(api.runner.finish, { secret: 'test-secret', turnId, commandId: c._id, finalText: 'ordinary answer', sessionId: 'next-session', transcriptRef: '/ordinary' });
   expect(JSON.stringify(await owner.query(api.messages.timeline, { roomId }))).toContain('ordinary answer');
   expect((await owner.query(api.rooms.get, { roomId }))!.participants.find(p => p._id === participants[0]!._id)!.harnessSessionId).toBe('next-session');
@@ -120,7 +126,7 @@ test('review follow-up needs no crux or decision, but cannot expose sealed answe
   await t.mutation(api.runner.claim, { secret: 'test-secret', commandId: first._id });
   await t.mutation(api.runner.finish, { secret: 'test-secret', commandId: first._id, turnId: first.turnId, finalText: 'Review evidence', transcriptRef: '/test' });
   await owner.mutation(api.messages.cancel, { turnId: commands[1]!.turnId });
-  await t.finishAllScheduledFunctions(() => vi.runAllTimers());
+  await drain(t);
   const turnId = await owner.mutation(api.messages.send, followup);
   await t.run(async ctx => {
     expect((await ctx.db.get(turnId))!.prompt).toContain('Review evidence');

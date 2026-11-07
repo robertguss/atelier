@@ -49,9 +49,30 @@ function SignIn() {
 function SignedIn() {
   const { signOut } = useClerk();
   const me = useQuery(api.me.get);
+  const ensureUser = useMutation(api.users.ensure);
+  // The user row links the owner to rooms made before memberships existed.
+  // Until it exists the room list is empty, so rooms wait for it.
+  const [ensured, setEnsured] = useState(false);
+  const [ensureError, setEnsureError] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    ensureUser().then(
+      () => { if (live) setEnsured(true); },
+      (e: unknown) => { if (live) setEnsureError(e instanceof Error ? e.message : String(e)); },
+    );
+    return () => { live = false; };
+  }, [ensureUser]);
   const isOwner = me?.signedIn === true && me.isOwner;
 
-  if (me === undefined) return <Centered><ActivityIndicator /></Centered>;
+  if (ensureError) {
+    return (
+      <Centered>
+        <Body style={{ color: '#d33' }}>{ensureError}</Body>
+        <Button label="Sign out" onPress={() => signOut()} />
+      </Centered>
+    );
+  }
+  if (me === undefined || !ensured) return <Centered><ActivityIndicator /></Centered>;
   if (!isOwner) {
     return (
       <Centered>

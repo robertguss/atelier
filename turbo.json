@@ -6,6 +6,12 @@
       "cache": false,
       "persistent": true
     },
+    "build": {
+      "dependsOn": ["^build"],
+      "env": ["VITE_*"],
+      "outputs": ["dist/**"]
+    },
+    "test": {},
     "typecheck": {
       "dependsOn": ["^typecheck"]
     },

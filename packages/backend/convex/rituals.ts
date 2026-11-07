@@ -2,7 +2,7 @@ import { v } from 'convex/values';
 import { WorkflowManager, start } from '@convex-dev/workflow';
 import { components, internal } from './_generated/api';
 import { mutation, query, internalMutation } from './_generated/server';
-import { requireOwner } from './lib/auth';
+import { requireMember, requireOwner } from './lib/auth';
 import { record } from './lib/ledger';
 
 const workflow = new WorkflowManager(components.workflow);
@@ -33,8 +33,7 @@ export const begin = mutation({
     if (!room || room.archivedAt !== undefined || request.length > 50_000 || !request.trim() || !participantIds.length || new Set(participantIds).size !== participantIds.length) throw new Error('Choose participants and enter a request');
     const participants = await Promise.all(participantIds.map(id => ctx.db.get(id)));
     if (participants.some(p => !p || p.roomId !== roomId || p.kind !== 'harness')) throw new Error('Invalid participant');
-    const human = (await ctx.db.query('participants').withIndex('by_room', q => q.eq('roomId', roomId)).collect()).find(p => p.kind === 'human');
-    if (!human) throw new Error('Missing owner participant');
+    const { participant: human } = await requireMember(ctx, roomId);
     const ritualId = await ctx.db.insert('rituals', { roomId, request: request.trim(), participantIds, type: 'independent_review', status: 'collecting', ownerSubject: owner.subject });
     const parentLedgerId = await record(ctx, { roomId, type: 'ritual.started', subjectId: ritualId, actorParticipantId: human._id });
     const decisions = await ctx.db.query('decisions').withIndex('by_room', q => q.eq('roomId', roomId)).order('desc').take(10);
@@ -83,8 +82,7 @@ export const recordCrux = mutation({
     await requireOwner(ctx);
     const ritual = await ctx.db.get(args.ritualId);
     if (!ritual || ritual.status !== 'revealed' || !args.statement.trim()) throw new Error('A revealed review and crux are required');
-    const human = (await ctx.db.query('participants').withIndex('by_room', q => q.eq('roomId', ritual.roomId)).collect()).find(p => p.kind === 'human');
-    if (!human) throw new Error('Missing owner participant');
+    const { participant: human } = await requireMember(ctx, ritual.roomId);
     const id = await ctx.db.insert('cruxes', { ...args, roomId: ritual.roomId, authorParticipantId: human._id });
     await record(ctx, { roomId: ritual.roomId, type: 'crux.recorded', subjectId: id, actorParticipantId: human._id });
     return id;
@@ -98,9 +96,10 @@ export const decide = mutation({
     if (!ritual || ritual.status !== 'revealed' || !args.choice.trim()) throw new Error('A revealed review and decision are required');
     const cruxes = await ctx.db.query('cruxes').withIndex('by_ritual', q => q.eq('ritualId', args.ritualId)).collect();
     if (!cruxes.length) throw new Error('Record a crux first');
+    const { participant: human } = await requireMember(ctx, ritual.roomId);
     const id = await ctx.db.insert('decisions', { ...args, roomId: ritual.roomId });
     await ctx.db.patch(ritual._id, { status: 'decided' });
-    await record(ctx, { roomId: ritual.roomId, type: 'decision.recorded', subjectId: id, actorParticipantId: cruxes[0]!.authorParticipantId });
+    await record(ctx, { roomId: ritual.roomId, type: 'decision.recorded', subjectId: id, actorParticipantId: human._id });
   },
 });
 
@@ -112,8 +111,7 @@ export const saveTakeaway = mutation({
     if (!ritual || ritual.status === 'collecting') throw new Error('Wait until the review finishes');
     const text = body.trim();
     if (!text || text.length > 10_000) throw new Error('Enter a takeaway of at most 10,000 characters');
-    const human = (await ctx.db.query('participants').withIndex('by_room', q => q.eq('roomId', ritual.roomId)).collect()).find(p => p.kind === 'human');
-    if (!human) throw new Error('Missing owner participant');
+    const { participant: human } = await requireMember(ctx, ritual.roomId);
     const id = await ctx.db.insert('takeaways', { ritualId, body: text, authorParticipantId: human._id });
     await record(ctx, { roomId: ritual.roomId, type: 'takeaway.recorded', subjectId: id, actorParticipantId: human._id });
     return id;

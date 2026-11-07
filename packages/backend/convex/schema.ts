@@ -7,13 +7,93 @@ import { v } from 'convex/values';
 
 export const harnessId = v.union(v.literal('claude'), v.literal('codex'), v.literal('pi'));
 
+// queued: waiting for the agent's current turn to end.
+// steering: sent into the running turn, waiting for the harness to accept it.
+// steered: the harness took it mid-turn. delivered: carried by a new turn.
+// answeredCard: it answered the agent's open question card.
+// cancelled: never delivered; see cancelReason.
+export const deliveryState = v.union(
+  v.literal('queued'),
+  v.literal('steering'),
+  v.literal('steered'),
+  v.literal('delivered'),
+  v.literal('answeredCard'),
+  v.literal('cancelled'),
+);
+
+export const commandType = v.union(
+  v.literal('run_turn'),
+  v.literal('interrupt'),
+  v.literal('steer'),
+  v.literal('answer'),
+  v.literal('settings'),
+);
+
+// One question on a card. `id` is the harness's own question id, or any id
+// the runner chooses that is unique on the card.
+export const cardQuestion = v.object({
+  id: v.string(),
+  header: v.string(),
+  text: v.string(),
+  options: v.array(v.object({ label: v.string(), description: v.optional(v.string()) })),
+  multiSelect: v.boolean(),
+  allowFreeText: v.boolean(),
+});
+
+export const cardAnswer = v.object({
+  questionId: v.string(),
+  labels: v.array(v.string()),
+  freeText: v.optional(v.string()),
+});
+
 export default defineSchema({
   runners: defineTable({
     name: v.string(),
     machine: v.string(),
     lastHeartbeatAt: v.number(),
     harnesses: v.array(v.object({ id: harnessId, version: v.string() })),
+    // Kept apart from `harnesses`, which every heartbeat replaces.
+    harnessCapabilities: v.optional(v.array(v.object({ id: harnessId, canRaiseCards: v.boolean() }))),
   }).index('by_name', ['name']),
+
+  // One row per signed-in person, keyed on Clerk's tokenIdentifier so a
+  // changed email address does not split or merge accounts.
+  users: defineTable({
+    tokenIdentifier: v.string(),
+    email: v.optional(v.string()),
+    name: v.optional(v.string()),
+  }).index('by_token', ['tokenIdentifier']),
+
+  // Room membership is separate from participants, so removing someone ends
+  // their access without touching the authorship of what they wrote.
+  roomMembers: defineTable({
+    roomId: v.id('rooms'),
+    userId: v.id('users'),
+    role: v.union(v.literal('owner'), v.literal('member')),
+    participantId: v.id('participants'),
+    noticeVersion: v.optional(v.number()),
+    noticeAcceptedAt: v.optional(v.number()),
+    removedAt: v.optional(v.number()),
+  })
+    .index('by_room', ['roomId'])
+    .index('by_user', ['userId'])
+    .index('by_room_user', ['roomId', 'userId']),
+
+  // An invite is for one room and one email address. Only a hash of the
+  // token is stored; the token itself lives in the invite link.
+  roomInvites: defineTable({
+    roomId: v.id('rooms'),
+    email: v.string(),
+    tokenHash: v.string(),
+    expiresAt: v.number(),
+    status: v.union(v.literal('pending'), v.literal('accepted'), v.literal('revoked'), v.literal('expired')),
+    clerkInvitationId: v.optional(v.string()),
+    acceptedByUserId: v.optional(v.id('users')),
+    acceptedAt: v.optional(v.number()),
+    revokedAt: v.optional(v.number()),
+  })
+    .index('by_room', ['roomId'])
+    .index('by_token_hash', ['tokenHash']),
 
   rooms: defineTable({
     name: v.string(),
@@ -21,6 +101,8 @@ export default defineSchema({
     cwd: v.string(),
     handbook: v.string(),
     archivedAt: v.optional(v.number()),
+    // Whether agents may edit files in the room's folder. Missing means off.
+    editsEnabled: v.optional(v.boolean()),
   }),
 
   participants: defineTable({
@@ -31,6 +113,7 @@ export default defineSchema({
     reasoning: v.optional(v.string()),
     displayName: v.string(),
     harnessSessionId: v.optional(v.string()),
+    userId: v.optional(v.id('users')),
   }).index('by_room', ['roomId']),
 
   messages: defineTable({
@@ -40,9 +123,34 @@ export default defineSchema({
     ritualId: v.optional(v.id('rituals')),
     turnId: v.optional(v.id('turns')),
     visibility: v.union(v.literal('room'), v.literal('sealed')),
+    // Set on a follow-up to an independent review or its decision, and on the
+    // agent's reply. Only the owner sees these.
+    followUpRitualId: v.optional(v.id('rituals')),
+    // What a follow-up refers to, so its context can be built when it is
+    // dispatched rather than when it is sent.
+    followUpDecisionId: v.optional(v.id('decisions')),
+    followUpReviewTurnId: v.optional(v.id('turns')),
+    // A person's message to an agent waits in that agent's queue. Agent
+    // replies and older messages have no delivery state.
+    toParticipantId: v.optional(v.id('participants')),
+    delivery: v.optional(deliveryState),
+    deliveredTurnId: v.optional(v.id('turns')),
+    // Set while a steer is in flight to a running turn.
+    steering: v.optional(v.object({ turnId: v.id('turns'), commandId: v.id('commands') })),
+    cancelReason: v.optional(v.string()),
   })
     .index('by_room', ['roomId'])
-    .index('by_ritual', ['ritualId']),
+    .index('by_ritual', ['ritualId'])
+    .index('by_to_delivery', ['toParticipantId', 'delivery']),
+
+  // Humans-only chat. A separate table so nothing that reads agent messages
+  // or builds prompts can reach it. Posts cannot be edited or deleted.
+  teamMessages: defineTable({
+    roomId: v.id('rooms'),
+    authorUserId: v.id('users'),
+    authorParticipantId: v.id('participants'),
+    body: v.string(),
+  }).index('by_room', ['roomId']),
 
   turns: defineTable({
     roomId: v.id('rooms'),
@@ -56,6 +164,8 @@ export default defineSchema({
       v.literal('interrupted'),
     ),
     prompt: v.string(),
+    // Older turns kept their streamed text here. New text goes to turnStreams,
+    // so streaming does not rewrite the turn every half second.
     partialText: v.optional(v.string()),
     finalText: v.optional(v.string()),
     usage: v.optional(
@@ -70,9 +180,48 @@ export default defineSchema({
     error: v.optional(v.string()),
     startedAt: v.optional(v.number()),
     endedAt: v.optional(v.number()),
+    // Marks a turn that follows up an independent review or its decision.
+    // Such a turn is owner-only and must never be batched with other
+    // messages. `separateSession` is fixed at claim: true when the room had an
+    // active teammate, so the turn ran on the review's own session.
+    followUp: v.optional(
+      v.object({
+        ritualId: v.id('rituals'),
+        decisionId: v.optional(v.id('decisions')),
+        separateSession: v.optional(v.boolean()),
+      }),
+    ),
+    // The people whose queued messages this turn carries.
+    requestedByParticipantIds: v.optional(v.array(v.id('participants'))),
+    editsEnabled: v.optional(v.boolean()),
+    // Set while the agent waits on an open question card. The turn stays running.
+    waitingOnHandId: v.optional(v.id('hands')),
+    // The person who stopped the turn, so the agent's next prompt can say so.
+    stoppedByParticipantId: v.optional(v.id('participants')),
   })
     .index('by_room', ['roomId'])
-    .index('by_ritual', ['ritualId']),
+    .index('by_ritual', ['ritualId'])
+    .index('by_participant', ['participantId'])
+    .index('by_participant_status', ['participantId', 'status'])
+    .index('by_room_status', ['roomId', 'status']),
+
+  // A turn's streamed text, one row per turn. Kept apart from the turn so the
+  // runner's twice-a-second writes only reach the query for active turns.
+  turnStreams: defineTable({
+    turnId: v.id('turns'),
+    text: v.string(),
+  }).index('by_turn', ['turnId']),
+
+  // An agent's tool activity during a turn, one row per tool call: its name
+  // and a one-line summary. Raw output stays on the runner's disk.
+  turnItems: defineTable({
+    turnId: v.id('turns'),
+    callId: v.string(),
+    seq: v.number(),
+    name: v.string(),
+    summary: v.string(),
+    ok: v.optional(v.boolean()),
+  }).index('by_turn_call', ['turnId', 'callId']),
 
   rituals: defineTable({
     roomId: v.id('rooms'),
@@ -85,6 +234,9 @@ export default defineSchema({
     ownerSubject: v.optional(v.string()),
     snapshot: v.optional(v.string()),
     pushStatus: v.optional(v.union(v.literal('queued'), v.literal('sent'), v.literal('skipped'), v.literal('failed'))),
+    // In rooms with a teammate, follow-ups run on these harness sessions, one
+    // per participant, never on the participant's ordinary session.
+    followUpSessions: v.optional(v.array(v.object({ participantId: v.id('participants'), sessionId: v.string() }))),
   }).index('by_room', ['roomId']),
 
   reviewSnapshots: defineTable({
@@ -112,22 +264,43 @@ export default defineSchema({
     ritualId: v.optional(v.id('rituals')),
     choice: v.string(),
     rationale: v.optional(v.string()),
+    // Set on a decision recorded by answering a card: one per question when
+    // answered on the card, or one for the whole card, without a question id,
+    // when answered by a chat message.
+    handId: v.optional(v.id('hands')),
+    questionId: v.optional(v.string()),
+    answeredByParticipantId: v.optional(v.id('participants')),
   }).index('by_room', ['roomId']),
 
+  // A question card: one to four questions an agent asked through its
+  // harness's own question prompt. Answered whole, once, by whoever is first.
   hands: defineTable({
     roomId: v.id('rooms'),
     turnId: v.id('turns'),
     participantId: v.id('participants'),
-    question: v.string(),
-    options: v.array(v.string()),
-    status: v.union(v.literal('raised'), v.literal('answered')),
-    answer: v.optional(v.string()),
-  }).index('by_room_status', ['roomId', 'status']),
+    // The harness's id for the pending request, so the runner can route the answer.
+    requestId: v.string(),
+    questions: v.array(cardQuestion),
+    status: v.union(v.literal('raised'), v.literal('answered'), v.literal('cancelled'), v.literal('expired')),
+    answers: v.optional(v.array(cardAnswer)),
+    answeredByParticipantId: v.optional(v.id('participants')),
+    answeredAt: v.optional(v.number()),
+    via: v.optional(v.union(v.literal('card'), v.literal('chat'))),
+    raisedAt: v.number(),
+    // When a card closed without an answer, and why.
+    closedAt: v.optional(v.number()),
+    closeReason: v.optional(v.string()),
+  })
+    .index('by_room_status', ['roomId', 'status'])
+    .index('by_turn', ['turnId']),
 
   commands: defineTable({
     runnerId: v.id('runners'),
-    type: v.union(v.literal('run_turn'), v.literal('interrupt')),
+    // run_turn starts a turn. The others are control commands for a turn that
+    // is already running, and carry what the runner needs in `payload`.
+    type: commandType,
     turnId: v.id('turns'),
+    payload: v.optional(v.any()),
     status: v.union(
       v.literal('pending'),
       v.literal('claimed'),
@@ -136,7 +309,10 @@ export default defineSchema({
     ),
     leaseExpiresAt: v.optional(v.number()),
     error: v.optional(v.string()),
-  }).index('by_runner_status', ['runnerId', 'status']),
+  })
+    .index('by_runner_status', ['runnerId', 'status'])
+    .index('by_turn', ['turnId'])
+    .index('by_status_lease', ['status', 'leaseExpiresAt']),
 
   ledger: defineTable({
     roomId: v.optional(v.id('rooms')),
@@ -149,7 +325,9 @@ export default defineSchema({
     harnessVersion: v.optional(v.string()),
     payload: v.optional(v.any()),
     at: v.number(),
-  }).index('by_room', ['roomId']),
+  })
+    .index('by_room', ['roomId'])
+    .index('by_room_type', ['roomId', 'type', 'subjectId']),
 
   pushTokens: defineTable({
     userSubject: v.string(),

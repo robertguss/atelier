@@ -89,3 +89,115 @@ failing redirect. Merely checking that the built-in page loads is insufficient.
 - The step 4 live verification room completed Claude, Codex and Pi turns, kept
   early answers hidden, revealed all three, then persisted a crux and decision.
   Push was skipped because the verification identity has no registered device.
+
+## Harness capability probes (2026-11-06)
+
+Run live on this VM with Robert's logins, in throwaway git repos under `/tmp`:
+Claude Code 2.1.318 through Agent SDK 0.3.318 (Haiku and Sonnet), Codex CLI
+0.166.0 `app-server` (`gpt-6.1-sol`, low effort) and Pi 1.4.0
+(`openai/gpt-6-astra`, low thinking). The probe scripts were not kept.
+
+### Claude
+
+- **Steering folds with `priority: 'next'`, not `'now'`.** With a streaming
+  `query()`, a message pushed with `'next'` while a Bash call runs joins the
+  running turn at the next tool result. Its `command_lifecycle` goes `queued`,
+  then `started` straight after the tool result, with no `result` in between.
+  The next `system`/`status` frame's `user_message_uuids` gains its uuid. The
+  transcript records a `queued_command` attachment, rendered to the model as
+  "The user sent a new message while you were working", plus a `remove` queue
+  operation with reason `absorbed_mid_turn`. One `result` covers both messages.
+- `'now'` does **not** fold. It lets the running tool finish, then ends the
+  turn: a `success` `result` with empty text, the first message's lifecycle
+  `cancelled`. The pushed message then runs as a new turn in the same session.
+- A message pushed after the final model call (after `message_stop`, before
+  `result`) is not folded, at either priority. The first turn's `result`
+  arrives, then the message runs as a second turn with its own `result`.
+- Send the person's text as typed. Haiku ignored a fold worded "Change of plan
+  from the user: ..." and said it came from the tool result, not the user. The
+  same request worded plainly was obeyed by Haiku and Sonnet.
+- Under `permissionMode: 'default'`, `AskUserQuestion` reaches `canUseTool`
+  with `{ questions: [{ question, header, options, multiSelect }] }`. Returning
+  `{ behavior: 'allow', updatedInput: { ...input, answers: { [question]: label } } }`
+  continues the turn with that answer.
+- An unapproved in-folder Write also reaches `canUseTool`. Allow writes the
+  file. Deny returns its message as an error tool result and lists the call in
+  `result.permission_denials`.
+- Read-only Bash (`sleep 6 && echo one`) ran without reaching `canUseTool`,
+  although Robert's user settings have no allow rules. Claude Code approves
+  commands it classifies as read-only by itself.
+- Consequence: Claude can take a steered message without stopping its turn,
+  so the stop-and-ask condition does not apply. "Steer now" must send
+  `priority: 'next'`: `'now'` is a stop-then-redirect.
+
+### Codex
+
+- `initialize` with `capabilities: { experimentalApi: true, requestAttestation: false }`
+  works.
+- **No question cards in Default mode.** Asked to use its ask-user tool, the
+  model asked in plain text and never sent `item/tool/requestUserInput`. It
+  then called a `sleep` tool (item type `sleep`, `durationMs: 60000`) three
+  times while waiting for an answer, so the turn took three extra minutes.
+- In Plan mode the request arrives with `isBlocking: true`. In Default mode it
+  arrives only with the under-development `features.default_mode_request_user_input: true`
+  set in `thread/start` `config`. Codex then sends an "Under-development
+  features enabled" warning, and the request has `isBlocking: false`. That
+  request still waited 30 seconds for an answer without resolving itself. The
+  answer shape is `{ answers: { [questionId]: { answers: [label] } } }`.
+- Consequence: Codex stays in Default mode, asks in plain text, and the room
+  marks it as unable to raise cards. The flag is the only route to Default-mode
+  cards, and it is an under-development feature.
+- `turn/steer { threadId, input, expectedTurnId }` mid-command returns
+  `{ turnId }`. The steer shows up at once as a `userMessage` item, and the
+  model acted on it after the running command, in the same turn. A stale id
+  fails with `-32600` "expected active turn id `<sent>` but found `<active>`".
+  After the turn ends it fails with `-32600` "no active turn to steer".
+- With `workspaceWrite` (`writableRoots: [cwd]`, network off) and
+  `approvalPolicy: 'untrusted'`, `touch made-by-shell.txt` and
+  `echo x > .git/evil-shell.txt` each raised `item/commandExecution/requestApproval`.
+  `{ decision: 'decline' }` ended the item as `declined` and the model went on.
+- **`.git/`, `.codex/` and `.agents/` inside the workspace are not read-only.**
+  Each `apply_patch` into them, and into ordinary files, raised
+  `item/fileChange/requestApproval`. Accepting wrote the file; declining left
+  it unwritten with status `declined`. The approval request carries no paths:
+  take them from the `item/started` `fileChange` item with the same `itemId`
+  (`changes[].path`).
+- Consequence: protected paths are enforceable for Codex only by declining
+  file-change approvals whose paths match, not by the sandbox. With that
+  check, Codex edits can be enabled.
+
+### Pi
+
+- `client.steer(text)` during a bash call resolves `"queued"` and emits
+  `queue_update`. Pi finishes the running tool, then delivers the steer as a
+  user message before the next model call, in the same run (one
+  `agent_settled`). The model acted on it.
+- A `--extension <file>` `tool_call` handler returning `{ block: true, reason }`
+  blocked `write` and `edit` to `../outside.txt`, `../claude/notes.ts`, an
+  absolute path outside `cwd`, `.pi/evil.json`, `.git/evil.txt` and
+  `.git/HEAD`. The reason comes back as an error tool result. In-folder edits
+  and writes went through. The handler receives `event.toolName`,
+  `event.input.path` (relative or absolute) and `ctx.cwd`.
+- Robert's own extensions still load next to `--extension`. His Atuin
+  extension recorded the probe's bash command with author `pi`, and the
+  built-in `llama` and `mcp` extension commands were listed. His herdr
+  extension reports only in TUI mode, so it is silent under RPC either way.
+- Consequence: the Pi edit guard is feasible as a runner-shipped extension.
+
+## Shared rooms build pitfalls
+
+How to set up and run shared rooms is in [docs/shared-rooms.md](docs/shared-rooms.md).
+
+- `convex codegen` contacts the dev deployment, but it only regenerates
+  `packages/backend/convex/_generated`. It does not push functions, so the live
+  deployment keeps running the old code. Push with `npx convex dev --once` (or
+  a running `convex dev`) from `packages/backend` before testing against it.
+- pnpm here enforces a minimum release age. It refused packages published the
+  same day, so a fresh version failed to install. Pin the previous release, or
+  wait, rather than loosening the setting.
+- Legend List lagged behind streaming text in the web agent pane. The pane uses
+  a plain scroller that sticks to the bottom while you are at the bottom.
+- In live Claude steering checks, Haiku sometimes ignored a folded steer that
+  Sonnet followed. Test steering with Sonnet before concluding it is broken,
+  and keep sending the person's text as typed (see the Claude probe notes
+  above).

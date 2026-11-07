@@ -7,6 +7,12 @@ mandatory crux/decision entry. Follow-up with any participant is available direc
 saving a takeaway is optional. Older crux/decision records remain readable. This
 supersedes the required crux/decision steps below.
 
+Shared rooms update: Robert can invite a teammate into a room, and both work
+with the same agents from a web app. The agents queue and take steers, ask
+question cards, and may edit the room folder when Robert turns that on. The
+data model, commands, ledger types and protocol below include these changes.
+How to set up and use shared rooms is in [shared-rooms.md](shared-rooms.md).
+
 ## What Atelier is
 
 Atelier is a team room where a human and AI models work together on a project.
@@ -51,7 +57,8 @@ any friction is logged as a backlog item in that room.
   test set for automating it later.
 - Scoring, model profiles, routing, quota scheduling, the mirror and retros.
   They need weeks of ledger data first.
-- A diff viewer, a web or Mac client, and multiple users.
+- A diff viewer and a Mac client. (Multiple users and a web client were
+  non-goals for v0. Shared rooms added both.)
 - Writing in parallel. v0 reviews are read-only, so participants can share the
   room's directory.
 - Elara or any harness not listed below.
@@ -59,7 +66,8 @@ any friction is logged as a backlog item in that room.
 ## Architecture
 
 ```
- iPhone / iPad (Expo) ── Clerk auth ── live queries + mutations ──▶ CONVEX
+ Web app (Vite, Vercel) ─┐
+ iPhone / iPad (Expo) ───┴ Clerk auth ── live queries + mutations ──▶ CONVEX
                                                                   • rooms, participants, handbook
                                                                   • rituals as durable workflows
                                                                   • ledger (semantic events)
@@ -103,6 +111,7 @@ happens.** Ritual logic, visibility rules and the ledger all live in Convex, so:
 | Workflows | `@convex-dev/workflow` for rituals |
 | Auth | Clerk (`@clerk/expo`, Core 3; `@clerk/clerk-expo` is deprecated) with Convex's Clerk integration |
 | Mobile | Expo with a development build (not Expo Go), EAS to reach TestFlight, Expo Router, FlashList for transcripts |
+| Web | Vite and React static app with TanStack Router and `@clerk/react`, built on t3code's UI components (MIT), hosted on Vercel |
 | Runner | Node 24, run as a systemd service |
 | Claude Code | `@anthropic-ai/claude-agent-sdk` |
 | Codex | `codex app-server` (JSON-RPC over stdio) |
@@ -120,11 +129,12 @@ atelier/
   packages/shared/   harness event types, normalization, constants
   runner/            service entry, command loop, adapters/{claude,codex,pi}, mcp/, transcripts/
   apps/mobile/       Expo app: iPhone and iPad
-  docs/              this spec, the handbook
+  apps/web/          Vite and React web app for shared rooms, hosted on Vercel
+  docs/              this spec, the handbook, independent review, shared rooms
 ```
 
-`apps/web/` comes later for the Mac. Convex lives in `packages/backend` so the
-app and the runner import its generated API like any other workspace package.
+Convex lives in `packages/backend` so the apps and the runner import its
+generated API like any other workspace package.
 
 ## Data model (Convex)
 
@@ -134,58 +144,87 @@ The ledger is append-only and never edited.
 
 | Table | Key fields |
 |---|---|
-| `runners` | `name`, `machine`, `lastHeartbeatAt`, `harnesses` (installed harnesses and versions) |
-| `rooms` | `name`, `runnerId`, `cwd`, `handbook` (markdown), `archivedAt` |
-| `participants` | `roomId`, `kind` (`human` \| `harness`), `harness` (`claude` \| `codex` \| `pi`), `model`, `reasoning`, `displayName`, `harnessSessionId` |
-| `messages` | `roomId`, `authorParticipantId`, `body`, `ritualId?`, `turnId?`, `visibility` (`room` \| `sealed`) |
-| `turns` | `roomId`, `participantId`, `ritualId?`, `status` (`queued` \| `running` \| `done` \| `failed` \| `interrupted`), `prompt`, `partialText`, `finalText`, `usage`, `transcriptRef`, `harnessVersion`, `startedAt`, `endedAt` |
-| `rituals` | `roomId`, `type` (`independent_review`), `status` (`collecting` \| `revealed` \| `decided`), `request`, `participantIds`, `revealedAt` |
+| `runners` | `name`, `machine`, `lastHeartbeatAt`, `harnesses` (installed harnesses and versions), `harnessCapabilities` (per harness: `canRaiseCards`) |
+| `users` | `tokenIdentifier` (Clerk's), `email`, `name`. One row per signed-in person |
+| `rooms` | `name`, `runnerId`, `cwd`, `handbook` (markdown), `archivedAt`, `editsEnabled` (missing means off) |
+| `roomMembers` | `roomId`, `userId`, `role` (`owner` \| `member`), `participantId`, `noticeVersion`, `noticeAcceptedAt`, `removedAt` |
+| `roomInvites` | `roomId`, `email`, `tokenHash` (the token itself is only in the link), `expiresAt` (7 days), `status` (`pending` \| `accepted` \| `revoked` \| `expired`), `clerkInvitationId`, `acceptedByUserId`, `acceptedAt`, `revokedAt` |
+| `participants` | `roomId`, `kind` (`human` \| `harness`), `harness` (`claude` \| `codex` \| `pi`), `model`, `reasoning`, `displayName`, `harnessSessionId`, `userId` (for a human) |
+| `messages` | `roomId`, `authorParticipantId`, `body`, `ritualId?`, `turnId?` (set on an agent's reply), `visibility` (`room` \| `sealed`), `toParticipantId`, `delivery` (`queued` \| `steering` \| `steered` \| `delivered` \| `answeredCard` \| `cancelled`), `deliveredTurnId`, `steering` (`turnId`, `commandId` while a steer is in flight), `cancelReason`, `followUpRitualId`, `followUpDecisionId`, `followUpReviewTurnId` |
+| `teamMessages` | `roomId`, `authorUserId`, `authorParticipantId`, `body`. Humans only, in its own table so nothing that builds prompts can read it. Never edited or deleted |
+| `turns` | `roomId`, `participantId`, `ritualId?`, `status` (`queued` \| `running` \| `done` \| `failed` \| `interrupted`), `prompt`, `partialText` (older turns only; see `turnStreams`), `finalText`, `usage`, `transcriptRef`, `harnessVersion`, `error`, `startedAt`, `endedAt`, `followUp` (`ritualId`, `decisionId`, `separateSession`), `requestedByParticipantIds`, `editsEnabled` (the switch at dispatch), `waitingOnHandId`, `stoppedByParticipantId` |
+| `turnStreams` | `turnId`, `text`. A turn's streamed text, apart from the turn so streaming writes only rerun `agent.live`, the small query for active turns |
+| `turnItems` | `turnId`, `callId`, `seq`, `name`, `summary` (one line), `ok`. One row per tool call; raw output stays on the runner |
+| `rituals` | `roomId`, `type` (`independent_review`), `status` (`collecting` \| `revealed` \| `decided`), `request`, `participantIds`, `revealedAt`, `workflowId`, `snapshot`, `pushStatus`, `followUpSessions` (per participant, used in rooms with a teammate) |
+| `reviewSnapshots` | `ritualId`, `text` |
+| `takeaways` | `ritualId`, `body`, `authorParticipantId` |
 | `cruxes` | `ritualId`, `roomId`, `statement`, `options`, `authorParticipantId` |
-| `decisions` | `cruxId?`, `ritualId?`, `roomId`, `choice`, `rationale` |
-| `hands` | `roomId`, `turnId`, `participantId`, `question`, `options`, `status` (`raised` \| `answered`), `answer` |
-| `commands` | `runnerId`, `type` (`run_turn` \| `interrupt`), `payload`, `status` (`pending` \| `claimed` \| `done` \| `failed`), `leaseExpiresAt`, `error` |
+| `decisions` | `cruxId?`, `ritualId?`, `roomId`, `choice`, `rationale`, and for an answered question card `handId`, `questionId`, `answeredByParticipantId` |
+| `hands` | Question cards. `roomId`, `turnId`, `participantId`, `requestId` (the harness's id for the pending request), `questions` (one to four, each with `id`, `header`, `text`, `options`, `multiSelect`, `allowFreeText`), `status` (`raised` \| `answered` \| `cancelled` \| `expired`), `answers`, `answeredByParticipantId`, `answeredAt`, `via` (`card` \| `chat`), `raisedAt`, `closedAt`, `closeReason` |
+| `commands` | `runnerId`, `type` (`run_turn` \| `steer` \| `answer` \| `settings` \| `interrupt`), `turnId`, `payload`, `status` (`pending` \| `claimed` \| `done` \| `failed`), `leaseExpiresAt`, `error` |
 | `ledger` | `roomId`, `type`, `actorParticipantId`, `subjectId`, `parentLedgerId`, `provider`, `model`, `harnessVersion`, `payload`, `at` |
-| `pushTokens` | `userId`, `token`, `platform` |
+| `pushTokens` | `userSubject`, `token`, `platform` |
 
 `parentLedgerId` (what caused this) and `harnessVersion` look optional now and
 are painful to add later. Include them from the first migration.
 
-Ledger types in v0: `runner.registered`, `room.created`, `participant.joined`,
-`message.posted`, `turn.queued`, `turn.started`, `turn.finished`, `turn.failed`,
-`turn.interrupted`, `ritual.started`, `ritual.revealed`,
-`crux.recorded`, `decision.recorded`, `hand.raised`, `hand.answered`,
-`outcome.recorded` (merged, reverted, abandoned; entered by hand in v0).
+`run_turn` starts a turn. The other command types are control commands for a
+turn that is already running: `steer` puts a person's message into it,
+`answer` carries a question card's answer, `settings` carries a change to the
+edit switch, and `interrupt` stops it.
+
+Ledger types: `runner.registered`, `room.created`, `room.edits_changed`,
+`participant.joined`, `invite.created`, `invite.revoked`, `member.joined`,
+`member.removed`, `message.posted`, `message.cancelled`,
+`message.steer_requested`, `message.steered`, `message.steer_rejected`,
+`team_message.posted`, `turn.queued`, `turn.started`, `turn.finished`,
+`turn.failed`, `turn.interrupted`, `ritual.started`, `ritual.revealed`,
+`takeaway.recorded`, `crux.recorded`, `decision.recorded`, `hand.raised`,
+`hand.answered`, `hand.cancelled` and `hand.expired`. `outcome.recorded`
+(merged, reverted, abandoned; entered by hand) is planned, but nothing writes
+it yet. A `team_message.posted` entry
+carries the message id, never its text. A `decision.recorded` entry for a card
+answer links the team messages posted while the card was open, by id only.
 
 ## Harness interface
 
 ```ts
-// packages/shared/src/harness.ts
+// packages/shared/src/harness.ts (abridged)
 export type HarnessId = 'claude' | 'codex' | 'pi';
 
 export interface TurnRequest {
   turnId: string;
   cwd: string;
-  prompt: string;            // includes the room context block, see below
+  prompt: string;              // includes the room context block, see below
   model?: string;
   reasoning?: 'low' | 'medium' | 'high' | 'xhigh';
-  resumeSessionId?: string;  // the participant's harnessSessionId
-  readOnly: boolean;         // true for independent review
-  mcpServers: McpServerSpec[]; // always includes the Atelier MCP server
+  resumeSessionId?: string;    // the participant's harnessSessionId
+  editsEnabled: boolean;       // the room's edit switch when the turn started
+  independentReview?: boolean; // fresh session, snapshot, no execution tools
+  mcpServers: McpServerSpec[];
+}
+
+// The live channel into a running turn. The runner creates one per turn.
+export interface TurnInput {
+  onQuestion(card: QuestionCard): Promise<QuestionAnswer>; // raises a question card
+  steer: (text: string) => Promise<'steered' | 'rejected'>;
+  setEditsEnabled: (on: boolean) => void;
 }
 
 export type HarnessEvent =
   | { type: 'session'; sessionId: string }
   | { type: 'text_delta'; text: string }
-  | { type: 'tool_call'; name: string; summary: string }
-  | { type: 'tool_result'; name: string; ok: boolean }
+  | { type: 'tool_call'; id: string; name: string; summary: string }
+  | { type: 'tool_result'; id: string; ok: boolean }
   | { type: 'usage'; inputTokens: number; outputTokens: number; costUsd?: number }
   | { type: 'final'; text: string }
   | { type: 'error'; message: string; retryable: boolean };
 
 export interface Harness {
   id: HarnessId;
+  capabilities: { canRaiseCards: boolean };
   version(): Promise<string>;
-  runTurn(req: TurnRequest, signal: AbortSignal): AsyncIterable<HarnessEvent>;
+  runTurn(req: TurnRequest, signal: AbortSignal, input: TurnInput): AsyncIterable<HarnessEvent>;
 }
 ```
 
@@ -205,35 +244,55 @@ normalized `HarnessEvent`s.
   three harnesses are isolated child processes. Skills are native; MCP needs an
   extension such as `pi-mcp-adapter`. Logins come from Pi's `/login`.
   Read-only: restrict the tool set.
-- Until the approval UI exists, ordinary room turns run Claude in `dontAsk`
-  mode: tools that aren't pre-approved in the user's settings are denied, so a
-  phone message can read and search but can't edit files or run commands.
+- Ordinary Claude turns run in `default` permission mode with a permission
+  callback. Tools pre-approved in the user's settings run, and so do commands
+  Claude Code itself classes as read-only. The callback turns the agent's own
+  question tool into a question card, allows file edits inside the room folder
+  while the edit switch is on, and denies everything else.
+- Codex and Pi have no question cards: they ask in plain text. How each
+  harness handles the edit switch is in [shared-rooms.md](shared-rooms.md).
 - Every harness runs on the user's own login. The runner never reads or copies
   login tokens.
 
 ### Room context block
 
-Each turn's prompt starts with a short, generated block: the room's name, the
-handbook, the last N decisions, and a note that the Atelier MCP tools are
-available. Agents pull everything else through MCP when they need it, rather
-than having it pushed into every prompt.
+Each turn's prompt starts with a short, generated block: the room's name, who
+is in the room (owner or teammate), whether file edits are on, the handbook,
+the last 10 decisions, and a sentence saying the people in the room also have a
+private team channel the agent cannot see. Then come the people's messages, each
+wrapped in a `<message>` tag naming its author, role, send time and whether it
+was queued or steered. Nothing that builds a prompt reads team chat. Agents pull
+anything else through MCP when they need it, rather than having it pushed into
+every prompt.
 
 ## Runner ↔ Convex protocol
 
 1. **Heartbeat.** Every 15 s the runner updates `runners.lastHeartbeatAt` and
-   reports installed harness versions.
-2. **Claim.** The runner subscribes to its `pending` commands and claims one
-   with a mutation that sets `claimed` and `leaseExpiresAt` (60 s). A claim the
-   runner doesn't renew expires and becomes claimable again.
+   reports installed harness versions and what each can do. A runner with no
+   heartbeat for 45 s counts as offline: sends to its agents are refused, and
+   messages still waiting for a turn are cancelled as `runner offline` instead
+   of starting one.
+2. **Claim.** The runner subscribes to its `pending` commands and claims one.
+   Claiming a `run_turn` sets `claimed` and a 5-minute `leaseExpiresAt`.
+   A cron runs every minute and fails, as `interrupted`, any turn whose
+   `run_turn` lease has expired, closes its open question cards and moves the
+   agent's queue on. Control commands (`steer`, `answer`, `settings`,
+   `interrupt`) take no lease and are only claimable while their turn is
+   running.
 3. **Run.** For `run_turn`, the runner marks the turn `running`, sends
-   `partialText` throttled to about 2 writes a second, renews the lease while
-   working, and finishes with `finalText`, `usage`, `transcriptRef` and
-   `harnessVersion`. That mutation writes `turn.finished` to the ledger.
-4. **Interrupt.** An `interrupt` command aborts the turn's `AbortSignal`, and
-   the turn ends `interrupted`.
+   its streamed text (to `turnStreams`) throttled to about 2 writes a second,
+   which also renews the lease, and finishes with `finalText`, `usage`, `transcriptRef` and
+   `harnessVersion`. That mutation writes `turn.finished` to the ledger and
+   starts the agent's next turn if messages are waiting.
+4. **Control.** The runner hands a `steer` to the harness and reports
+   `steered` or `rejected`; a rejected steer goes back to the queue. `answer`
+   resolves the agent's open question and `settings` changes the edit switch
+   for the running turn. `interrupt` aborts the turn's `AbortSignal`, and the
+   turn ends `interrupted`. A person stopping a turn marks it `interrupted` in
+   Convex; the runner sees that on its next progress write and aborts.
 5. **Restart.** On startup the runner marks its own turns that were still
-   `running` as `interrupted` with a reason. The workflow decides whether to
-   retry.
+   `running` as `interrupted` with a reason and fails its claimed control
+   commands. The workflow decides whether to retry a review turn.
 6. **Auth.** Runner functions take a runner secret (`ATELIER_RUNNER_SECRET`, a
    Convex env var on one side and a runner env var on the other) and check it
    in constant time. The runner never gets a Clerk session.
@@ -265,7 +324,7 @@ every harness's MCP config for that turn.
 
 | Tool | What it does |
 |---|---|
-| `raise_hand(question, options?)` | Creates a `hand` and sends a push. The turn can carry on, or end and wait for the answer |
+| `raise_hand(question, options?)` | Creates a `hand` and sends a push. The turn can carry on, or end and wait for the answer. Not built: question cards now come from each harness's own question tool (Claude only so far) |
 | `read_handbook()` | Returns the room's handbook |
 | `recent_decisions(limit?)` | Returns the room's latest decisions and their rationale |
 

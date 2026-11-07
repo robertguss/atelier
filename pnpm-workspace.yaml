@@ -7,3 +7,5 @@ allowBuilds:
   esbuild: true
   browser-tabs-lock: false
   core-js: false
+  "@google/genai": false
+  protobufjs: false
