@@ -374,6 +374,11 @@ Findings from the browser pass are in
   `clerk config pull` / `clerk config patch --json ... --dry-run` read and
   change settings; sign-up mode is `auth_access_control.sign_up_mode`, set to
   `restricted` on 2026-11-07.
+- Invites never email: `invites.create` makes the Clerk invitation with
+  `notify: false` and returns its ticket link for a new account, which the
+  owner sends. Restricted sign-up admits only holders of that link. Check an
+  invite with `clerk api "/invitations?status=pending|accepted|revoked"`; the
+  bare `/invitations` list hides revoked ones.
 
 ## Quality tooling (2026-11-06)
 
