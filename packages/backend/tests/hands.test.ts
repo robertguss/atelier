@@ -847,6 +847,42 @@ const insertDecisions = async (
   }
 };
 
+describe("asking the room", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    process.env.ATELIER_OWNER_EMAILS = "owner@example.com";
+    process.env.ATELIER_RUNNER_SECRET = SECRET;
+    process.env.CLERK_SECRET_KEY = "sk_test";
+    process.env.ATELIER_WEB_URL = "https://atelier.example.com/";
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("Codex and Pi are told to ask through raise_hand; Claude, which asks through its own question tool, is not", async () => {
+    const s = await setup();
+    const promptFor = async (participantId: Id<"participants">) => {
+      const turnId = await s.owner.mutation(api.messages.send, {
+        body: "Pick a database",
+        roomId: s.roomId,
+        toParticipantId: participantId,
+      });
+      assert(turnId, "the message starts a turn");
+      const { prompt } = await getTurn(s.t, turnId);
+      return prompt;
+    };
+    const [codex, pi, claude] = [
+      await promptFor(s.codex._id),
+      await promptFor(s.pi._id),
+      await promptFor(s.claude._id),
+    ];
+    expect(codex).toMatch(/call the raise_hand tool/u);
+    expect(pi).toMatch(/call the raise_hand tool/u);
+    expect(claude).not.toMatch(/raise_hand/u);
+  });
+});
+
 describe("room context tools", () => {
   beforeEach(() => {
     vi.useFakeTimers();

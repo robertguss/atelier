@@ -278,6 +278,30 @@ script was not kept.
 - Asked to call the tool, both models called it at once and waited; neither
   asked in plain text or called a `sleep` tool.
 
+## raise_hand live check (2026-11-07)
+
+Run against the Convex dev deployment with this branch pushed, a second runner
+named `mcp-tools-live-check` (Robert's own runner kept running) and a
+throwaway room under `/tmp`, driven with `npx convex run --identity` as a test
+owner identity. Codex CLI 0.167.0, Pi 1.4.0, Claude Code 2.1.319.
+
+- **Codex asked in plain text until the prompt named the tool.** Asked to let
+  Robert pick a database, Codex replied with a plain-text question and ended
+  its turn, although the `atelier` server was ready and `raise_hand` was
+  listed. Told to use `raise_hand`, it did. The room context block for Codex
+  and Pi now says to call `raise_hand` when a person's answer is needed;
+  after that, both raised a card unprompted on the first try. Claude's block
+  does not mention it, since Claude asks through its own question tool.
+- Codex's card was answered on the card on a resumed session and Pi's in chat
+  (the chat message started no new turn); each turn continued with the
+  answer, and the decisions showed in `recent_decisions` for all three
+  harnesses. Stopping a Pi turn with an open card marked the card cancelled
+  and Pi idle. The pane showed all three agents able to raise cards.
+- `read_handbook` worked on all three harnesses but only on an empty
+  handbook: nothing can edit a handbook yet (rooms are created with `""`).
+- A `push:sendHand` action ran successfully for each raised card, but no
+  device is registered on the dev deployment, so no notification was sent.
+
 ## Shared rooms build pitfalls
 
 How to set up and run shared rooms is in [docs/shared-rooms.md](docs/shared-rooms.md).

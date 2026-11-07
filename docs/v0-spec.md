@@ -343,7 +343,9 @@ gets it in-process, Codex as `mcp_servers.atelier`, Pi through a runner
 extension. Independent reviews get no room tools. Review follow-ups get all
 three, and their cards are the owner's alone. Scribe runs keep their draft
 tools and ask nothing. Every raised card, Claude's included, pushes to the
-owner's phone, naming the agent but not the question. If the agent stops
+owner's phone, naming the agent but not the question. The room context block for
+Codex and Pi tells them to ask through `raise_hand`; without that line Codex
+asked in plain text. If the agent stops
 waiting (its call is cancelled while the turn goes on), the card closes as
 cancelled.
 

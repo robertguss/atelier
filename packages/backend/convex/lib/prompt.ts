@@ -103,9 +103,15 @@ export const decisionLine = (d: AgentDecision) => {
   return `- ${question}${neutralize(d.choice)} (decided by ${neutralize(agentName(d.answeredBy))}, ${formatTime(d.at)})`;
 };
 
+// Codex and Pi ask through the room's raise_hand tool. Their harnesses can
+// hide MCP tools behind a search, so the prompt names it.
+const RAISE_HAND_LINE =
+  "When you need a person's decision or information to continue, call the raise_hand tool: it puts a question card in front of the people here and waits for their answer. Do not ask in plain text and wait.";
+
 export const contextBlock = (
   c: RoomContext,
-  documentMode: keyof typeof DOCUMENT_LINE
+  documentMode: keyof typeof DOCUMENT_LINE,
+  { raiseHand = false }: { raiseHand?: boolean } = {}
 ) => {
   const lines = [
     "<room_context>",
@@ -113,6 +119,7 @@ export const contextBlock = (
     "People in this room:",
     ...c.members.map((m) => `- ${neutralize(agentName(m.name))} (${m.role})`),
     `File edits: ${c.editsEnabled ? "on" : "off"}. ${DOCUMENT_LINE[documentMode]}`,
+    ...(raiseHand ? [RAISE_HAND_LINE] : []),
   ];
   if (c.handbook.trim()) {
     lines.push("Room handbook:", neutralize(c.handbook.trim()));
