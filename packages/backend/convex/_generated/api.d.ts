@@ -9,9 +9,11 @@
  */
 
 import type * as agent from "../agent.js";
+import type * as blocks from "../blocks.js";
 import type * as crons from "../crons.js";
 import type * as documents from "../documents.js";
 import type * as hands from "../hands.js";
+import type * as history from "../history.js";
 import type * as invites from "../invites.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_cards from "../lib/cards.js";
@@ -43,9 +45,11 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   agent: typeof agent;
+  blocks: typeof blocks;
   crons: typeof crons;
   documents: typeof documents;
   hands: typeof hands;
+  history: typeof history;
   invites: typeof invites;
   "lib/auth": typeof lib_auth;
   "lib/cards": typeof lib_cards;

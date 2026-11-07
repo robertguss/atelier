@@ -137,6 +137,85 @@ export async function deleteBlock(ctx: MutationCtx, changeSetId: Id<'changeSets'
   await recordRevision(ctx, { documentId: document._id, changeSetId, blockId, rev, op: 'delete', before: stateOf(block) });
 }
 
+// Brings a deleted block back under its own id, as a restore does.
+export async function reviveBlock(
+  ctx: MutationCtx,
+  changeSetId: Id<'changeSets'>,
+  blockId: Id<'blocks'>,
+  state: BlockState,
+  fields: Pick<BlockPatch, 'humanEditedAt'> = {},
+) {
+  const { rev, document } = await nextRev(ctx, changeSetId);
+  await ctx.db.patch(blockId, { ...state, ...fields, rev, deletedAt: undefined });
+  await recordRevision(ctx, { documentId: document._id, changeSetId, blockId, rev, op: 'insert', after: state });
+}
+
+// The document as it stood at `rev`: the nearest checkpoint at or before it,
+// with every later revision up to `rev` replayed in order. A checkpoint every
+// CHECKPOINT_EVERY revisions bounds the replay.
+export async function versionAt(ctx: QueryCtx, documentId: Id<'documents'>, rev: number) {
+  const checkpoint = await ctx.db
+    .query('documentCheckpoints')
+    .withIndex('by_document_rev', (q) => q.eq('documentId', documentId).lte('rev', rev))
+    .order('desc')
+    .first();
+  const blocks = new Map<Id<'blocks'>, BlockState>();
+  if (checkpoint) {
+    const rows = await ctx.db
+      .query('checkpointBlocks')
+      .withIndex('by_checkpoint', (q) => q.eq('checkpointId', checkpoint._id))
+      .collect();
+    for (const { blockId, order, kind, text, author } of rows) blocks.set(blockId, { order, kind, text, author });
+  }
+  const revisions = await ctx.db
+    .query('blockRevisions')
+    .withIndex('by_document_rev', (q) => q.eq('documentId', documentId).gt('rev', checkpoint?.rev ?? 0).lte('rev', rev))
+    .collect();
+  for (const revision of revisions) {
+    if (revision.after) blocks.set(revision.blockId, revision.after);
+    else blocks.delete(revision.blockId);
+  }
+  return [...blocks]
+    .map(([blockId, state]) => ({ blockId, ...state }))
+    .sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0));
+}
+
+// People's edit leases on blocks. A lease lapses this long after it was
+// taken or last renewed.
+export const LEASE_MS = 2 * 60_000;
+
+export const SCRIBE_WORKING = 'The scribe is working on the document';
+
+export function scribeWorking(document: Doc<'documents'>, now: number) {
+  return document.scribeRunId !== undefined && (document.scribeLockExpiresAt ?? 0) > now;
+}
+
+// Who holds an unexpired lease on the block, if anyone.
+export function leaseHolder(block: Doc<'blocks'>, now: number) {
+  return block.leaseHolderParticipantId !== undefined && (block.leaseExpiresAt ?? 0) > now
+    ? block.leaseHolderParticipantId
+    : undefined;
+}
+
+export async function participantName(ctx: QueryCtx, participantId: Id<'participants'>) {
+  return (await ctx.db.get(participantId))?.displayName ?? 'Someone';
+}
+
+export async function clearLease(ctx: MutationCtx, blockId: Id<'blocks'>) {
+  await ctx.db.patch(blockId, { leaseHolderParticipantId: undefined, leaseExpiresAt: undefined, leaseChangeSetId: undefined });
+}
+
+// Releases every lease a person holds in the room's document.
+export async function releaseLeasesOf(ctx: MutationCtx, roomId: Id<'rooms'>, participantId: Id<'participants'>) {
+  const document = await getDocument(ctx, roomId);
+  if (!document) return;
+  const blocks = await ctx.db
+    .query('blocks')
+    .withIndex('by_document_order', (q) => q.eq('documentId', document._id))
+    .collect();
+  for (const block of blocks) if (block.leaseHolderParticipantId === participantId) await clearLease(ctx, block._id);
+}
+
 // Copies every live block into a checkpoint at the current rev.
 export async function takeCheckpoint(
   ctx: MutationCtx,

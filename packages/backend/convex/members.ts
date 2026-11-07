@@ -2,6 +2,7 @@ import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 import { NOTICE_VERSION, requireMember, requireOwner } from './lib/auth';
 import { cancelMessage } from './lib/dispatch';
+import { releaseLeasesOf } from './lib/document';
 import { record } from './lib/ledger';
 
 export const list = query({
@@ -69,6 +70,8 @@ export const remove = mutation({
       if (command?.status === 'pending') await ctx.db.patch(command._id, { status: 'failed', error: 'The author was removed from the room' });
       await cancelMessage(ctx, m, 'removed', owner._id);
     }
+    // Any block they were editing is free for others at once.
+    await releaseLeasesOf(ctx, member.roomId, member.participantId);
     await record(ctx, {
       roomId: member.roomId,
       type: 'member.removed',
