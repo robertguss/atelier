@@ -8,10 +8,10 @@ import { PageSpinner } from '~/components/page';
 import { errorText } from '~/components/room/errors';
 import { Button } from '~/components/ui/button';
 import { Sheet, SheetDescription, SheetHeader, SheetPopup, SheetTitle } from '~/components/ui/sheet';
-import { authorText, mentionText, type DocThread, type Passage, type ThreadComment } from '~/lib/document';
+import { mentionText, type DocThread, type Passage, type ThreadComment } from '~/lib/document';
 import { formatTime, type Names, type Participant } from '~/lib/room';
-import { BlockText } from './BlockText';
 import { MentionInput } from './MentionInput';
+import { VersionView } from './VersionView';
 
 const COMMENT_PLACEHOLDER = 'Type @ to ask a model';
 
@@ -236,17 +236,8 @@ function OriginalVersion({ changeSetId, blockId, names, open, onOpenChange }: Or
         {version === undefined ? (
           <PageSpinner />
         ) : (
-          <div className="space-y-1 px-6 pb-6">
-            {version.blocks.map((block) => (
-              <div
-                key={block.blockId}
-                data-commented={block.blockId === blockId ? '' : undefined}
-                className={block.blockId === blockId ? 'rounded-lg bg-warning/12 px-2 py-1.5 ring-1 ring-warning/40' : 'px-2 py-1.5'}
-              >
-                <BlockText kind={block.kind} text={block.text} />
-                <p className="mt-0.5 text-xs text-muted-foreground">{authorText(block.author, names)}</p>
-              </div>
-            ))}
+          <div className="px-6 pb-6">
+            <VersionView blocks={version.blocks.map((b) => ({ ...b, mark: b.blockId === blockId ? 'commented' : null }))} names={names} />
           </div>
         )}
       </SheetPopup>

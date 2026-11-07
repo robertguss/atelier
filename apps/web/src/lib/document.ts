@@ -82,3 +82,64 @@ export function mentionText(state: MentionState, name: string) {
       return `mention of ${name} cancelled`;
   }
 }
+
+export type ChangeSetEntry = FunctionReturnType<typeof api.history.list>['page'][number];
+export type VersionData = FunctionReturnType<typeof api.history.version>;
+export type VersionBlock = VersionData['blocks'][number];
+export type ChangeSetDiff = FunctionReturnType<typeof api.history.diff>;
+
+/** One history entry in plain words: what kind of change it was, and whose. */
+export function changeSetText(kind: ChangeSetEntry['kind'], actor: string) {
+  switch (kind) {
+    case 'template_seed':
+      return `Template seeding by ${actor}`;
+    case 'human_edit':
+      return `Edit by ${actor}`;
+    case 'model_turn':
+      return `${actor}'s turn`;
+    case 'scribe_run':
+      return `Scribe run by ${actor}`;
+    case 'restore':
+      return `Restore by ${actor}`;
+  }
+}
+
+/** How one change set left a block, as a version view marks it. */
+export type BlockMark = 'added' | 'changed' | 'moved' | 'removed' | 'commented';
+
+export const MARK_LABEL: Record<BlockMark, string> = {
+  added: 'Added',
+  changed: 'Changed',
+  moved: 'Moved',
+  removed: 'Removed',
+  commented: 'Commented',
+};
+
+/**
+ * A version's blocks with the ones its change set touched marked. Blocks it
+ * removed are not in the version, so they come back from the change set's
+ * record, in the place they stood. A block added and removed again within
+ * the change set left no trace and is not shown.
+ */
+export function markedVersion(blocks: readonly VersionBlock[], diff: ChangeSetDiff) {
+  const byBlock = new Map<string, ChangeSetDiff>();
+  for (const revision of diff) byBlock.set(revision.blockId, [...(byBlock.get(revision.blockId) ?? []), revision]);
+  const marks = new Map<string, BlockMark>();
+  const removed: VersionBlock[] = [];
+  for (const [blockId, revisions] of byBlock) {
+    const first = revisions[0]!;
+    const last = revisions[revisions.length - 1]!;
+    if (last.op === 'delete') {
+      if (first.op !== 'insert' && first.before) {
+        removed.push({ blockId: blockId as VersionBlock['blockId'], ...first.before });
+        marks.set(blockId, 'removed');
+      }
+    } else if (first.op === 'insert') {
+      marks.set(blockId, 'added');
+    } else {
+      marks.set(blockId, revisions.some((r) => r.op === 'update') ? 'changed' : 'moved');
+    }
+  }
+  const all = [...blocks, ...removed].sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0));
+  return all.map((block) => ({ ...block, mark: marks.get(block.blockId) ?? null }));
+}

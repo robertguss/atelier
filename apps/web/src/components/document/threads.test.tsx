@@ -242,7 +242,7 @@ describe('a thread whose passage was removed', () => {
 
     const original = await screen.findByRole('dialog', { name: 'Original passage' });
     expect(within(original).getByText('Offer an annual discount.')).toBeInTheDocument();
-    expect(within(original).getByText('Offer an annual discount.').closest('[data-commented]')).not.toBeNull();
+    expect(within(original).getByText('Offer an annual discount.').closest('[data-mark="commented"]')).not.toBeNull();
   });
 });
 

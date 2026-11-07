@@ -11,6 +11,7 @@ import { leaseHolder, sectionsOf, type DocBlock, type Passage, type Section, typ
 import { useNow, type Names, type Participant } from '~/lib/room';
 import { renderedRange, selectionIn, sourceRange } from '~/lib/selection';
 import { AddChoices, Block, type AddPlace } from './Block';
+import { HistoryControl } from './HistoryPanel';
 import { ThreadMargin } from './ThreadMargin';
 
 interface DocumentPaneProps {
@@ -112,7 +113,10 @@ export function DocumentPane({ roomId, names, meId, models, isOwner }: DocumentP
         <FileTextIcon className="size-4 text-muted-foreground" />
         <h2 className="text-sm font-medium">Document</h2>
         <span className="text-xs text-muted-foreground">Shared with everyone in the room, agents included.</span>
-        {isOwner ? <SaveAsTemplate roomId={roomId} /> : null}
+        <div className="ml-auto flex items-center gap-1">
+          <HistoryControl roomId={roomId} names={names} />
+          {isOwner ? <SaveAsTemplate roomId={roomId} /> : null}
+        </div>
       </header>
       <div className="@container min-h-0 flex-1 overflow-y-auto">{body}</div>
     </section>
@@ -235,7 +239,7 @@ function SaveAsTemplate({ roomId }: { roomId: Id<'rooms'> }) {
 
   if (!open) {
     return (
-      <div className="ml-auto flex items-center gap-2">
+      <div className="flex items-center gap-2">
         {saved ? <span className="text-xs text-muted-foreground">“{saved}” saved as a template.</span> : null}
         <Button
           size="xs"
@@ -251,7 +255,7 @@ function SaveAsTemplate({ roomId }: { roomId: Id<'rooms'> }) {
     );
   }
   return (
-    <form className="ml-auto flex items-center gap-2" onSubmit={(e) => void submit(e)}>
+    <form className="flex items-center gap-2" onSubmit={(e) => void submit(e)}>
       {error ? <span className="text-xs text-destructive-foreground">{error}</span> : null}
       <Input size="sm" aria-label="Template name" placeholder="Template name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
       <Button type="submit" size="xs" disabled={!name.trim() || busy}>
