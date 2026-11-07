@@ -62,14 +62,16 @@ agent pane never show review turns, revealed answers, follow-up messages or
 follow-up turns. Review and follow-up turns also stay out of the agent queue:
 a follow-up always runs as its own turn and never takes a steer.
 
-In a room that is just Robert, a follow-up continues the participant's
-ordinary session. In a room with an active teammate it runs on a separate
-session kept with the review instead, one per participant, so the agent cannot
-repeat the review to the teammate in a later ordinary turn. The choice is fixed
-when the runner claims the follow-up turn. When the first teammate joins, each
-agent that ran a follow-up on its ordinary session starts a fresh session, and
-the ledger records a `participant.session_reset`. See
-[shared rooms](shared-rooms.md).
+Every follow-up runs on a separate session kept with the review, one per
+participant, even in a room that is just Robert. The agent therefore cannot
+repeat the review to a teammate in a later ordinary turn, or write it into the
+room document from its ordinary session. A follow-up can read the room document
+but never change it; a review never sees it. The runner fixes the session when
+it claims the follow-up turn. Follow-ups that ran before rooms had a document
+continued the ordinary session while Robert was alone: when the first teammate
+joins, each agent that ran one starts a fresh session, and the ledger records a
+`participant.session_reset`. See [shared rooms](shared-rooms.md) and
+[the room document](room-document.md#what-the-agents-see).
 
 ## Push readiness
 

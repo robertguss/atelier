@@ -12,6 +12,7 @@ import { ConvexClient } from "convex/browser";
 import { claudeHarness } from "./adapters/claude.ts";
 import { codexHarness } from "./adapters/codex.ts";
 import { piHarness } from "./adapters/pi.ts";
+import { createRoomToolsServer } from "./room-tools-server.ts";
 import { appendTranscript, transcriptPath } from "./transcripts.ts";
 import { createTurns } from "./turns.ts";
 
@@ -56,11 +57,15 @@ const harnesses: Partial<Record<HarnessId, Harness>> = {
   }),
 };
 
+// Starts listening when the first turn needs it.
+const roomTools = createRoomToolsServer({ client, secret });
+
 const turns = createTurns({
   appendTranscript,
   client,
   defaultModels: { pi: process.env.ATELIER_PI_MODEL },
   harnesses,
+  roomTools,
   secret,
   transcriptPath,
 });
@@ -148,6 +153,7 @@ client.onUpdate(
 const shutdown = async () => {
   turns.abortAll();
   await sleep(1000);
+  await roomTools.close();
   await client.close();
   process.exit(0);
 };

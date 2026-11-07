@@ -15,6 +15,7 @@ import {
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import schema from "../convex/schema";
+import { defined } from "./support";
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
@@ -221,7 +222,69 @@ const followUpSessionsOf = async (t: T, ritualId: Id<"rituals">) =>
   await t.run(async (ctx) => {
     const ritual = await ctx.db.get(ritualId);
     assert(ritual, "the review exists");
-    return ritual.followUpSessions;
+    return ritual.followUpSessions?.map(({ participantId, sessionId }) => ({
+      participantId,
+      sessionId,
+    }));
+  });
+
+// Every document tool call a model can make, against the document's first block.
+const everyDocumentTool = async (
+  t: T,
+  roomId: Id<"rooms">,
+  turnId: Id<"turns">,
+  text: string
+) => {
+  const blockId = await t.run(async (ctx) => {
+    const blocks = await ctx.db.query("blocks").collect();
+    return defined(blocks.find((b) => b.roomId === roomId))._id;
+  });
+  const s = { secret: SECRET, turnId };
+  return {
+    read: await t.query(api.documentTools.readDocumentForTurn, s),
+    writes: [
+      await t.mutation(api.documentTools.addBlockForTurn, {
+        ...s,
+        kind: "paragraph",
+        text,
+      }),
+      await t.mutation(api.documentTools.updateBlockForTurn, {
+        ...s,
+        baseRev: 1,
+        blockId,
+        text,
+      }),
+      await t.mutation(api.documentTools.deleteBlockForTurn, {
+        ...s,
+        baseRev: 1,
+        blockId,
+      }),
+      await t.mutation(api.documentTools.commentForTurn, {
+        ...s,
+        blockId,
+        body: text,
+        quote: "What",
+      }),
+    ],
+  };
+};
+
+const documentRows = async (t: T) =>
+  await t.run(async (ctx) => {
+    const tables = [
+      "documents",
+      "blocks",
+      "changeSets",
+      "blockRevisions",
+      "documentCheckpoints",
+      "threads",
+      "comments",
+    ] as const;
+    return JSON.stringify(
+      await Promise.all(
+        tables.map(async (table) => await ctx.db.query(table).collect())
+      )
+    );
   });
 
 describe("review isolation in shared rooms", () => {
@@ -607,7 +670,7 @@ describe("review isolation in shared rooms", () => {
     });
   });
 
-  it("in a solo room a follow-up continues the ordinary session, and stays hidden from a later member", async () => {
+  it("in a solo room with a document a follow-up runs on its own session, never the ordinary one, and stays hidden from a later member", async () => {
     const { t, owner, dana, runnerId, roomId, claude, pi } = await setup({
       withMember: false,
     });
@@ -619,6 +682,8 @@ describe("review isolation in shared rooms", () => {
       claude._id,
       pi._id
     );
+    const hasDocument =
+      (await owner.query(api.documents.get, { roomId })) !== null;
     const followUp = await owner.mutation(api.messages.send, {
       body: "SOLO-FOLLOWUP",
       reviewTurnId,
@@ -626,26 +691,78 @@ describe("review isolation in shared rooms", () => {
       toParticipantId: claude._id,
     });
     assert(followUp, "the follow-up starts a turn");
-    await expect(
-      runTurn(t, runnerId, followUp, "SOLO-REPLY", "solo-next")
-    ).resolves.toBe("ordinary-session");
-    await expect(sessionOf(t, claude._id)).resolves.toBe("solo-next");
-    await t.run(async (ctx) => {
-      const ritual = await ctx.db.get(ritualId);
-      assert(ritual, "the review exists");
-      expect(ritual.followUpSessions).toBeUndefined();
+    const firstResumed = await runTurn(
+      t,
+      runnerId,
+      followUp,
+      "SOLO-REPLY",
+      "solo-next"
+    );
+    const afterFirst = {
+      followUpSessions: await followUpSessionsOf(t, ritualId),
+      ordinarySession: await sessionOf(t, claude._id),
+    };
+
+    const second = await owner.mutation(api.messages.send, {
+      body: "SOLO-AGAIN",
+      reviewTurnId,
+      roomId,
+      toParticipantId: claude._id,
     });
+    assert(second, "the second follow-up starts a turn");
+    const secondResumed = await runTurn(
+      t,
+      runnerId,
+      second,
+      "SOLO-REPLY-2",
+      "solo-next-2"
+    );
+    const ordinary = await owner.mutation(api.messages.send, {
+      body: "Back to work",
+      roomId,
+      toParticipantId: claude._id,
+    });
+    assert(ordinary, "the ordinary message starts a turn");
+    const ordinaryResumed = await runTurn(
+      t,
+      runnerId,
+      ordinary,
+      "ok",
+      "ordinary-2"
+    );
 
     await addMember(owner, dana, roomId);
-    expect(
-      JSON.stringify(await owner.query(api.messages.timeline, { roomId }))
-    ).toContain("SOLO-REPLY");
-    expect(
-      JSON.stringify(await dana.query(api.messages.timeline, { roomId }))
-    ).not.toContain("SOLO");
+    const ownerSees = JSON.stringify(
+      await owner.query(api.messages.timeline, { roomId })
+    );
+    const memberSees = JSON.stringify(
+      await dana.query(api.messages.timeline, { roomId })
+    );
+    expect({
+      afterFirst,
+      firstResumed,
+      hasDocument,
+      memberSeesFollowUp: memberSees.includes("SOLO"),
+      ordinaryResumed,
+      ownerSeesReply: ownerSees.includes("SOLO-REPLY"),
+      secondResumed,
+    }).toStrictEqual({
+      afterFirst: {
+        followUpSessions: [
+          { participantId: claude._id, sessionId: "solo-next" },
+        ],
+        ordinarySession: "ordinary-session",
+      },
+      firstResumed: undefined,
+      hasDocument: true,
+      memberSeesFollowUp: false,
+      ordinaryResumed: "ordinary-session",
+      ownerSeesReply: true,
+      secondResumed: "solo-next",
+    });
   });
 
-  it("the first teammate to join resets the session of each agent that ran a follow-up alone with the owner", async () => {
+  it("the first teammate to join resets the session of each agent that ran a follow-up alone with the owner before rooms had a document", async () => {
     const { t, owner, dana, runnerId, roomId, claude, pi } = await setup({
       withMember: false,
     });
@@ -667,20 +784,26 @@ describe("review isolation in shared rooms", () => {
       toParticipantId: claude._id,
     });
     assert(followUp, "the follow-up starts a turn");
-    const soloResumed = await runTurn(
-      t,
-      runnerId,
-      followUp,
-      "SOLO-REPLY",
-      "solo-next"
-    );
-    expect({
-      resumed: soloResumed,
-      session: await sessionOf(t, claude._id),
-    }).toStrictEqual({ resumed: "ordinary-session", session: "solo-next" });
+    await runTurn(t, runnerId, followUp, "SOLO-REPLY", "solo-next");
+    // As such a follow-up was claimed then: on the ordinary session.
+    await t.run(async (ctx) => {
+      const turn = await ctx.db.get(followUp);
+      assert(turn?.followUp, "the turn is a follow-up");
+      await ctx.db.patch(followUp, {
+        followUp: { ...turn.followUp, separateSession: false },
+      });
+      await ctx.db.patch(claude._id, {
+        documentRevSeen: 3,
+        harnessSessionId: "solo-next",
+      });
+    });
 
     await addMember(owner, dana, roomId);
     await expect(sessionOf(t, claude._id)).resolves.toBeFalsy();
+    await t.run(async (ctx) => {
+      const awaited = await ctx.db.get(claude._id);
+      expect(awaited?.documentRevSeen).toBeUndefined();
+    });
     const resets = async () => {
       const entries = await t.run(
         async (ctx) => await ctx.db.query("ledger").collect()
@@ -724,11 +847,11 @@ describe("review isolation in shared rooms", () => {
     }).toStrictEqual({ resets: 1, session: "fresh-1" });
   });
 
-  it("a follow-up still running when the first teammate joins does not save its session as the ordinary one", async () => {
+  it("a follow-up on its own session resets nothing when the first teammate joins, and never saves as the ordinary one", async () => {
     const { t, owner, dana, runnerId, roomId, claude, pi } = await setup({
       withMember: false,
     });
-    const { reviewTurnId } = await revealedReview(
+    const { ritualId, reviewTurnId } = await revealedReview(
       t,
       owner,
       roomId,
@@ -763,7 +886,16 @@ describe("review isolation in shared rooms", () => {
       transcriptRef: "/f",
       turnId: followUp,
     });
-    await expect(sessionOf(t, claude._id)).resolves.toBeFalsy();
+    await expect(sessionOf(t, claude._id)).resolves.toBe("ordinary-session");
+    await expect(followUpSessionsOf(t, ritualId)).resolves.toStrictEqual([
+      { participantId: claude._id, sessionId: "solo-next" },
+    ]);
+    const entries = await t.run(
+      async (ctx) => await ctx.db.query("ledger").collect()
+    );
+    expect(
+      entries.filter((e) => e.type === "participant.session_reset")
+    ).toHaveLength(0);
   });
 
   it("a member cannot cancel a review turn; stopping a turn records who stopped it", async () => {
@@ -856,5 +988,345 @@ describe("review isolation in shared rooms", () => {
         toParticipantId: claude._id,
       })
     ).rejects.toThrow("You are no longer a member of this room");
+  });
+
+  it("with a teammate in the room, neither the review nor its follow-up can change the document, and only the follow-up is shown it", async () => {
+    const { t, owner, runnerId, roomId, claude, pi } = await setup({
+      withMember: true,
+    });
+    const before = await documentRows(t);
+
+    await owner.mutation(api.rituals.begin, {
+      participantIds: [claude._id, pi._id],
+      request: "Review independently",
+      roomId,
+    });
+    const reviewCommands = await t.query(api.runner.pendingCommands, {
+      runnerId,
+      secret: SECRET,
+    });
+    for (const command of reviewCommands) {
+      const job = defined(
+        // oxlint-disable-next-line eslint/no-await-in-loop -- each step depends on the one before it
+        await t.mutation(api.runner.claim, {
+          commandId: command._id,
+          secret: SECRET,
+        })
+      );
+      expect(job.type === "run_turn" && job.documentMode).toBe("none");
+      expect(job.type === "run_turn" && job.turn.prompt).not.toContain(
+        "room_document"
+      );
+      expect(job.type === "run_turn" && job.turn.prompt).not.toContain(
+        "What's happened"
+      );
+      // oxlint-disable-next-line eslint/no-await-in-loop -- each step depends on the one before it
+      await t.mutation(api.runner.start, {
+        harnessVersion: "test",
+        secret: SECRET,
+        turnId: command.turnId,
+      });
+      // oxlint-disable-next-line eslint/no-await-in-loop -- each step depends on the one before it
+      const { writes, read } = await everyDocumentTool(
+        t,
+        roomId,
+        command.turnId,
+        "REVIEW-WRITE"
+      );
+      for (const result of writes) {
+        expect(result).toMatchObject({
+          ok: false,
+          reason: "no_document_access",
+        });
+      }
+      expect(read).toMatchObject({ ok: false, reason: "no_document_access" });
+      // oxlint-disable-next-line eslint/no-await-in-loop -- each step depends on the one before it
+      await t.mutation(api.runner.finish, {
+        commandId: command._id,
+        finalText: "REVIEW-ANSWER",
+        secret: SECRET,
+        sessionId: "review-session",
+        transcriptRef: "/r",
+        turnId: command.turnId,
+      });
+    }
+    await t.finishAllScheduledFunctions(runAllTimers);
+    await t.mutation(api.runners.heartbeat, {
+      harnesses: [
+        { id: "claude", version: "test" },
+        { id: "pi", version: "test" },
+      ],
+      machine: "test",
+      name: "test",
+      secret: SECRET,
+    });
+    const reviewTurnId = defined(reviewCommands[0]).turnId;
+    const reviewer = defined(
+      await t.run(async (ctx) => await ctx.db.get(reviewTurnId))
+    ).participantId;
+
+    const followUp = await owner.mutation(api.messages.send, {
+      body: "Expand on it",
+      reviewTurnId,
+      roomId,
+      toParticipantId: reviewer,
+    });
+    assert(followUp, "the message starts a turn");
+    const command = await commandFor(t, runnerId, followUp);
+    const job = defined(
+      await t.mutation(api.runner.claim, {
+        commandId: command._id,
+        secret: SECRET,
+      })
+    );
+    const prompt = job.type === "run_turn" ? job.turn.prompt : "";
+    expect({
+      mode: job.type === "run_turn" && job.documentMode,
+      shown: [
+        "<room_document",
+        "What's happened",
+        "Room document: read-only in this turn.",
+      ].map((fragment) => prompt.includes(fragment)),
+    }).toStrictEqual({ mode: "read", shown: [true, true, true] });
+    await t.mutation(api.runner.start, {
+      harnessVersion: "test",
+      secret: SECRET,
+      turnId: followUp,
+    });
+    const { writes, read } = await everyDocumentTool(
+      t,
+      roomId,
+      followUp,
+      "REVIEW-ANSWER"
+    );
+    for (const result of writes) {
+      expect(result).toMatchObject({ ok: false, reason: "read_only" });
+    }
+    expect(read).toMatchObject({ ok: true, writable: false });
+    await t.mutation(api.runner.finish, {
+      commandId: command._id,
+      finalText: "FOLLOWUP-REPLY",
+      secret: SECRET,
+      sessionId: "followup-session",
+      transcriptRef: "/f",
+      turnId: followUp,
+    });
+
+    await expect(documentRows(t)).resolves.toBe(before);
+  });
+
+  it("after a solo review and follow-up, an ordinary turn and a teammate joining, the review never reaches the document or its history", async () => {
+    const { t, owner, dana, runnerId, roomId, claude, pi } = await setup({
+      withMember: false,
+    });
+    const { reviewTurnId } = await revealedReview(
+      t,
+      owner,
+      roomId,
+      runnerId,
+      claude._id,
+      pi._id
+    );
+
+    const followUp = await owner.mutation(api.messages.send, {
+      body: "Expand on it",
+      reviewTurnId,
+      roomId,
+      toParticipantId: claude._id,
+    });
+    assert(followUp, "the message starts a turn");
+    const command = await commandFor(t, runnerId, followUp);
+    const job = defined(
+      await t.mutation(api.runner.claim, {
+        commandId: command._id,
+        secret: SECRET,
+      })
+    );
+    expect(
+      job.type === "run_turn" && job.participant.sessionId
+    ).toBeUndefined();
+    await t.mutation(api.runner.start, {
+      harnessVersion: "test",
+      secret: SECRET,
+      turnId: followUp,
+    });
+    const { writes } = await everyDocumentTool(
+      t,
+      roomId,
+      followUp,
+      "REVIEW-ANSWER, expanded"
+    );
+    for (const result of writes) {
+      expect(result).toMatchObject({ ok: false });
+    }
+    await t.mutation(api.runner.finish, {
+      commandId: command._id,
+      finalText: "REVIEW-ANSWER, expanded",
+      secret: SECRET,
+      sessionId: "followup-session",
+      transcriptRef: "/f",
+      turnId: followUp,
+    });
+
+    const ordinary = await owner.mutation(api.messages.send, {
+      body: "Note what we found",
+      roomId,
+      toParticipantId: claude._id,
+    });
+    assert(ordinary, "the message starts a turn");
+    const ordinaryCommand = await commandFor(t, runnerId, ordinary);
+    const ordinaryJob = defined(
+      await t.mutation(api.runner.claim, {
+        commandId: ordinaryCommand._id,
+        secret: SECRET,
+      })
+    );
+    expect({
+      leaksReview: JSON.stringify(ordinaryJob).includes("REVIEW-ANSWER"),
+      session:
+        ordinaryJob.type === "run_turn" && ordinaryJob.participant.sessionId,
+    }).toStrictEqual({ leaksReview: false, session: "ordinary-session" });
+    await t.mutation(api.runner.start, {
+      harnessVersion: "test",
+      secret: SECRET,
+      turnId: ordinary,
+    });
+    const added = await t.mutation(api.documentTools.addBlockForTurn, {
+      kind: "paragraph",
+      secret: SECRET,
+      text: "An ordinary finding.",
+      turnId: ordinary,
+    });
+    expect(added).toMatchObject({ ok: true });
+    await t.mutation(api.runner.finish, {
+      commandId: ordinaryCommand._id,
+      finalText: "Noted",
+      secret: SECRET,
+      sessionId: "ordinary-session",
+      transcriptRef: "/o",
+      turnId: ordinary,
+    });
+
+    await addMember(owner, dana, roomId);
+    const { page } = await dana.query(api.history.list, {
+      paginationOpts: { cursor: null, numItems: 50 },
+      roomId,
+    });
+    const versions = await Promise.all(
+      page.map(
+        async (c: { _id: Id<"changeSets"> }) =>
+          await dana.query(api.history.version, { changeSetId: c._id })
+      )
+    );
+    const seen = JSON.stringify([
+      await dana.query(api.documents.get, { roomId }),
+      await dana.query(api.threads.list, { roomId }),
+      versions,
+      await t.run(async (ctx) => [
+        await ctx.db.query("blockRevisions").collect(),
+        await ctx.db.query("comments").collect(),
+      ]),
+    ]);
+    expect({
+      leaksReview: seen.includes("REVIEW-ANSWER"),
+      shown: seen.includes("An ordinary finding."),
+    }).toStrictEqual({ leaksReview: false, shown: true });
+  });
+
+  it("an ordinary turn after a shared-room follow-up is shown what changed since its own session last saw the document", async () => {
+    const { t, owner, dana, runnerId, roomId, claude, pi } = await setup({
+      withMember: true,
+    });
+    const { blocks } = defined(
+      await owner.query(api.documents.get, { roomId })
+    );
+    const edit = async (index: number, text: string) => {
+      await dana.mutation(api.blocks.startEdit, {
+        blockId: defined(blocks[index])._id,
+      });
+      await dana.mutation(api.blocks.save, {
+        blockId: defined(blocks[index])._id,
+        text,
+      });
+      await dana.mutation(api.blocks.stopEdit, {
+        blockId: defined(blocks[index])._id,
+      });
+    };
+    const first = await owner.mutation(api.messages.send, {
+      body: "Start",
+      roomId,
+      toParticipantId: claude._id,
+    });
+    assert(first, "the message starts a turn");
+    await runTurn(t, runnerId, first, "ok", "ordinary-session");
+    await edit(0, "EDIT-BEFORE-FOLLOWUP");
+
+    const { reviewTurnId } = await revealedReview(
+      t,
+      owner,
+      roomId,
+      runnerId,
+      claude._id,
+      pi._id
+    );
+    const followUp = await owner.mutation(api.messages.send, {
+      body: "Why?",
+      reviewTurnId,
+      roomId,
+      toParticipantId: claude._id,
+    });
+    assert(followUp, "the message starts a turn");
+    const followUpCommand = await commandFor(t, runnerId, followUp);
+    const followUpJob = defined(
+      await t.mutation(api.runner.claim, {
+        commandId: followUpCommand._id,
+        secret: SECRET,
+      })
+    );
+    // A session the follow-up has never used gets the whole document.
+    expect(
+      followUpJob.type === "run_turn" && followUpJob.turn.prompt
+    ).toContain('view="full"');
+    await t.mutation(api.runner.start, {
+      harnessVersion: "test",
+      secret: SECRET,
+      turnId: followUp,
+    });
+    await t.mutation(api.runner.finish, {
+      commandId: followUpCommand._id,
+      finalText: "Because",
+      secret: SECRET,
+      sessionId: "followup-session",
+      transcriptRef: "/f",
+      turnId: followUp,
+    });
+    await edit(1, "EDIT-AFTER-FOLLOWUP");
+
+    const next = await owner.mutation(api.messages.send, {
+      body: "Carry on",
+      roomId,
+      toParticipantId: claude._id,
+    });
+    assert(next, "the message starts a turn");
+    const command = await commandFor(t, runnerId, next);
+    const job = defined(
+      await t.mutation(api.runner.claim, {
+        commandId: command._id,
+        secret: SECRET,
+      })
+    );
+    const prompt = job.type === "run_turn" ? job.turn.prompt : "";
+    expect({
+      session: job.type === "run_turn" && job.participant.sessionId,
+      shown: [
+        'view="changes"',
+        "EDIT-BEFORE-FOLLOWUP",
+        "EDIT-AFTER-FOLLOWUP",
+        "Open questions",
+      ].map((fragment) => prompt.includes(fragment)),
+    }).toStrictEqual({
+      session: "ordinary-session",
+      shown: [true, true, true, false],
+    });
   });
 });

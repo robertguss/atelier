@@ -184,6 +184,70 @@ Claude Code 2.1.318 through Agent SDK 0.3.318 (Haiku and Sonnet), Codex CLI
   extension reports only in TUI mode, so it is silent under RPC either way.
 - Consequence: the Pi edit guard is feasible as a runner-shipped extension.
 
+## Room document tool probes (2026-11-07)
+
+Run live with Robert's logins in throwaway git repos under `/tmp`, using
+a throwaway probe script (not kept): Claude Code through Agent SDK 0.3.318
+(Haiku), Codex CLI 0.166.0 `app-server` (`gpt-6.1-sol`, low effort) and Pi
+1.4.0 (`openai/gpt-6-astra`, low thinking). Each harness got one stub `echo`
+tool from the runner, on a fresh session and then on a resumed one.
+
+- **Claude:** an in-process `createSdkMcpServer({ name: 'atelier', alwaysLoad: true })`
+  in `mcpServers` loads next to Robert's own claude.ai servers
+  (`source: "sdk"`), is listed in `init.tools` as `mcp__atelier__echo`, and
+  works after `resume`. Its calls reach `canUseTool`, so the deny-by-default
+  handler must allow `mcp__atelier__*`. Do not use an HTTP entry with a token
+  in `headers`: the SDK passes non-SDK servers to the CLI as a `--mcp-config`
+  argument, where any process can read it. The SDK needs `zod` as a peer
+  dependency for `tool()` schemas.
+- **Codex:** `config` keys `mcp_servers.atelier.url` and
+  `mcp_servers.atelier.bearer_token_env_var` (token in the app-server's
+  environment, not argv) work on `thread/start` and again on `thread/resume`.
+  Without more, every call needs approval: under `approvalPolicy: 'never'` the
+  call fails with "MCP tool call requires approval, but approval policy is
+  never", and under `untrusted` Codex sends `mcpServer/elicitation/request`
+  (`_meta.codex_approval_kind: "mcp_tool_call"`). Adding
+  `mcp_servers.atelier.default_tools_approval_mode = "approve"` pre-approves
+  only this server's tools: calls then run with no request under both
+  `never`/read-only and `untrusted`/workspace-write, on start and resume.
+  Answering the elicitation with `{ action: 'accept', content: null }` also
+  works, including with a granular policy, but is not needed.
+- **Pi:** a `--extension` file that calls `pi.registerTool()` (TypeBox schema
+  from `typebox`, which Pi resolves for extensions) and forwards to the
+  loopback endpoint with a token from `RpcClient`'s `env` works with
+  `--tools read,grep,find,ls,atelier_echo`, and again with `--session`.
+  Naming no `mcp__` entry in `--tools` leaves Robert's own MCP tools as they
+  were. `registerMcpServer` was not needed.
+- The stub server bound `127.0.0.1` on port 0 and got ports in the 37000–45000
+  range, outside the 3000–9999 range exe.dev forwards.
+
+## Room document live checks (2026-11-07)
+
+Run against the Convex dev deployment with this branch pushed, using a second
+runner named `room-document-live-check` (Robert's own runner kept running) and
+a throwaway room under `/tmp`, driven with `npx convex run --identity` as a
+test owner identity.
+
+- Claude, Codex and Pi each added, updated and deleted their own block and
+  commented on Robert's heading, with edits off on a fresh session and with
+  edits on on a resumed session. Tool calls appeared as turn items named
+  `mcp__atelier__*`, `atelier.*` and `atelier_*`. Pi's `atelier_*` pattern in
+  `--tools` and registering the tools when Pi loads the extension both work.
+- After Robert edited Claude's block, Claude's next update kept his fix. Each
+  model's attempt to overwrite another model's block was refused and it
+  commented instead.
+- An @Codex comment produced a reply in the thread, not in the agent pane.
+- A review and a review follow-up left the document unchanged. The follow-up
+  in a solo room ran with `separateSession: true` and said the document was
+  read-only for it.
+- Scribe runs committed with each harness (Codex's run on an `ephemeral`
+  thread). Codex merged three notes into one scribe block crediting all three
+  authors and re-attached all four threads to it. During a run a person's edit
+  was refused; Stop left the document byte-identical with the lock cleared.
+- Unprompted use: given five ordinary requests that never mention the
+  document, Claude wrote to it in 3 turns, Codex in 2 and Pi in 2, and none
+  commented. Tune the tool descriptions if that proves too quiet or too noisy.
+
 ## Shared rooms build pitfalls
 
 How to set up and run shared rooms is in [docs/shared-rooms.md](docs/shared-rooms.md).

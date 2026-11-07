@@ -21,7 +21,16 @@ import type {
 } from "@atelier/shared";
 
 import { execFileAsync } from "../exec.ts";
+import { loopbackCaller } from "../room-tools-server.ts";
+import {
+  claudeRoomToolsServer,
+  documentTools,
+  scribeTools,
+} from "../room-tools.ts";
 import { eventQueue } from "./events.ts";
+
+// The in-process document tools server is named `atelier`.
+const ROOM_TOOL_PREFIX = "mcp__atelier__";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
 // Harness and repository control files. Writing one could add an allow rule,
@@ -353,6 +362,16 @@ const harnessEvents = (msg: SDKMessage, state: StreamState): HarnessEvent[] => {
   }
 };
 
+// A scribe turn starts fresh and is never saved, like a review.
+const sessionOptions = (req: TurnRequest): Options => {
+  if (req.scribe === true) {
+    return { persistSession: false };
+  }
+  return req.resumeSessionId === undefined || req.resumeSessionId === ""
+    ? {}
+    : { resume: req.resumeSessionId };
+};
+
 const turnOptions = (
   req: TurnRequest,
   executable: string,
@@ -414,9 +433,19 @@ const turnOptions = (
         ...(req.model === undefined || req.model === ""
           ? {}
           : { model: req.model }),
-        ...(req.resumeSessionId === undefined || req.resumeSessionId === ""
-          ? {}
-          : { resume: req.resumeSessionId }),
+        // Reviews never get the document tools. Elsewhere they run in-process,
+        // so the route and token never reach the CLI's arguments.
+        ...(req.roomTools
+          ? {
+              mcpServers: {
+                atelier: claudeRoomToolsServer(
+                  loopbackCaller(req.roomTools),
+                  req.scribe === true ? scribeTools : documentTools
+                ),
+              },
+            }
+          : {}),
+        ...sessionOptions(req),
       };
 
 // Drives the user's own `claude` CLI through the Agent SDK, so their login,
@@ -438,9 +467,12 @@ export const claudeHarness = (opts: {
     };
     let accepting = req.independentReview !== true;
     if (req.independentReview !== true) {
-      input.setEditsEnabled = (on) => {
-        editsEnabled = on;
-      };
+      // A scribe never edits files, whatever the switch does mid-turn.
+      if (req.scribe !== true) {
+        input.setEditsEnabled = (on) => {
+          editsEnabled = on;
+        };
+      }
       // Sent as typed, with priority 'next': it joins the running turn at the
       // next tool result. 'now' would end the turn instead.
       input.steer = async (text) => {
@@ -473,13 +505,25 @@ export const claudeHarness = (opts: {
       }
     );
 
+    const hasRoomTools =
+      req.independentReview !== true && req.roomTools !== undefined;
+
     const canUseTool: CanUseTool = async (
       toolName,
       toolInput,
       { toolUseID }
     ) => {
       if (toolName === "AskUserQuestion") {
+        // A scribe turn must not sit waiting on a card.
+        if (req.scribe === true) {
+          return deny(
+            "The scribe works without asking questions: decide, and keep open questions in the document."
+          );
+        }
         return await askRoom(toolInput, toolUseID, input.onQuestion);
+      }
+      if (hasRoomTools && toolName.startsWith(ROOM_TOOL_PREFIX)) {
+        return { behavior: "allow", updatedInput: toolInput };
       }
       if (EDIT_TOOLS.has(toolName)) {
         if (!editsEnabled) {

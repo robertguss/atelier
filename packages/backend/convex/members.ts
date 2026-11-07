@@ -5,6 +5,7 @@ import { mutation, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { NOTICE_VERSION, requireMember, requireOwner } from "./lib/auth";
 import { cancelMessage } from "./lib/dispatch";
+import { releaseLeasesOf } from "./lib/document";
 import { record } from "./lib/ledger";
 
 export const list = query({
@@ -110,8 +111,9 @@ export const remove = mutation({
     }
     await ctx.db.patch(memberId, { removedAt: Date.now() });
     // Whatever the removed person left waiting for an agent is never delivered,
-    // including a steer the runner has not yet answered: a late rejection would
-    // otherwise put it back in the queue.
+    // including the thread deliveries of their comments' @mentions, and a
+    // steer the runner has not yet answered: a late rejection would otherwise
+    // put it back in the queue.
     const roomMessages = await ctx.db
       .query("messages")
       .withIndex("by_room", (q) => q.eq("roomId", member.roomId))
@@ -125,6 +127,8 @@ export const remove = mutation({
       // oxlint-disable-next-line eslint/no-await-in-loop -- cancellations are recorded in the ledger in send order
       await cancelWaiting(ctx, m, owner._id);
     }
+    // Any block they were editing is free for others at once.
+    await releaseLeasesOf(ctx, member.roomId, member.participantId);
     await record(ctx, {
       actorParticipantId: owner._id,
       payload: { participantId: member.participantId },

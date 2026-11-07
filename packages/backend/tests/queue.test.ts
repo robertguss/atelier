@@ -17,6 +17,7 @@ import { api, internal } from "../convex/_generated/api";
 import type { Doc, Id, TableNames } from "../convex/_generated/dataModel";
 import { PANE_PAGE } from "../convex/agent";
 import schema from "../convex/schema";
+import { defined, rejectionsOf } from "./support";
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
@@ -183,6 +184,31 @@ const removeTheMember = async (owner: Caller, roomId: Id<"rooms">) => {
   const member = members.find((m) => m.role === "member");
   assert(member, "the room has a member");
   await owner.mutation(api.members.remove, { memberId: member._id });
+};
+
+// A comment on the first heading ("What's happened") that may @mention agents.
+const commentOnHeading = async (
+  t: T,
+  caller: Caller,
+  roomId: Id<"rooms">,
+  body: string
+) => {
+  const heading = defined(
+    defined(await caller.query(api.documents.get, { roomId })).blocks[0]
+  );
+  return (await caller.mutation(api.threads.create, {
+    blockId: heading._id,
+    body,
+    end: 4,
+    start: 0,
+  })) as Id<"threads">;
+};
+
+const mentionDelivery = async (t: T) => {
+  const messages = await t.run(
+    async (ctx) => await ctx.db.query("messages").collect()
+  );
+  return defined(messages.find((m) => m.threadId));
 };
 
 describe("the agent message queue", () => {
@@ -1296,5 +1322,227 @@ describe("the agent message queue", () => {
       hasOlder: all.hasOlder,
       turnIds: all.turns.map((x) => x.id),
     }).toStrictEqual({ hasOlder: false, turnIds: [oldRunning, ...done] });
+  });
+
+  it("a mention of an agent running another turn waits, is never steered in or batched with chat, and then runs alone", async () => {
+    const { t, owner, dana, roomId, pi } = await setup();
+    const first = defined(
+      await owner.mutation(api.messages.send, {
+        body: "Draft the plan",
+        roomId,
+        toParticipantId: pi._id,
+      })
+    );
+    const { commandId } = await startTurn(t, first);
+    await dana.mutation(api.messages.send, {
+      body: "CHAT-BEFORE",
+      roomId,
+      toParticipantId: pi._id,
+    });
+    vi.advanceTimersByTime(1000);
+    const threadId = await commentOnHeading(
+      t,
+      owner,
+      roomId,
+      "@Pi MENTION-BODY"
+    );
+    vi.advanceTimersByTime(1000);
+    await dana.mutation(api.messages.send, {
+      body: "CHAT-AFTER",
+      roomId,
+      toParticipantId: pi._id,
+    });
+
+    const delivery = await mentionDelivery(t);
+    const awaited8 = await allCommands(t);
+    const steerRefusal = await rejectionsOf([
+      async () =>
+        await owner.mutation(api.agent.steer, { messageId: delivery._id }),
+    ]);
+    const waiting = {
+      delivery: delivery.delivery,
+      steerCommands: awaited8.filter((c) => c.type === "steer").length,
+      steerRefusal: steerRefusal.map((message) => /own turn/u.test(message)),
+    };
+
+    await finishTurn(t, first, commandId);
+    let turns = await ordinaryTurns(t, pi._id);
+    const chatTurn = defined(turns[1]);
+    const batched = {
+      prompt: ["CHAT-BEFORE", "MENTION-BODY", "CHAT-AFTER"].map((fragment) =>
+        chatTurn.prompt.includes(fragment)
+      ),
+      threadId: chatTurn.threadId,
+      turns: turns.length,
+    };
+
+    const second = await startTurn(t, chatTurn._id);
+    await finishTurn(t, chatTurn._id, second.commandId);
+    turns = await ordinaryTurns(t, pi._id);
+    const mentionTurn = defined(turns[2]);
+    const alone = {
+      mentionsBody: mentionTurn.prompt.includes("MENTION-BODY"),
+      mentionsChat: mentionTurn.prompt.includes("CHAT-"),
+      threadId: mentionTurn.threadId,
+      turns: turns.length,
+    };
+
+    // A chat message sent with steer while the mention turn runs waits for it instead.
+    const third = await startTurn(t, mentionTurn._id);
+    const steerAttempt = await dana.mutation(api.messages.send, {
+      body: "STEER-ATTEMPT",
+      roomId,
+      steer: true,
+      toParticipantId: pi._id,
+    });
+    const awaited7 = await allCommands(t);
+    const awaited6 = await messageWithBody(t, "STEER-ATTEMPT");
+    const steered = {
+      attempt: steerAttempt,
+      delivery: awaited6.delivery,
+      steerCommands: awaited7.filter((c) => c.type === "steer").length,
+    };
+
+    await finishTurn(
+      t,
+      mentionTurn._id,
+      third.commandId,
+      "Reply in the thread"
+    );
+    turns = await ordinaryTurns(t, pi._id);
+    const last = defined(turns[3]);
+    expect({
+      alone,
+      batched,
+      last: {
+        prompt: ["CHAT-AFTER", "STEER-ATTEMPT"].map((fragment) =>
+          last.prompt.includes(fragment)
+        ),
+        threadId: last.threadId,
+        turns: turns.length,
+      },
+      steered,
+      waiting,
+    }).toStrictEqual({
+      alone: {
+        mentionsBody: true,
+        mentionsChat: false,
+        threadId,
+        turns: 3,
+      },
+      batched: {
+        prompt: [true, false, false],
+        threadId: undefined,
+        turns: 2,
+      },
+      last: { prompt: [true, true], threadId: undefined, turns: 4 },
+      steered: { attempt: null, delivery: "queued", steerCommands: 0 },
+      waiting: { delivery: "queued", steerCommands: 0, steerRefusal: [true] },
+    });
+  });
+
+  it("a mention of an agent waiting on its question card leaves the card open and unanswered, and runs after the turn ends", async () => {
+    const { t, owner, dana, roomId, pi } = await setup();
+    const first = defined(
+      await owner.mutation(api.messages.send, {
+        body: "Ask me",
+        roomId,
+        toParticipantId: pi._id,
+      })
+    );
+    const { commandId } = await startTurn(t, first);
+    const handId = await t.mutation(api.runner.raiseHand, {
+      questions: [
+        {
+          allowFreeText: true,
+          header: "Which",
+          id: "which",
+          multiSelect: false,
+          options: [{ label: "A" }, { label: "B" }],
+          text: "Which?",
+        },
+      ],
+      requestId: "req-1",
+      secret: SECRET,
+      turnId: first,
+    });
+
+    const threadId = await commentOnHeading(
+      t,
+      dana,
+      roomId,
+      "@Pi A, obviously"
+    );
+    const hand = defined(await t.run(async (ctx) => await ctx.db.get(handId)));
+    const waiter = defined(await t.run(async (ctx) => await ctx.db.get(first)));
+    const awaited5 = await allCommands(t);
+    const awaited4 = await mentionDelivery(t);
+    const turnsWhileWaiting = await ordinaryTurns(t, pi._id);
+
+    await finishTurn(t, first, commandId);
+    const turns = await ordinaryTurns(t, pi._id);
+    expect({
+      answerCommands: awaited5.filter((c) => c.type === "answer").length,
+      cardStatus: hand.status,
+      delivery: awaited4.delivery,
+      mentionThread: turns[1]?.threadId,
+      turns: [turnsWhileWaiting.length, turns.length],
+      waitingOn: waiter.waitingOnHandId,
+    }).toStrictEqual({
+      answerCommands: 0,
+      cardStatus: "raised",
+      delivery: "queued",
+      mentionThread: threadId,
+      turns: [1, 2],
+      waitingOn: handId,
+    });
+  });
+
+  it("the lease cron on a silent runner cancels waiting chat but keeps a thread mention, which runs once a heartbeat brings the runner back", async () => {
+    const { t, owner, dana, roomId, pi } = await setup();
+    const first = defined(
+      await owner.mutation(api.messages.send, {
+        body: "Start",
+        roomId,
+        toParticipantId: pi._id,
+      })
+    );
+    await startTurn(t, first);
+    await dana.mutation(api.messages.send, {
+      body: "STRANDED-CHAT",
+      roomId,
+      toParticipantId: pi._id,
+    });
+    const threadId = await commentOnHeading(
+      t,
+      dana,
+      roomId,
+      "@Pi please look at this"
+    );
+
+    vi.advanceTimersByTime(6 * 60_000);
+    await t.mutation(internal.runner.reclaimExpiredLeases, {});
+    const awaited3 = await messageWithBody(t, "STRANDED-CHAT");
+    const awaited2 = await mentionDelivery(t);
+    const turnsWhileOffline = await ordinaryTurns(t, pi._id);
+
+    await heartbeat(t);
+    const turns = await ordinaryTurns(t, pi._id);
+    const awaited = await runTurnCommand(t, defined(turns[1])._id);
+    expect({
+      chat: awaited3.delivery,
+      command: awaited.status,
+      mention: awaited2.delivery,
+      mentionThread: turns[1]?.threadId,
+      mentionTurnSawChat: defined(turns[1]).prompt.includes("STRANDED-CHAT"),
+      turns: [turnsWhileOffline.length, turns.length],
+    }).toStrictEqual({
+      chat: "cancelled",
+      command: "pending",
+      mention: "queued",
+      mentionThread: threadId,
+      mentionTurnSawChat: false,
+      turns: [1, 2],
+    });
   });
 });

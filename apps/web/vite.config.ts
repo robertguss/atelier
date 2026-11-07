@@ -28,5 +28,7 @@ export default defineConfig({
     environment: "jsdom",
     include: ["src/**/*.test.{ts,tsx}"],
     setupFiles: ["./src/test/setup.ts"],
+    // The jsdom suites slow down when every workspace tests at once; the 5 s default failed them then.
+    testTimeout: 15_000,
   },
 });

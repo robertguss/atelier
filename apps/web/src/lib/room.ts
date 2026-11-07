@@ -215,20 +215,118 @@ export const useStickToBottom = <
   return { contentRef, scrollRef };
 };
 
-const lastTargetKey = (roomId: string) => `atelier:last-target:${roomId}`;
-
-export const readLastTarget = (roomId: string): string | null => {
+const readStored = (key: string): string | null => {
   try {
-    return window.localStorage.getItem(lastTargetKey(roomId));
+    return window.localStorage.getItem(key);
   } catch {
     return null;
   }
 };
 
-export const writeLastTarget = (roomId: string, participantId: string) => {
+const writeStored = (key: string, value: string) => {
   try {
-    window.localStorage.setItem(lastTargetKey(roomId), participantId);
+    window.localStorage.setItem(key, value);
   } catch {
     // Storage can be unavailable (private windows); the default still applies.
   }
+};
+
+const lastTargetKey = (roomId: string) => `atelier:last-target:${roomId}`;
+
+export const readLastTarget = (roomId: string): string | null =>
+  readStored(lastTargetKey(roomId));
+
+export const writeLastTarget = (roomId: string, participantId: string) => {
+  writeStored(lastTargetKey(roomId), participantId);
+};
+
+/** Which side panels are expanded beside the document. */
+export interface SidePanels {
+  agent: boolean;
+  team: boolean;
+}
+
+// A room opened for the first time shows the agents and keeps team chat folded away.
+const FIRST_VISIT_PANELS: SidePanels = { agent: true, team: false };
+const panelsKey = (roomId: string) => `atelier:panels:${roomId}`;
+
+const storedFlag = (value: unknown, key: keyof SidePanels) => {
+  if (typeof value !== "object" || value === null) {
+    return FIRST_VISIT_PANELS[key];
+  }
+  const flag: unknown = Reflect.get(value, key);
+  return typeof flag === "boolean" ? flag : FIRST_VISIT_PANELS[key];
+};
+
+export const readPanels = (roomId: string): SidePanels => {
+  const stored = readStored(panelsKey(roomId));
+  if (stored === null || stored === "") {
+    return FIRST_VISIT_PANELS;
+  }
+  try {
+    const parsed: unknown = JSON.parse(stored);
+    return {
+      agent: storedFlag(parsed, "agent"),
+      team: storedFlag(parsed, "team"),
+    };
+  } catch {
+    return FIRST_VISIT_PANELS;
+  }
+};
+
+export const writePanels = (roomId: string, panels: SidePanels) => {
+  writeStored(panelsKey(roomId), JSON.stringify(panels));
+};
+
+// How many team messages this browser has shown, so a folded team chat can
+// count the rest as unread.
+const teamSeenKey = (roomId: string) => `atelier:team-seen:${roomId}`;
+
+const readTeamSeen = (roomId: string): number =>
+  Number(readStored(teamSeenKey(roomId))) || 0;
+
+const writeTeamSeen = (roomId: string, count: number) => {
+  writeStored(teamSeenKey(roomId), String(count));
+};
+
+/**
+ * How many team messages this browser has shown. While the team chat is on
+ * screen every message counts as shown; otherwise the last count it saved.
+ */
+export const useTeamSeen = (
+  roomId: string,
+  teamCount: number | undefined,
+  visible: boolean
+) => {
+  const [seen, setSeen] = useState(() => readTeamSeen(roomId));
+  if (visible && teamCount !== undefined && teamCount !== seen) {
+    setSeen(teamCount);
+  }
+  useEffect(() => {
+    if (visible && teamCount !== undefined) {
+      writeTeamSeen(roomId, teamCount);
+    }
+  }, [roomId, visible, teamCount]);
+  return seen;
+};
+
+/** Team messages after the first `seen`, leaving out the person's own. */
+export const unreadTeamCount = (
+  messages: readonly { authorParticipantId: string }[],
+  seen: number,
+  meId: string | null
+) => messages.slice(seen).filter((m) => m.authorParticipantId !== meId).length;
+
+/** What a folded agent pane flags: open question cards first, then agents at work. */
+export const agentAttention = (pane: Pane): string | null => {
+  const questions = pane.cards.filter((c) => c.status === "raised").length;
+  if (questions) {
+    return questions === 1 ? "1 question" : `${questions} questions`;
+  }
+  if (
+    pane.agents.some((a) => a.status === "running" || a.status === "starting")
+  ) {
+    return "Working";
+  }
+  return null;
 };

@@ -11,6 +11,7 @@ import {
   requireMember,
   requireOwner,
 } from "./lib/auth";
+import { DEFAULT_TEMPLATE, ownTemplate, seedDocument } from "./lib/document";
 import { record } from "./lib/ledger";
 import { agentName } from "./lib/prompt";
 
@@ -106,16 +107,23 @@ export const get = query({
 });
 
 // Step 2: a room starts with the owner and a Claude Code participant.
-// Codex and Pi join in step 3.
+// Codex and Pi join in step 3. Its document is seeded from the chosen
+// template, or Atelier's default when none is chosen.
 export const create = mutation({
-  args: { cwd: v.string(), name: v.string(), runnerId: v.id("runners") },
-  handler: async (ctx, { name, runnerId, cwd }) => {
+  args: {
+    cwd: v.string(),
+    name: v.string(),
+    runnerId: v.id("runners"),
+    templateId: v.optional(v.id("templates")),
+  },
+  handler: async (ctx, { name, runnerId, cwd, templateId }) => {
     const owner = await requireOwner(ctx);
     const user = await ensureUser(ctx);
     const runner = await ctx.db.get(runnerId);
     if (!runner) {
       throw new Error("Unknown runner");
     }
+    const template = templateId ? await ownTemplate(ctx, templateId) : null;
 
     const roomId = await ctx.db.insert("rooms", {
       cwd: cwd.trim(),
@@ -170,6 +178,12 @@ export const create = mutation({
       type: "participant.joined",
     });
 
+    await seedDocument(
+      ctx,
+      roomId,
+      template?.sections ?? DEFAULT_TEMPLATE,
+      template?._id
+    );
     return roomId;
   },
 });
@@ -248,6 +262,7 @@ const sendEditsChange = async (
 // get the new value as a settings command. Codex and Pi fix their
 // permissions when a turn starts, so turning edits off also interrupts those
 // that started with edits on; one that started with edits off never had them.
+// Reviews and scribe turns never edit files, so they get no settings change.
 export const setEditsEnabled = mutation({
   args: { on: v.boolean(), roomId: v.id("rooms") },
   handler: async (ctx, { roomId, on }) => {
@@ -273,7 +288,9 @@ export const setEditsEnabled = mutation({
       .query("turns")
       .withIndex("by_room", (q) => q.eq("roomId", roomId))
       .collect();
-    const running = turns.filter((t) => t.status === "running" && !t.ritualId);
+    const running = turns.filter(
+      (t) => t.status === "running" && !t.ritualId && !t.scribeRunId
+    );
     for (const turn of running) {
       // oxlint-disable-next-line eslint/no-await-in-loop -- commands are inserted in turn order, settings before interrupt, and the runner claims pending commands in that order
       await sendEditsChange(ctx, room, turn, on);

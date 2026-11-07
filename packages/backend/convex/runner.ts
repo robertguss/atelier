@@ -3,17 +3,23 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
-import { hasActiveTeammate, requireRunnerSecret } from "./lib/auth";
+import { requireRunnerSecret } from "./lib/auth";
 import { closeOpenCards, expireUnanswered } from "./lib/cards";
 import {
   dispatchNext,
   isActiveTurnStatus,
   steerRejected,
 } from "./lib/dispatch";
+import { ensureDocument } from "./lib/document";
+import { documentDigest, withDigest } from "./lib/documentDigest";
 import { record } from "./lib/ledger";
+import { required } from "./lib/required";
 import { reviewFinished } from "./lib/review";
+import { commitScribe, releaseScribe } from "./lib/scribe";
 import { sessionResetAfter } from "./lib/sessions";
+import { postComment } from "./lib/threads";
 import { setStreamedText } from "./lib/turnActivity";
+import { documentMode } from "./lib/visibility";
 import { cardQuestion, harnessId } from "./schema";
 
 // Functions the runner calls. Each takes the runner secret instead of a Clerk
@@ -23,45 +29,73 @@ const LEASE_MS = 5 * 60_000;
 const LEASE_RENEW_AFTER_MS = 30_000;
 const SUMMARY_MAX = 200;
 
-const followUpSession = (
-  ritual: Doc<"rituals">,
-  participantId: Id<"participants">
+// The document rev a session has seen: the rev the turn was shown when it
+// finished. Without one, a session already stored keeps its own, and a
+// different session has seen no rev yet.
+const revSeenBy = (
+  stored: { sessionId?: string; documentRevSeen?: number },
+  sessionId: string,
+  documentRevSeen?: number
 ) =>
-  ritual.followUpSessions?.find((s) => s.participantId === participantId)
-    ?.sessionId;
+  documentRevSeen ??
+  (stored.sessionId === sessionId ? stored.documentRevSeen : undefined);
 
 const saveFollowUpSession = async (
   ctx: MutationCtx,
   ritualId: Id<"rituals">,
   participantId: Id<"participants">,
-  sessionId: string
+  sessionId: string,
+  documentRevSeen?: number
 ) => {
   const ritual = await ctx.db.get(ritualId);
   if (!ritual) {
     return;
   }
-  const others = (ritual.followUpSessions ?? []).filter(
-    (s) => s.participantId !== participantId
-  );
+  const sessions = ritual.followUpSessions ?? [];
+  const stored = sessions.find((s) => s.participantId === participantId) ?? {};
+  const others = sessions.filter((s) => s.participantId !== participantId);
+  const rev = revSeenBy(stored, sessionId, documentRevSeen);
   await ctx.db.patch(ritualId, {
-    followUpSessions: [...others, { participantId, sessionId }],
+    followUpSessions: [
+      ...others,
+      {
+        participantId,
+        sessionId,
+        ...(rev === undefined ? {} : { documentRevSeen: rev }),
+      },
+    ],
   });
 };
 
+// Saves the session a turn ran on, with the document rev the turn was shown
+// when it finished.
 const saveSession = async (
   ctx: MutationCtx,
   turn: Doc<"turns">,
-  sessionId: string
+  sessionId: string,
+  documentRevSeen?: number
 ) => {
   if (turn.followUp?.separateSession === true) {
     await saveFollowUpSession(
       ctx,
       turn.followUp.ritualId,
       turn.participantId,
-      sessionId
+      sessionId,
+      documentRevSeen
     );
   } else if (!(await sessionResetAfter(ctx, turn))) {
-    await ctx.db.patch(turn.participantId, { harnessSessionId: sessionId });
+    const participant = await ctx.db.get(turn.participantId);
+    await ctx.db.patch(turn.participantId, {
+      documentRevSeen: revSeenBy(
+        {
+          documentRevSeen: participant?.documentRevSeen,
+          sessionId: participant?.harnessSessionId,
+        },
+        sessionId,
+        documentRevSeen
+      ),
+      harnessSessionId: sessionId,
+    });
   }
 };
 
@@ -104,7 +138,9 @@ const abandonControlCommands = async (
   );
 };
 
-const failTurn = async (
+// Also releases a scribe run the turn was acting for, leaving the document
+// as it was before the run.
+export const failTurn = async (
   ctx: MutationCtx,
   turnId: Id<"turns">,
   commandId: Id<"commands">,
@@ -141,6 +177,9 @@ const failTurn = async (
     runnerLost ? "expired" : "cancelled",
     error
   );
+  if (turn.scribeRunId) {
+    await releaseScribe(ctx, turn.scribeRunId, "released", error);
+  }
   await ctx.db.patch(turnId, {
     endedAt: Date.now(),
     error,
@@ -246,6 +285,69 @@ export const pendingCommands = query({
   },
 });
 
+// The session a claimed turn resumes. A review or a scribe turn never resumes
+// one. A follow-up never continues the ordinary session, even alone with the
+// owner: that session could later write review content into the document a
+// teammate reads. It runs on a session kept on its review, fixed here so
+// finish saves to it.
+const claimSession = async (
+  ctx: MutationCtx,
+  turn: Doc<"turns">,
+  participant: Doc<"participants">
+): Promise<{ sessionId?: string; documentRevSeen?: number }> => {
+  if (turn.followUp && !turn.ritualId) {
+    await ctx.db.patch(turn._id, {
+      followUp: { ...turn.followUp, separateSession: true },
+    });
+    const ritual = await ctx.db.get(turn.followUp.ritualId);
+    return (
+      ritual?.followUpSessions?.find(
+        (s) => s.participantId === participant._id
+      ) ?? {}
+    );
+  }
+  if (!turn.ritualId && !turn.scribeRunId) {
+    return {
+      documentRevSeen: participant.documentRevSeen,
+      sessionId: participant.harnessSessionId,
+    };
+  }
+  return {};
+};
+
+// The prompt a claimed turn runs with: the document as it is now, not as it
+// was at dispatch. A resumed session is shown what changed since the rev it
+// has seen; any other session is shown the whole document. Reviews are shown
+// nothing.
+const claimPrompt = async (
+  ctx: MutationCtx,
+  turn: Doc<"turns">,
+  participant: Doc<"participants">,
+  room: Doc<"rooms">,
+  session: { sessionId?: string; documentRevSeen?: number }
+) => {
+  const mode = documentMode(turn);
+  if (mode === "none") {
+    return { mode, prompt: turn.prompt };
+  }
+  const document = required(
+    await ctx.db.get(await ensureDocument(ctx, room._id)),
+    "document"
+  );
+  const seenRev =
+    session.sessionId === undefined ? undefined : session.documentRevSeen;
+  const prompt = withDigest(
+    turn.prompt,
+    await documentDigest(ctx, document, {
+      mode,
+      participantId: participant._id,
+      seenRev,
+    })
+  );
+  await ctx.db.patch(turn._id, { documentRev: document.rev });
+  return { mode, prompt };
+};
+
 // Claim a pending command. For run_turn, returns everything the runner needs
 // for the turn. A control command (steer, answer, settings, interrupt) is for
 // a turn that is already running: it returns the payload and takes no lease,
@@ -298,30 +400,25 @@ export const claim = mutation({
     }
 
     // The turn runs with the switch as it is now, not as it was at dispatch.
-    const editsEnabled = room.editsEnabled === true;
+    // A scribe never edits files.
+    const editsEnabled = !turn.scribeRunId && room.editsEnabled === true;
     if (turn.editsEnabled !== editsEnabled) {
       await ctx.db.patch(turn._id, { editsEnabled });
     }
 
-    let sessionId = turn.ritualId ? undefined : participant.harnessSessionId;
-    if (turn.followUp && !turn.ritualId) {
-      // With a teammate in the room, a follow-up must not continue the
-      // ordinary session, or the agent would later repeat the review to them.
-      // The choice is fixed here so finish saves to the session it resumed.
-      const separateSession = await hasActiveTeammate(ctx, room._id);
-      await ctx.db.patch(turn._id, {
-        followUp: { ...turn.followUp, separateSession },
-      });
-      if (separateSession) {
-        const ritual = await ctx.db.get(turn.followUp.ritualId);
-        sessionId = ritual
-          ? followUpSession(ritual, participant._id)
-          : undefined;
-      }
-    }
+    const session = await claimSession(ctx, turn, participant);
+    const { sessionId } = session;
+    const { mode, prompt } = await claimPrompt(
+      ctx,
+      turn,
+      participant,
+      room,
+      session
+    );
 
     return {
       commandId,
+      documentMode: mode,
       participant: {
         harness: participant.harness,
         id: participant._id,
@@ -339,7 +436,7 @@ export const claim = mutation({
       turn: {
         id: turn._id,
         independentReview: !!turn.ritualId,
-        prompt: turn.prompt,
+        prompt,
         ritualId: turn.ritualId,
       },
       type: "run_turn" as const,
@@ -362,7 +459,7 @@ export const start = mutation({
       return null;
     }
     const room = await ctx.db.get(turn.roomId);
-    const editsEnabled = room?.editsEnabled === true;
+    const editsEnabled = !turn.scribeRunId && room?.editsEnabled === true;
     await ctx.db.patch(turnId, {
       editsEnabled,
       harnessVersion,
@@ -459,28 +556,48 @@ export const finish = mutation({
     if (
       args.sessionId !== undefined &&
       args.sessionId !== "" &&
-      !turn.ritualId
+      !turn.ritualId &&
+      !turn.scribeRunId
     ) {
-      await saveSession(ctx, turn, args.sessionId);
+      await saveSession(ctx, turn, args.sessionId, turn.documentRev);
+    }
+    // A scribe's draft is applied now, if its run still holds the document.
+    if (turn.scribeRunId) {
+      await commitScribe(ctx, turn);
     }
 
-    const messageId = await ctx.db.insert("messages", {
-      authorParticipantId: turn.participantId,
-      body: args.finalText,
-      followUpRitualId: turn.followUp?.ritualId,
-      ritualId: turn.ritualId,
-      roomId: turn.roomId,
-      turnId: args.turnId,
-      visibility: turn.ritualId ? "sealed" : "room",
-    });
-    await reviewFinished(ctx, turn);
+    // A turn answering a thread mention replies in the thread, not the chat.
     const participant = await ctx.db.get(turn.participantId);
+    const thread = turn.threadId ? await ctx.db.get(turn.threadId) : null;
+    const posted =
+      thread && participant
+        ? {
+            commentId: await postComment(
+              ctx,
+              thread,
+              participant,
+              args.finalText,
+              args.turnId
+            ),
+          }
+        : {
+            messageId: await ctx.db.insert("messages", {
+              authorParticipantId: turn.participantId,
+              body: args.finalText,
+              followUpRitualId: turn.followUp?.ritualId,
+              ritualId: turn.ritualId,
+              roomId: turn.roomId,
+              turnId: args.turnId,
+              visibility: turn.ritualId ? "sealed" : "room",
+            }),
+          };
+    await reviewFinished(ctx, turn);
     await record(ctx, {
       actorParticipantId: turn.participantId,
       harnessVersion: turn.harnessVersion,
       model: args.model,
       payload: {
-        messageId,
+        ...posted,
         transcriptRef: args.transcriptRef,
         usage: args.usage,
       },
@@ -671,14 +788,19 @@ export const steerResult = mutation({
 
 // Saves the harness session id as soon as the runner sees it, so a turn
 // interrupted before it finishes can still be resumed. Follows the same rules
-// as finish: reviews never save a session, and a follow-up in a shared room
-// saves to its review.
+// as finish: reviews and scribe turns never save a session, and a follow-up
+// saves to its review. Only finish records the document rev the session has seen.
 export const sessionStarted = mutation({
   args: { secret: v.string(), sessionId: v.string(), turnId: v.id("turns") },
   handler: async (ctx, { secret, turnId, sessionId }) => {
     requireRunnerSecret(secret);
     const turn = await ctx.db.get(turnId);
-    if (!turn || turn.ritualId || !isActiveTurnStatus(turn.status)) {
+    if (
+      !turn ||
+      turn.ritualId ||
+      turn.scribeRunId ||
+      !isActiveTurnStatus(turn.status)
+    ) {
       return;
     }
     await saveSession(ctx, turn, sessionId);

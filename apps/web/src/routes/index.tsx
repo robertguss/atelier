@@ -2,7 +2,7 @@ import { api } from "@atelier/backend/api";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { ChevronRightIcon } from "lucide-react";
+import { ChevronRightIcon, PlusIcon } from "lucide-react";
 
 import { useSignOut, useSignedInEmail } from "~/auth/ClerkShell";
 import { PageSpinner, SignedInOnly } from "~/components/page";
@@ -16,7 +16,7 @@ import {
 
 type Rooms = FunctionReturnType<typeof api.rooms.list>;
 
-const roomListContent = (rooms: Rooms | undefined) => {
+const roomListContent = (rooms: Rooms | undefined, isOwner: boolean) => {
   if (rooms === undefined) {
     return <PageSpinner />;
   }
@@ -26,8 +26,9 @@ const roomListContent = (rooms: Rooms | undefined) => {
         <EmptyHeader>
           <EmptyTitle>No rooms yet</EmptyTitle>
           <EmptyDescription>
-            When Robert invites you to a room, open the invite link he sends
-            you.
+            {isOwner
+              ? "Create a room to start working with your agents."
+              : "When Robert invites you to a room, open the invite link he sends you."}
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -60,6 +61,8 @@ const logSignOutFailure = (error: unknown) => {
 
 const RoomList = () => {
   const rooms = useQuery(api.rooms.list, {});
+  const me = useQuery(api.me.get, {});
+  const isOwner = me?.signedIn === true && me.isOwner;
   const email = useSignedInEmail();
   const signOut = useSignOut();
 
@@ -80,7 +83,18 @@ const RoomList = () => {
           </Button>
         </div>
       </header>
-      {roomListContent(rooms)}
+      {isOwner ? (
+        <div className="flex gap-2 pb-2">
+          <Button size="sm" render={<Link to="/rooms/new" />}>
+            <PlusIcon />
+            New room
+          </Button>
+          <Button size="sm" variant="ghost" render={<Link to="/templates" />}>
+            Templates
+          </Button>
+        </div>
+      ) : null}
+      {roomListContent(rooms, isOwner)}
     </div>
   );
 };

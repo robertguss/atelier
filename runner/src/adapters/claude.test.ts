@@ -17,7 +17,7 @@ import type {
   SteerOutcome,
   TurnInput,
 } from "@atelier/shared";
-import { assert, describe, expect, it } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 
 import { claudeHarness } from "./claude.ts";
 import { turnInput } from "./events.ts";
@@ -82,6 +82,29 @@ const at = (value: unknown, ...keys: string[]): unknown => {
 const everyId = (ids: string[], expected: unknown) =>
   Object.fromEntries(ids.map((id) => [id, expected]));
 
+const roomTools = {
+  token: "ROOM-TOKEN-SECRET",
+  url: "http://127.0.0.1:40123/mcp",
+};
+
+// The names of the Atelier tools the SDK declared in its initialize request.
+const atelierToolNames = (calls: Record<string, unknown>[]) => {
+  const initialize = calls.find(
+    (c) =>
+      c.type === "control_request" &&
+      at(c, "request", "subtype") === "initialize"
+  );
+  const tools = at(
+    initialize,
+    "request",
+    "sdkMcpServerManifests",
+    "atelier",
+    "toolsListResult",
+    "tools"
+  );
+  return Array.isArray(tools) ? tools.map((tool) => at(tool, "name")) : [];
+};
+
 const init = { emit: { subtype: "init", type: "system", uuid: "i1" } };
 const result = (text: string) => ({
   emit: {
@@ -112,6 +135,9 @@ const permission = (id: string, tool_name: string, input: unknown) => ({
 interface Options {
   editsEnabled?: boolean;
   independentReview?: boolean;
+  scribe?: boolean;
+  resumeSessionId?: string;
+  roomTools?: { url: string; token: string };
   cancelled?: boolean;
   onQuestion?: (card: QuestionCard) => Promise<QuestionAnswer>;
   onEvent?: (ev: HarnessEvent, input: TurnInput, cwd: string) => void;
@@ -142,6 +168,11 @@ const runFake = async (steps: unknown[], opts: Options = {}) => {
         independentReview: opts.independentReview,
         mcpServers: [],
         prompt: "Plan the launch",
+        ...(opts.scribe === true ? { scribe: true } : {}),
+        ...(opts.resumeSessionId === undefined
+          ? {}
+          : { resumeSessionId: opts.resumeSessionId }),
+        ...(opts.roomTools === undefined ? {} : { roomTools: opts.roomTools }),
         turnId: "test",
       },
       new AbortController().signal,
@@ -636,7 +667,7 @@ describe(claudeHarness, () => {
     });
   });
 
-  it("independent review options are unchanged", async () => {
+  it("independent review options are unchanged, with no Atelier server even if a route is passed", async () => {
     let steered: SteerOutcome | undefined;
     const { calls } = await runFake([init, result("review")], {
       independentReview: true,
@@ -648,6 +679,7 @@ describe(claudeHarness, () => {
           });
         }
       },
+      roomTools,
     });
     expect(at(calls[0], "argv")).toStrictEqual([
       "--output-format",
@@ -687,5 +719,167 @@ describe(claudeHarness, () => {
       type: "user",
     });
     expect(steered).toBe("rejected");
+  });
+
+  it("an ordinary Claude turn gets the in-process Atelier server, with no route or token in its arguments", async () => {
+    const { calls } = await runFake([init, result("ok")], { roomTools });
+    // In-process servers are declared in initialize, not passed as --mcp-config,
+    // and without --strict-mcp-config the user's own MCP servers still load.
+    expect(at(calls[0], "argv")).toStrictEqual([
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--input-format",
+      "stream-json",
+      "--permission-prompt-tool=stdio",
+      "--allowedTools=Skill",
+      "--setting-sources=user,project,local",
+      "--permission-mode=default",
+      "--include-partial-messages",
+    ]);
+    expect(atelierToolNames(calls)).toStrictEqual([
+      "read_document",
+      "read_thread",
+      "add_block",
+      "update_block",
+      "delete_block",
+      "comment",
+    ]);
+    expect(JSON.stringify(calls)).not.toMatch(/ROOM-TOKEN-SECRET|40123/u);
+  });
+
+  it("canUseTool allows the Atelier document tools and still denies other unapproved tools", async () => {
+    const { decision } = await runFake(
+      [
+        init,
+        permission("doc", "mcp__atelier__add_block", {
+          kind: "paragraph",
+          text: "We chose blue.",
+        }),
+        permission("other", "mcp__elsewhere__post", { a: 1 }),
+        permission("lookalike", "mcp__atelier_evil__post", { a: 1 }),
+        permission("bash", "Bash", { command: "rm -rf build" }),
+        result("ok"),
+      ],
+      { roomTools }
+    );
+    expect(at(decision("doc"), "behavior")).toBe("allow");
+    expect(at(decision("doc"), "updatedInput")).toStrictEqual({
+      kind: "paragraph",
+      text: "We chose blue.",
+    });
+    expect(
+      Object.fromEntries(
+        ["other", "lookalike", "bash"].map((id) => [
+          id,
+          at(decision(id), "behavior"),
+        ])
+      )
+    ).toStrictEqual(everyId(["other", "lookalike", "bash"], "deny"));
+  });
+
+  it("a Claude document tool call shows up as a turn item with the tool name and no token", async () => {
+    const { events } = await runFake(
+      [
+        init,
+        toolUse("doc-1", "mcp__atelier__add_block", {
+          kind: "paragraph",
+          text: "We chose blue.",
+        }),
+        {
+          emit: {
+            message: {
+              content: [
+                {
+                  content: "Added block b1 at rev 1.",
+                  tool_use_id: "doc-1",
+                  type: "tool_result",
+                },
+              ],
+              role: "user",
+            },
+            parent_tool_use_id: null,
+            type: "user",
+            uuid: "u1",
+          },
+        },
+        result("ok"),
+      ],
+      { roomTools }
+    );
+    expect(
+      events.filter((e) => e.type === "tool_call" || e.type === "tool_result")
+    ).toStrictEqual([
+      {
+        id: "doc-1",
+        name: "mcp__atelier__add_block",
+        summary: "",
+        type: "tool_call",
+      },
+      { id: "doc-1", ok: true, type: "tool_result" },
+    ]);
+    expect(JSON.stringify(events)).not.toMatch(/ROOM-TOKEN-SECRET/u);
+  });
+
+  it("a Claude scribe turn starts a fresh session it never saves, gets the scribe tools, and has its question cards denied", async () => {
+    const onQuestion = vi.fn<(card: QuestionCard) => Promise<QuestionAnswer>>();
+    const questions = [
+      {
+        header: "Merge",
+        multiSelect: false,
+        options: [
+          { description: "", label: "Yes" },
+          { description: "", label: "No" },
+        ],
+        question: "Merge these?",
+      },
+    ];
+    const { calls, decision } = await runFake(
+      [
+        init,
+        permission("ask1", "AskUserQuestion", { questions }),
+        permission("w1", "Write", { content: "x", file_path: "plan.md" }),
+        result("ok"),
+      ],
+      {
+        editsEnabled: false,
+        onQuestion,
+        resumeSessionId: "ordinary-session",
+        roomTools,
+        scribe: true,
+      }
+    );
+    const argv = at(calls[0], "argv");
+    expect({
+      argvKeepsOrdinarySession: /ordinary-session|--resume/u.test(
+        JSON.stringify(argv)
+      ),
+      asked: onQuestion.mock.calls.length > 0,
+      persistence: Array.isArray(argv)
+        ? argv.includes("--no-session-persistence")
+        : undefined,
+      questionDecision: [
+        at(decision("ask1"), "behavior"),
+        String(at(decision("ask1"), "message")).includes(
+          "without asking questions"
+        ),
+      ],
+      tools: atelierToolNames(calls),
+      writeDecision: at(decision("w1"), "behavior"),
+    }).toStrictEqual({
+      argvKeepsOrdinarySession: false,
+      asked: false,
+      persistence: true,
+      questionDecision: ["deny", true],
+      tools: [
+        "read_document",
+        "draft_keep",
+        "draft_replace",
+        "draft_add",
+        "draft_remove",
+        "draft_move",
+      ],
+      writeDecision: "deny",
+    });
   });
 });

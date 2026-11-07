@@ -20,11 +20,13 @@ import { turnInput } from "./events.ts";
 // - `steps`: run after `turn/start` is answered. `{send}` writes a message,
 //   `{response: id}` waits for the client's answer to a server request, and
 //   `{request: method}` waits for a client request.
-// Every line the client writes is appended to `calls.jsonl`.
+// Every line the client writes is appended to `calls.jsonl`, and its
+// arguments and room token go to `process.json`.
 const FAKE = `#!/usr/bin/env node
 import {createInterface} from 'node:readline';
-import {appendFileSync, readFileSync} from 'node:fs';
+import {appendFileSync, readFileSync, writeFileSync} from 'node:fs';
 const spec = JSON.parse(readFileSync('fake.json', 'utf8'));
+writeFileSync('process.json', JSON.stringify({argv: process.argv.slice(2), token: process.env.ATELIER_ROOM_TOKEN ?? null}));
 const defaults = {
   'thread/start': {result: {thread: {id: 'thread-1'}}},
   'thread/resume': {result: {thread: {id: 'thread-1'}}},
@@ -104,6 +106,12 @@ const fakeCodex = async (spec: unknown) => {
     },
     dir,
     executable,
+    async process(): Promise<{ argv: unknown; token: unknown }> {
+      const parsed: unknown = JSON.parse(
+        await readFile(path.join(dir, "process.json"), "utf-8")
+      );
+      return { argv: at(parsed, "argv"), token: at(parsed, "token") };
+    },
     [Symbol.asyncDispose]: async () => {
       await rm(dir, { force: true, recursive: true });
     },
@@ -133,6 +141,33 @@ const collect = async (
   }
   return results;
 };
+
+const roomTools = {
+  token: "ROOM-TOKEN-SECRET",
+  url: "http://127.0.0.1:40123/mcp",
+};
+const atelierConfig = {
+  "mcp_servers.atelier.bearer_token_env_var": "ATELIER_ROOM_TOKEN",
+  "mcp_servers.atelier.default_tools_approval_mode": "approve",
+  "mcp_servers.atelier.url": "http://127.0.0.1:40123/mcp",
+};
+
+// Runs one turn on a fake app-server and returns the calls it received.
+const runTurn = async (
+  fake: Awaited<ReturnType<typeof fakeCodex>>,
+  extra: Partial<TurnRequest>
+) => {
+  await collect(
+    codexHarness({ executable: fake.executable, onRaw() {} }).runTurn(
+      request(fake.dir, extra),
+      new AbortController().signal,
+      turnInput()
+    )
+  );
+  return await fake.calls();
+};
+const callOf = (calls: Record<string, unknown>[], method: string) =>
+  calls.find((c) => c.method === method);
 
 describe(codexHarness, () => {
   it("Codex review starts fresh with denied tools, disabled MCP, and never logs effective config, even a late reply", async () => {
@@ -602,5 +637,142 @@ describe(codexHarness, () => {
     } finally {
       await rm(outside, { force: true, recursive: true });
     }
+  });
+
+  describe("the Atelier room tools", () => {
+    it("an ordinary turn adds the Atelier server on thread/start, with the token only in the environment", async () => {
+      await using fake = await fakeCodex({ steps: [{ send: completed }] });
+      const calls = await runTurn(fake, { roomTools });
+      expect({
+        config: at(callOf(calls, "thread/start"), "params", "config"),
+        leaked: JSON.stringify(calls).includes("ROOM-TOKEN-SECRET"),
+        process: await fake.process(),
+      }).toStrictEqual({
+        config: atelierConfig,
+        leaked: false,
+        process: { argv: ["app-server"], token: "ROOM-TOKEN-SECRET" },
+      });
+    });
+
+    it("a resumed turn adds the Atelier server on thread/resume, with the token only in the environment", async () => {
+      await using fake = await fakeCodex({ steps: [{ send: completed }] });
+      const calls = await runTurn(fake, {
+        editsEnabled: true,
+        resumeSessionId: "thread-1",
+        roomTools,
+      });
+      const resume = callOf(calls, "thread/resume");
+      expect({
+        config: at(resume, "params", "config"),
+        leaked: JSON.stringify(calls).includes("ROOM-TOKEN-SECRET"),
+        process: await fake.process(),
+        threadId: at(resume, "params", "threadId"),
+      }).toStrictEqual({
+        config: atelierConfig,
+        leaked: false,
+        process: { argv: ["app-server"], token: "ROOM-TOKEN-SECRET" },
+        threadId: "thread-1",
+      });
+    });
+
+    it("a review gets no Atelier server or token, even if a route is passed", async () => {
+      await using fake = await fakeCodex({ steps: [{ send: completed }] });
+      const calls = await runTurn(fake, { independentReview: true, roomTools });
+      const config = at(callOf(calls, "thread/start"), "params", "config");
+      const processInfo = await fake.process();
+      expect({
+        leaked: /40123|ROOM-TOKEN-SECRET/u.test(JSON.stringify(calls)),
+        mcpKeys: Object.keys(isRecord(config) ? config : {}).filter((k) =>
+          k.startsWith("mcp_servers.")
+        ),
+        token: processInfo.token,
+      }).toStrictEqual({ leaked: false, mcpKeys: [], token: null });
+    });
+
+    it("a Codex document tool call shows up as a turn item with the tool name and no token", async () => {
+      const item = {
+        arguments: { kind: "paragraph", text: "We chose blue." },
+        id: "doc-1",
+        server: "atelier",
+        tool: "add_block",
+        type: "mcpToolCall",
+      };
+      await using fake = await fakeCodex({
+        steps: [
+          {
+            send: {
+              method: "item/started",
+              params: { item: { ...item, status: "inProgress" } },
+            },
+          },
+          {
+            send: {
+              method: "item/completed",
+              params: {
+                item: {
+                  ...item,
+                  result: {
+                    content: [
+                      { text: "Added block b1 at rev 1.", type: "text" },
+                    ],
+                  },
+                  status: "completed",
+                },
+              },
+            },
+          },
+          { send: completed },
+        ],
+      });
+      const results = await collect(
+        codexHarness({ executable: fake.executable, onRaw() {} }).runTurn(
+          request(fake.dir, { roomTools }),
+          new AbortController().signal,
+          turnInput()
+        )
+      );
+      expect(
+        results.filter(
+          (e) => e.type === "tool_call" || e.type === "tool_result"
+        )
+      ).toStrictEqual([
+        {
+          id: "doc-1",
+          name: "atelier.add_block",
+          summary: '{"kind":"paragraph","text":"We chose blue."}',
+          type: "tool_call",
+        },
+        { id: "doc-1", ok: true, type: "tool_result" },
+      ]);
+      expect(JSON.stringify(results)).not.toMatch(/ROOM-TOKEN-SECRET/u);
+    });
+
+    it("a Codex scribe turn starts a fresh, ephemeral thread with the Atelier server, never resuming the ordinary one", async () => {
+      await using fake = await fakeCodex({ steps: [{ send: completed }] });
+      await collect(
+        codexHarness({ executable: fake.executable, onRaw() {} }).runTurn(
+          request(fake.dir, {
+            resumeSessionId: "thread-ordinary",
+            roomTools,
+            scribe: true,
+          }),
+          new AbortController().signal,
+          turnInput()
+        )
+      );
+      const calls = await fake.calls();
+      const start = calls.find((c) => c.method === "thread/start");
+      expect({
+        config: at(start, "params", "config"),
+        ephemeral: at(start, "params", "ephemeral"),
+        resumed: calls.some((c) => c.method === "thread/resume"),
+        sandbox: at(start, "params", "sandbox"),
+      }).toStrictEqual({
+        config: atelierConfig,
+        ephemeral: true,
+        resumed: false,
+        sandbox: "read-only",
+      });
+    });
   });
 });

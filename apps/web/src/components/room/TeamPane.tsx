@@ -2,8 +2,9 @@ import { api } from "@atelier/backend/api";
 import type { Id } from "@atelier/backend/dataModel";
 import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { UsersIcon } from "lucide-react";
+import { PanelRightCloseIcon, UsersIcon } from "lucide-react";
 
+import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 import { formatTime, useStickToBottom } from "~/lib/room";
 import type { Names } from "~/lib/room";
@@ -44,9 +45,11 @@ const teamMessageItems = (messages: TeamMessages | undefined, names: Names) => {
 export const TeamPane = ({
   roomId,
   names,
+  onCollapse,
 }: {
   roomId: Id<"rooms">;
   names: Names;
+  onCollapse?: () => void;
 }) => {
   const messages = useQuery(api.team.list, { roomId });
   const { scrollRef, contentRef } = useStickToBottom<
@@ -62,6 +65,18 @@ export const TeamPane = ({
         <span className="text-muted-foreground text-xs">
           Agents can&apos;t see this.
         </span>
+        {onCollapse ? (
+          <Button
+            size="icon-xs"
+            variant="ghost-muted"
+            className="ml-auto"
+            aria-label="Hide team chat"
+            title="Hide team chat"
+            onClick={onCollapse}
+          >
+            <PanelRightCloseIcon />
+          </Button>
+        ) : null}
       </header>
       <div
         ref={scrollRef}

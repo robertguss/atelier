@@ -35,9 +35,10 @@ export interface Envelope {
 
 // Tags that delimit agent-facing structure. A body or name that contains one
 // is escaped so nobody can forge another author's message or the room block.
-const STRUCTURE_TAG = /<(?<slash>\/?)(?<name>message|room_context)\b/giu;
+const STRUCTURE_TAG =
+  /<(?<slash>\/?)(?<name>message|room_context|comment|room_document)\b/giu;
 
-const neutralize = (text: string) =>
+export const neutralize = (text: string) =>
   text.replaceAll(
     STRUCTURE_TAG,
     (_m, slash: string, name: string) => `&lt;${slash}${name}`
@@ -47,7 +48,7 @@ const NAME_LIMIT = 60;
 
 // The first `limit` code points of `text`, so a cut never splits a surrogate
 // pair.
-const firstCodePoints = (text: string, limit: number) => {
+export const firstCodePoints = (text: string, limit: number) => {
   let out = "";
   let count = 0;
   for (const char of text) {
@@ -86,13 +87,25 @@ const formatTime = (ms: number) =>
 export const envelope = (e: Envelope) =>
   `<message from="${attr(agentName(e.author))}" role="${e.role}" sent="${formatTime(e.sentAt)}" delivery="${e.delivery}">\n${neutralize(e.body)}\n</message>`;
 
-export const contextBlock = (c: RoomContext) => {
+// What the turn may do with the room document. File edits never gate it.
+const DOCUMENT_LINE = {
+  read: "Room document: read-only in this turn.",
+  scribe:
+    "Room document: you are its scribe in this turn, and change it only through your draft.",
+  write:
+    "Room document: you may add and update your own blocks and comment on others.",
+};
+
+export const contextBlock = (
+  c: RoomContext,
+  documentMode: keyof typeof DOCUMENT_LINE
+) => {
   const lines = [
     "<room_context>",
     `You are working in the Atelier room "${neutralize(c.roomName)}". More than one person can message you; each message is wrapped in a <message> tag naming its author.`,
     "People in this room:",
     ...c.members.map((m) => `- ${neutralize(agentName(m.name))} (${m.role})`),
-    `File edits: ${c.editsEnabled ? "on" : "off"}`,
+    `File edits: ${c.editsEnabled ? "on" : "off"}. ${DOCUMENT_LINE[documentMode]}`,
   ];
   if (c.handbook.trim()) {
     lines.push("Room handbook:", neutralize(c.handbook.trim()));
@@ -167,6 +180,55 @@ export const renderMessage = async (
     }
   }
   return followUp ? `${text}\n\n${followUp}` : text;
+};
+
+export const MENTION_NOTE =
+  "You were @mentioned in a comment thread on the room document. Your final answer in this turn is posted as your reply in that thread, not in the chat.";
+
+// A thread delivery: the commented passage and the thread up to the comment
+// that mentions the agent, each comment attributed to its author.
+export const renderMention = async (
+  ctx: QueryCtx,
+  message: Doc<"messages">,
+  members?: Doc<"roomMembers">[]
+) => {
+  const thread = message.threadId ? await ctx.db.get(message.threadId) : null;
+  const mention = message.commentId
+    ? await ctx.db.get(message.commentId)
+    : null;
+  if (!thread || !mention) {
+    return MENTION_NOTE;
+  }
+  const roomMembersList = members ?? (await roomMembers(ctx, message.roomId));
+  const allComments = await ctx.db
+    .query("comments")
+    .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
+    .collect();
+  const comments = allComments.filter(
+    (c) => c._creationTime <= mention._creationTime
+  );
+  const lines = [
+    MENTION_NOTE,
+    thread.detachedBeforeChangeSetId
+      ? "The thread is on this passage, since removed from the document:"
+      : "The thread is on this passage:",
+    neutralize(thread.exact),
+    "The thread so far; the last comment mentions you:",
+  ];
+  const authors = await Promise.all(
+    comments.map(async (c) => await ctx.db.get(c.authorParticipantId))
+  );
+  for (const [i, c] of comments.entries()) {
+    const author = authors[i];
+    const role =
+      author?.kind === "harness"
+        ? "agent"
+        : roleIn(roomMembersList, c.authorParticipantId);
+    lines.push(
+      `<comment from="${attr(agentName(author?.displayName))}" role="${role}" sent="${formatTime(c._creationTime)}">\n${neutralize(c.body)}\n</comment>`
+    );
+  }
+  return lines.join("\n");
 };
 
 export const turnPrompt = (p: {

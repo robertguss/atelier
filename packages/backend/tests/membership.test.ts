@@ -295,6 +295,36 @@ describe("room membership", () => {
     });
   });
 
+  it("a teammate who accepted the first notice must accept the current one before entering", async () => {
+    const { t, owner, dana, roomId } = await setup();
+    mockClerk();
+    const invite = await owner.action(api.invites.create, {
+      email: "dana@example.com",
+      roomId,
+    });
+    await dana.mutation(api.invites.accept, { token: tokenOf(invite.url) });
+    await t.run(async (ctx) => {
+      const rows = await ctx.db.query("roomMembers").collect();
+      const row = rows.find((m) => m.role === "member");
+      assert(row, "the teammate has a member row");
+      await ctx.db.patch(row._id, {
+        noticeAcceptedAt: Date.now(),
+        noticeVersion: 1,
+      });
+    });
+
+    await expect(
+      dana.query(api.members.notice, { roomId })
+    ).resolves.toStrictEqual({ acceptedVersion: 1, currentVersion: 2 });
+    await expect(
+      dana.mutation(api.members.acceptNotice, { roomId, version: 1 })
+    ).rejects.toThrow(/notice has changed/u);
+    await dana.mutation(api.members.acceptNotice, { roomId, version: 2 });
+    await expect(
+      dana.query(api.members.notice, { roomId })
+    ).resolves.toStrictEqual({ acceptedVersion: 2, currentVersion: 2 });
+  });
+
   it("an invite for another address shows the masked address and cannot be accepted", async () => {
     const { t, owner, eve, roomId } = await setup();
     mockClerk();

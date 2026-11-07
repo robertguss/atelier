@@ -16,6 +16,8 @@ import type { FunctionReturnType } from "convex/server";
 
 import { turnInput } from "./adapters/events.ts";
 import { reviewSnapshot } from "./review.ts";
+import type { RoomToolsRoute, RoomToolsServer } from "./room-tools-server.ts";
+import { scribeTools } from "./room-tools.ts";
 
 const PROGRESS_MS = 500;
 const TURN_DEADLINE_MS = 30 * 60_000;
@@ -27,6 +29,8 @@ export interface TurnsOptions {
   client: TurnsClient;
   secret: string;
   harnesses: Partial<Record<HarnessId, Harness>>;
+  /** Issues each turn but a review a token for its room document tools. */
+  roomTools: Pick<RoomToolsServer, "issue" | "revoke">;
   appendTranscript: (turnId: string, record: unknown) => void;
   transcriptPath: (turnId: string) => string;
   /** Used when a participant has no model of its own. */
@@ -134,10 +138,20 @@ const parseReasoning = (value: string | undefined) => {
   throw new Error(`Unsupported reasoning level: ${value}`);
 };
 
+// What a harness is told about the room document for this turn.
+const roomTurnOptions = (
+  scribe: boolean,
+  route: RoomToolsRoute | undefined
+) => ({
+  ...(scribe ? { scribe: true } : {}),
+  ...(route ? { roomTools: route } : {}),
+});
+
 export const createTurns = ({
   client,
   secret,
   harnesses,
+  roomTools,
   appendTranscript,
   transcriptPath,
   defaultModels = {},
@@ -233,6 +247,10 @@ export const createTurns = ({
     }
 
     const effectiveModel = job.participant.model ?? defaultModels[harness.id];
+    // A scribe turn, like a review, starts a fresh session and never saves
+    // it, so the scribe's instructions never reach the participant's
+    // ordinary session. It edits no files and asks no questions.
+    const scribe = job.documentMode === "scribe";
     const abort = new AbortController();
     let ended = false;
     // The deadline stops counting while the agent waits on a card.
@@ -260,6 +278,11 @@ export const createTurns = ({
       return question;
     };
     const onQuestion = async (card: QuestionCard) => {
+      if (scribe) {
+        throw new Error(
+          "The scribe works without asking questions: decide, and note open questions in the document."
+        );
+      }
       // oxlint-disable-next-line promise/avoid-new -- the answer arrives later through a separate Convex command, which settles this promise from outside
       const answer = new Promise<QuestionAnswer>((resolve, reject) => {
         questions.set(card.requestId, { reject, resolve });
@@ -303,7 +326,7 @@ export const createTurns = ({
     let text = "";
     let finalText: string | null = null;
     let error: string | null = null;
-    let { sessionId } = job.participant;
+    let sessionId = scribe ? undefined : job.participant.sessionId;
     let savedSessionId: string | undefined;
     let usage:
       | { inputTokens: number; outputTokens: number; costUsd?: number }
@@ -349,6 +372,9 @@ export const createTurns = ({
       await flushItems();
     };
     let timer: ReturnType<typeof setInterval> | undefined;
+    // Reviews never see the room document. The token is a secret: it goes to
+    // the adapter only, never into logs, transcripts or turn items.
+    let route: RoomToolsRoute | undefined;
 
     // An independent review's prompt carries the repository snapshot.
     const reviewEvidence = async () => {
@@ -365,6 +391,9 @@ export const createTurns = ({
     const record = async (ev: HarnessEvent) => {
       switch (ev.type) {
         case "session": {
+          if (scribe) {
+            break;
+          }
           ({ sessionId } = ev);
           if (sessionId !== savedSessionId) {
             savedSessionId = sessionId;
@@ -430,16 +459,34 @@ export const createTurns = ({
     // Tells Convex how the turn ended.
     const report = async () => {
       if (finalText !== null && (error === null || error === "")) {
-        await client.mutation(api.runner.finish, {
-          commandId,
-          finalText: finalText === "" ? text : finalText,
-          model: effectiveModel,
-          secret,
-          sessionId,
-          transcriptRef,
-          turnId,
-          usage,
-        });
+        try {
+          await client.mutation(api.runner.finish, {
+            commandId,
+            finalText: finalText === "" ? text : finalText,
+            model: effectiveModel,
+            secret,
+            sessionId,
+            transcriptRef,
+            turnId,
+            usage,
+          });
+        } catch (finishError) {
+          // Convex saved nothing (a mutation is all-or-nothing), so the turn is still open and a scribe
+          // run still holds the document lock. Fail the turn now rather than wait for its lease to lapse;
+          // if the finish did commit and only the reply was lost, `fail` finds the turn ended and does nothing.
+          console.error(
+            `turn ${turnId}: saving the result failed:`,
+            finishError
+          );
+          await client.mutation(api.runner.fail, {
+            commandId,
+            error: "The turn finished, but Atelier could not save its result",
+            secret,
+            transcriptRef,
+            turnId,
+          });
+          return;
+        }
         const cost = usage?.costUsd;
         console.log(
           `turn ${turnId}: done${cost === undefined || cost === 0 ? "" : ` ($${cost.toFixed(4)})`}`
@@ -463,6 +510,9 @@ export const createTurns = ({
         secret,
         turnId,
       });
+      if (!job.turn.independentReview) {
+        route = await roomTools.issue(turnId, scribe ? scribeTools : undefined);
+      }
       // Start polling only after start commits: a queued turn is not cancelled.
       timer = setInterval(() => {
         flush().catch((progressError: unknown) => {
@@ -481,13 +531,16 @@ export const createTurns = ({
         {
           cwd: job.room.cwd,
           editsEnabled:
-            !job.turn.independentReview && started?.editsEnabled === true,
+            !job.turn.independentReview &&
+            !scribe &&
+            started?.editsEnabled === true,
           independentReview: job.turn.independentReview,
           mcpServers: [],
           model: effectiveModel,
           prompt: job.turn.prompt + (await reviewEvidence()),
           reasoning: parseReasoning(job.participant.reasoning),
           resumeSessionId: sessionId,
+          ...roomTurnOptions(scribe, route),
           turnId,
         },
         abort.signal,
@@ -503,6 +556,9 @@ export const createTurns = ({
       }
     } finally {
       ended = true;
+      if (route) {
+        roomTools.revoke(route.token);
+      }
       clearInterval(timer);
       deadline.clear();
       for (const requestId of questions.keys()) {

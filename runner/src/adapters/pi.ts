@@ -6,10 +6,14 @@ import { RpcClient } from "@earendil-works/pi-coding-agent";
 
 import { execFileAsync } from "../exec.ts";
 import { eventQueue } from "./events.ts";
+import { TOOL_PREFIX } from "./pi-room-tools-extension.ts";
 
 const READ_TOOLS = "read,grep,find,ls";
 const guardExtension = fileURLToPath(
   new URL("pi-guard-extension.ts", import.meta.url)
+);
+const roomToolsExtension = fileURLToPath(
+  new URL("pi-room-tools-extension.ts", import.meta.url)
 );
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -51,23 +55,47 @@ export const piHarness = (opts: {
           "Configure Pi MCP through your own extension until per-turn MCP support exists"
         );
       }
-      const args =
-        req.independentReview === true
-          ? ["--no-tools", "--no-extensions", "--no-mcp", "--no-session"]
-          : [
-              "--tools",
-              req.editsEnabled ? `${READ_TOOLS},edit,write` : READ_TOOLS,
-              ...(req.editsEnabled ? ["--extension", guardExtension] : []),
-              ...(req.resumeSessionId !== undefined &&
-              req.resumeSessionId !== ""
-                ? ["--session", req.resumeSessionId]
-                : []),
-            ];
+      // Reviews never get the document tools. Elsewhere the extension offers
+      // them; naming no mcp__ tool in --tools leaves the user's MCP tools as they were.
+      const room = req.independentReview === true ? undefined : req.roomTools;
+      let args: string[];
+      if (req.independentReview === true) {
+        args = ["--no-tools", "--no-extensions", "--no-mcp", "--no-session"];
+      } else {
+        args = [
+          "--tools",
+          [
+            READ_TOOLS,
+            ...(req.editsEnabled ? ["edit,write"] : []),
+            ...(room ? [`${TOOL_PREFIX}*`] : []),
+          ].join(","),
+          ...(req.editsEnabled ? ["--extension", guardExtension] : []),
+          ...(room ? ["--extension", roomToolsExtension] : []),
+        ];
+        // A scribe turn starts fresh and is never saved.
+        if (req.scribe === true) {
+          args.push("--no-session");
+        } else if (
+          req.resumeSessionId !== undefined &&
+          req.resumeSessionId !== ""
+        ) {
+          args.push("--session", req.resumeSessionId);
+        }
+      }
+      // The token travels in the environment only, never in argv.
       const client = new RpcClient({
         args,
         cliPath,
         cwd: req.cwd,
         model: req.model,
+        ...(room
+          ? {
+              env: {
+                ATELIER_ROOM_TOKEN: room.token,
+                ATELIER_ROOM_URL: room.url,
+              },
+            }
+          : {}),
       });
       // Steers go into the run only while it streams. Once Pi has settled it
       // would hold a steer without starting a run to deliver it.

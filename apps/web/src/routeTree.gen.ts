@@ -10,12 +10,19 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as TemplatesRouteImport } from './routes/templates'
 import { Route as InviteTokenRouteImport } from './routes/invite.$token'
 import { Route as RoomsRoomIdRouteImport } from './routes/rooms.$roomId'
+import { Route as RoomsNewRouteImport } from './routes/rooms.new'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TemplatesRoute = TemplatesRouteImport.update({
+  id: '/templates',
+  path: '/templates',
   getParentRoute: () => rootRouteImport,
 } as any)
 const InviteTokenRoute = InviteTokenRouteImport.update({
@@ -28,35 +35,55 @@ const RoomsRoomIdRoute = RoomsRoomIdRouteImport.update({
   path: '/rooms/$roomId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const RoomsNewRoute = RoomsNewRouteImport.update({
+  id: '/rooms/new',
+  path: '/rooms/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/templates': typeof TemplatesRoute
   '/invite/$token': typeof InviteTokenRoute
   '/rooms/$roomId': typeof RoomsRoomIdRoute
+  '/rooms/new': typeof RoomsNewRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/templates': typeof TemplatesRoute
   '/invite/$token': typeof InviteTokenRoute
   '/rooms/$roomId': typeof RoomsRoomIdRoute
+  '/rooms/new': typeof RoomsNewRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/templates': typeof TemplatesRoute
   '/invite/$token': typeof InviteTokenRoute
   '/rooms/$roomId': typeof RoomsRoomIdRoute
+  '/rooms/new': typeof RoomsNewRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/invite/$token' | '/rooms/$roomId'
+  fullPaths:
+    '/' | '/templates' | '/invite/$token' | '/rooms/$roomId' | '/rooms/new'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/invite/$token' | '/rooms/$roomId'
-  id: '__root__' | '/' | '/invite/$token' | '/rooms/$roomId'
+  to: '/' | '/templates' | '/invite/$token' | '/rooms/$roomId' | '/rooms/new'
+  id:
+    | '__root__'
+    | '/'
+    | '/templates'
+    | '/invite/$token'
+    | '/rooms/$roomId'
+    | '/rooms/new'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  TemplatesRoute: typeof TemplatesRoute
   InviteTokenRoute: typeof InviteTokenRoute
   RoomsRoomIdRoute: typeof RoomsRoomIdRoute
+  RoomsNewRoute: typeof RoomsNewRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -66,6 +93,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/templates': {
+      id: '/templates'
+      path: '/templates'
+      fullPath: '/templates'
+      preLoaderRoute: typeof TemplatesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/invite/$token': {
@@ -82,13 +116,22 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RoomsRoomIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/rooms/new': {
+      id: '/rooms/new'
+      path: '/rooms/new'
+      fullPath: '/rooms/new'
+      preLoaderRoute: typeof RoomsNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  TemplatesRoute: TemplatesRoute,
   InviteTokenRoute: InviteTokenRoute,
   RoomsRoomIdRoute: RoomsRoomIdRoute,
+  RoomsNewRoute: RoomsNewRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

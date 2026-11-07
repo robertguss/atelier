@@ -2,6 +2,7 @@ import { v } from "convex/values";
 
 import { mutation, query } from "./_generated/server";
 import { requireOwner, requireRunnerSecret } from "./lib/auth";
+import { dispatchWaitingMentions, runnerOnline } from "./lib/dispatch";
 import { harnessId } from "./schema";
 
 export const heartbeat = mutation({
@@ -19,11 +20,16 @@ export const heartbeat = mutation({
       .withIndex("by_name", (q) => q.eq("name", name))
       .unique();
     if (existing) {
+      const wasOffline = !runnerOnline(existing);
       await ctx.db.patch(existing._id, {
         harnesses,
         lastHeartbeatAt: now,
         machine,
       });
+      // Thread mentions posted while the runner was away waited for it.
+      if (wasOffline) {
+        await dispatchWaitingMentions(ctx, existing._id);
+      }
       return existing._id;
     }
     const id = await ctx.db.insert("runners", {

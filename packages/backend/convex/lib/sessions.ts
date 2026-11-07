@@ -2,10 +2,12 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { record } from "./ledger";
 
-// While the owner is alone in a room, a follow-up to a review or its decision
-// continues the agent's ordinary session. When the first teammate joins, each
-// agent that ran such a follow-up since its last reset starts a fresh session,
-// so it cannot repeat review content to the teammate.
+// A follow-up to a review or its decision runs on a session of its own, even
+// while the owner is alone in the room (see runner.claim). Follow-ups claimed
+// before rooms had a document continued the agent's ordinary session when the
+// owner was alone. When the first teammate joins, each agent that ran such a
+// follow-up since its last reset starts a fresh session, so it cannot repeat
+// review content to the teammate.
 
 export const SESSION_RESET = "participant.session_reset";
 
@@ -47,7 +49,10 @@ const resetSession = async (
   participant: Doc<"participants">,
   parentLedgerId: Id<"ledger">
 ) => {
-  await ctx.db.patch(participant._id, { harnessSessionId: undefined });
+  await ctx.db.patch(participant._id, {
+    documentRevSeen: undefined,
+    harnessSessionId: undefined,
+  });
   await record(ctx, {
     parentLedgerId,
     payload: {

@@ -87,7 +87,7 @@ describe("invite page", () => {
       await screen.findByRole("button", { name: /join pricing plan/iu })
     );
 
-    expect(backend.mutations["invites:accept"]).toHaveBeenCalledWith({
+    expect(mutation("invites:accept")).toHaveBeenCalledWith({
       token: TOKEN,
     });
     await waitFor(() => {

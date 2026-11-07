@@ -3,6 +3,7 @@ import type { Id } from "@atelier/backend/dataModel";
 import { Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
+  BotIcon,
   ChevronLeftIcon,
   MessagesSquareIcon,
   UsersIcon,
@@ -10,8 +11,10 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
+import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Switch } from "~/components/ui/switch";
+import { hasContent } from "~/lib/utils";
 
 import { errorText } from "./errors";
 
@@ -23,8 +26,12 @@ interface RoomHeaderProps {
   editsEnabled: boolean | undefined;
   offline: boolean;
   onOpenMembers: () => void;
-  /** Shown in narrow windows, where the team pane is a sheet. */
+  /** Shown in narrow windows, where the agent pane and team chat are sheets. */
+  onOpenAgents?: () => void;
   onOpenTeam?: () => void;
+  /** What waits in each of those sheets, such as an open question card or unread messages. */
+  agentBadge?: string | null;
+  teamBadge?: string | null;
 }
 
 /** "Agents may edit files in this folder": the owner's toggle; everyone else sees its state. */
@@ -74,7 +81,10 @@ export const RoomHeader = ({
   editsEnabled,
   offline,
   onOpenMembers,
+  onOpenAgents,
   onOpenTeam,
+  agentBadge,
+  teamBadge,
 }: RoomHeaderProps) => (
   <div className="shrink-0">
     <header className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
@@ -98,10 +108,22 @@ export const RoomHeader = ({
           Members
         </Button>
       ) : null}
+      {onOpenAgents ? (
+        <Button size="sm" variant="outline" onClick={onOpenAgents}>
+          <BotIcon />
+          Agents
+          {hasContent(agentBadge) ? (
+            <Badge variant="info">{agentBadge}</Badge>
+          ) : null}
+        </Button>
+      ) : null}
       {onOpenTeam ? (
         <Button size="sm" variant="outline" onClick={onOpenTeam}>
           <MessagesSquareIcon />
           Team chat
+          {hasContent(teamBadge) ? (
+            <Badge variant="info">{teamBadge}</Badge>
+          ) : null}
         </Button>
       ) : null}
     </header>

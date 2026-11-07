@@ -20,6 +20,7 @@ import {
 } from "./lib/dispatch";
 import { findLedger, record } from "./lib/ledger";
 import { reviewFinished } from "./lib/review";
+import { releaseScribe } from "./lib/scribe";
 import { streamedText } from "./lib/turnActivity";
 import { visibleMessage, visibleTurn } from "./lib/visibility";
 
@@ -292,6 +293,10 @@ export const cancel = mutation({
       stoppedByParticipantId: participant._id,
     });
     await closeOpenCards(ctx, turnId, "cancelled", reason);
+    // Stopping the scribe leaves the document as it was before its run.
+    if (turn.scribeRunId) {
+      await releaseScribe(ctx, turn.scribeRunId, "released", reason);
+    }
     await reviewFinished(ctx, turn);
     const commands = await ctx.db
       .query("commands")

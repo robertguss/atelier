@@ -1,5 +1,5 @@
 import type { Id } from "@atelier/backend/dataModel";
-import { BotIcon } from "lucide-react";
+import { BotIcon, PanelLeftCloseIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 
 import { StreamingMarkdown } from "~/components/markdown/StreamingMarkdown";
@@ -28,6 +28,8 @@ interface AgentPaneProps {
   names: Names;
   offline: boolean;
   onShowEarlier: () => void;
+  /** Folds the pane away beside the document. */
+  onCollapse?: () => void;
 }
 
 const STATUS_TEXT: Record<PaneAgent["status"], string> = {
@@ -114,6 +116,7 @@ export const AgentPane = ({
   names,
   offline,
   onShowEarlier,
+  onCollapse,
 }: AgentPaneProps) => {
   const { scrollRef, contentRef } = useStickToBottom<
     HTMLDivElement,
@@ -170,6 +173,18 @@ export const AgentPane = ({
         {pane.agents.map((agent) => (
           <AgentStatus key={agent.participantId} agent={agent} />
         ))}
+        {onCollapse ? (
+          <Button
+            size="icon-xs"
+            variant="ghost-muted"
+            className="ml-auto"
+            aria-label="Hide agents"
+            title="Hide agents"
+            onClick={onCollapse}
+          >
+            <PanelLeftCloseIcon />
+          </Button>
+        ) : null}
       </header>
       <div
         ref={scrollRef}

@@ -76,6 +76,9 @@ const JoinNotice = ({
               including files outside the room&apos;s folder and Robert&apos;s
               connected tools.
             </li>
+            <li>
+              The room document is shared with the agents and kept permanently.
+            </li>
           </ul>
         </>
       }

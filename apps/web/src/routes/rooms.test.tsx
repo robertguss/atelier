@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { backend, resetBackend } from "~/test/backend";
+import { backend, mutation, resetBackend } from "~/test/backend";
 import { renderAt } from "~/test/render";
 
 vi.mock(import("convex/react"), async () => {
@@ -45,11 +45,16 @@ describe("room page", () => {
       screen.getByText(/files outside the room.s folder/iu)
     ).toBeInTheDocument();
     expect(
+      screen.getByText(
+        /room document is shared with the agents and kept permanently/iu
+      )
+    ).toBeInTheDocument();
+    expect(
       screen.queryByRole("heading", { name: "Pricing plan" })
     ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /enter the room/iu }));
-    expect(backend.mutations["members:acceptNotice"]).toHaveBeenCalledWith({
+    expect(mutation("members:acceptNotice")).toHaveBeenCalledWith({
       roomId: ROOM,
       version: 2,
     });
@@ -68,15 +73,26 @@ describe("room page", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("asks again when the stored notice version is older", async () => {
+  it("asks a teammate who accepted the first notice to accept the one about the document before entering", async () => {
     member(1);
     renderAt(`/rooms/${ROOM}`);
     await waitFor(() => {
       expect(screen.getByText(/the notice has changed/iu)).toBeInTheDocument();
     });
     expect(
+      screen.getByText(
+        /room document is shared with the agents and kept permanently/iu
+      )
+    ).toBeInTheDocument();
+    expect(
       screen.queryByRole("heading", { name: "Pricing plan" })
     ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /enter the room/iu }));
+    expect(mutation("members:acceptNotice")).toHaveBeenCalledWith({
+      roomId: ROOM,
+      version: 2,
+    });
   });
 
   it("tells a non-member they don't have access instead of failing", async () => {

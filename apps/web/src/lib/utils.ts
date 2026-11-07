@@ -22,3 +22,8 @@ export const hasContent = (node: ReactNode): boolean =>
   node !== false &&
   node !== "" &&
   node !== 0;
+
+/** For a fire-and-forget call whose own code already shows its failures: log anything that still escapes. */
+export const logFailure = (error: unknown) => {
+  console.error(error);
+};

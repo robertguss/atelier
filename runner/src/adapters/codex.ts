@@ -200,6 +200,8 @@ const reviewConfigFor = (read: unknown): Record<string, unknown> => {
   return reviewConfig;
 };
 
+const ROOM_TOKEN_ENV = "ATELIER_ROOM_TOKEN";
+
 export const codexHarness = (opts: {
   executable: string;
   onRaw: (id: string, event: unknown) => void;
@@ -212,6 +214,17 @@ export const codexHarness = (opts: {
     if (req.mcpServers.length) {
       throw new Error("Per-turn MCP injection is not implemented");
     }
+    // Reviews never get the document tools. Elsewhere Codex reaches them as
+    // the `atelier` MCP server, pre-approved so no call waits on an answer.
+    // The token goes in the app-server's environment, never in argv.
+    const room = req.independentReview === true ? undefined : req.roomTools;
+    const roomConfig = room
+      ? {
+          "mcp_servers.atelier.bearer_token_env_var": ROOM_TOKEN_ENV,
+          "mcp_servers.atelier.default_tools_approval_mode": "approve",
+          "mcp_servers.atelier.url": room.url,
+        }
+      : undefined;
 
     let threadId: string | undefined;
     let turnId: string | undefined;
@@ -224,6 +237,9 @@ export const codexHarness = (opts: {
 
     const child = spawn(opts.executable, ["app-server"], {
       cwd: req.cwd,
+      ...(room
+        ? { env: { ...process.env, [ROOM_TOKEN_ENV]: room.token } }
+        : {}),
       stdio: ["pipe", "pipe", "pipe"],
     });
     const events = eventQueue();
@@ -521,14 +537,22 @@ export const codexHarness = (opts: {
             writableRoots: [req.cwd],
           }
         : { type: "readOnly" };
+      // Reviews and scribe turns start fresh and are never saved.
       const resume =
-        req.independentReview === true ? undefined : req.resumeSessionId;
+        req.independentReview === true || req.scribe === true
+          ? undefined
+          : req.resumeSessionId;
+      let threadConfig: Record<string, unknown> = {};
+      if (req.independentReview === true) {
+        threadConfig = { config: reviewConfig, ephemeral: true };
+      } else if (roomConfig) {
+        threadConfig = { config: roomConfig };
+      }
       const thread = startedId(
         await call(present(resume) ? "thread/resume" : "thread/start", {
           ...(present(resume) ? { threadId: resume } : {}),
-          ...(req.independentReview === true
-            ? { config: reviewConfig, ephemeral: true }
-            : {}),
+          ...threadConfig,
+          ...(req.scribe === true ? { ephemeral: true } : {}),
           approvalPolicy,
           cwd: req.cwd,
           model: req.model,

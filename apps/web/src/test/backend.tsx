@@ -3,7 +3,9 @@
 // Each test file mocks those modules with `convexMock` and `authMock` below
 // and sets `backend` to the state it needs. After changing `backend` while a
 // screen is shown, call `pushBackend()` to re-run its queries, as a live
-// Convex subscription would.
+// Convex subscription would. A paginated query's handler gets
+// `paginationOpts` and returns `{ page, isDone, continueCursor }`, as the
+// Convex function does; `paginate` builds such a handler from a list.
 
 import type * as ConvexReact from "convex/react";
 import { getFunctionName } from "convex/server";
@@ -11,7 +13,7 @@ import type {
   FunctionReference,
   FunctionReference_future,
 } from "convex/server";
-import { useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
 
@@ -71,6 +73,17 @@ export const mutation = (name: string) => functionMock(backend.mutations, name);
 /** The mock behind an action, by function name. Until a test sets it up it resolves to null. */
 export const action = (name: string) => functionMock(backend.actions, name);
 
+/** Makes a mutation run `effect` with its arguments when called, then resolve to `result`. */
+export const mutationEffect = (
+  name: string,
+  effect: (args?: Record<string, unknown>) => void,
+  result: unknown = null
+) =>
+  mutation(name).mockImplementation(async (args) => {
+    effect(args);
+    return await Promise.resolve(result);
+  });
+
 const runQuery = (
   ref: FunctionReference<"query"> | FunctionReference_future<"query">,
   args: Record<string, unknown> | "skip" | undefined
@@ -87,12 +100,87 @@ const runQuery = (
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters, typescript/no-unsafe-type-assertion -- Registries keyed by function name cannot carry each Convex function's result type; this is the one place the stand-ins claim it.
 const asHookResult = <Result,>(value: unknown): Result => value as Result;
 
+interface PageResult {
+  page: unknown[];
+  isDone: boolean;
+  continueCursor: string;
+}
+interface PaginationOpts {
+  numItems: number;
+  cursor: string | null;
+}
+
+/** A paginated query handler over `items`, in the order given. */
+export const paginate =
+  (items: () => readonly unknown[]) =>
+  ({ paginationOpts }: Record<string, unknown>): PageResult => {
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- The handler is called with the paginationOpts the hook below builds.
+    const { numItems, cursor } = paginationOpts as PaginationOpts;
+    const start = cursor === null ? 0 : Number(cursor);
+    const end = start + numItems;
+    const all = items();
+    return {
+      continueCursor: String(end),
+      isDone: end >= all.length,
+      page: all.slice(start, end),
+    };
+  };
+
+const LOADING_FIRST_PAGE = {
+  isLoading: true,
+  loadMore: () => {
+    // Nothing loads until the first page does.
+  },
+  results: [],
+  status: "LoadingFirstPage",
+} as const;
+
 // Like Convex, a skipped query returns undefined and never runs; a query the
 // test did not set up stays loading. A handler that throws behaves like a
 // server error reaching the component.
 const useQuery: typeof ConvexReact.useQuery = (query, ...args) => {
   useSyncExternalStore(subscribe, () => version);
   return asHookResult(runQuery(query, args[0]));
+};
+
+// Loads the first page, then one more page per `loadMore`, each from the
+// cursor the previous page returned.
+const usePaginatedQuery: typeof ConvexReact.usePaginatedQuery = (
+  query,
+  args,
+  options
+) => {
+  useSyncExternalStore(subscribe, () => version);
+  const [sizes, setSizes] = useState<number[]>([options.initialNumItems]);
+  const handler =
+    args === "skip" ? undefined : backend.queries[getFunctionName(query)];
+  if (!handler || args === "skip") {
+    return asHookResult(LOADING_FIRST_PAGE);
+  }
+  const results: unknown[] = [];
+  let cursor: string | null = null;
+  let isDone = false;
+  for (const numItems of sizes) {
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- A paginated handler returns a PageResult, as `paginate` builds it.
+    const result = handler({
+      ...args,
+      paginationOpts: { cursor, numItems },
+    }) as PageResult;
+    results.push(...result.page);
+    cursor = result.continueCursor;
+    ({ isDone } = result);
+    if (isDone) {
+      break;
+    }
+  }
+  return asHookResult({
+    isLoading: false,
+    loadMore: (numItems: number) => {
+      setSizes((current) => [...current, numItems]);
+    },
+    results,
+    status: isDone ? "Exhausted" : "CanLoadMore",
+  });
 };
 
 const useMutation: typeof ConvexReact.useMutation = (reference) =>
@@ -109,6 +197,7 @@ export const convexMock: Partial<typeof ConvexReact> = {
     isRefreshing: false,
   }),
   useMutation,
+  usePaginatedQuery,
   useQuery,
 };
 

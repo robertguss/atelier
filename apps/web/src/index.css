@@ -359,3 +359,12 @@
 .chat-markdown thead th {
   font-weight: 600;
 }
+
+/* Commented passages in the room document, marked without changing the rendered text. */
+::highlight(atelier-comment) {
+  background-color: color-mix(in srgb, var(--warning) 28%, transparent);
+}
+
+::highlight(atelier-comment-draft) {
+  background-color: color-mix(in srgb, var(--info) 30%, transparent);
+}

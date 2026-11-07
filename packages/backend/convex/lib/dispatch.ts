@@ -4,6 +4,7 @@ import { findLedger, record } from "./ledger";
 import {
   contextBlock,
   loadRoomContext,
+  renderMention,
   renderMessage,
   roomMembers,
   turnPrompt,
@@ -11,7 +12,10 @@ import {
 
 // Each agent has at most one active ordinary turn. Messages sent while it
 // works wait as `queued` and go in together, in send order, as the next turn.
-// Independent review turns stay outside this queue.
+// Independent review turns stay outside this queue. A scribe turn counts as
+// the agent's active turn, so messages to it wait until the run ends, but it
+// never takes a steer. A thread delivery, a person's comment that @mentions
+// the agent, waits in the same queue but always runs as its own turn.
 
 const HEARTBEAT_MS = 15_000;
 export const OFFLINE_AFTER_MS = 3 * HEARTBEAT_MS;
@@ -125,9 +129,15 @@ const takeWhile = <T>(items: T[], keep: (item: T) => boolean) => {
   return out;
 };
 
+// A follow-up to a review or decision, and a thread delivery, never share a turn.
+const runsAlone = (m: Doc<"messages">) =>
+  Boolean(m.followUpRitualId) || Boolean(m.threadId);
+
 // Start the agent's next turn from everything waiting for it, if it is idle.
-// A follow-up to a review or decision always runs alone. With the runner
-// offline, the waiting messages are cancelled instead. Returns the new turn.
+// A follow-up to a review or decision, and a thread delivery, always run
+// alone. With the runner offline, waiting chat messages are cancelled
+// instead; thread deliveries stay queued until the runner is back. Returns
+// the new turn.
 export const dispatchNext = async (
   ctx: MutationCtx,
   participantId: Id<"participants">
@@ -149,31 +159,46 @@ export const dispatchNext = async (
   const runner = room ? await ctx.db.get(room.runnerId) : null;
   if (!room || !runnerOnline(runner)) {
     for (const m of waiting) {
+      if (m.threadId) {
+        continue;
+      }
       // oxlint-disable-next-line eslint/no-await-in-loop -- cancellations are recorded in the ledger in send order
       await cancelMessage(ctx, m, "runner offline");
     }
     return null;
   }
 
-  const batch = first.followUpRitualId
+  const batch = runsAlone(first)
     ? [first]
-    : takeWhile(waiting, (m) => !m.followUpRitualId);
+    : takeWhile(waiting, (m) => !runsAlone(m));
   const members = await roomMembers(ctx, room._id);
-  const messages = await Promise.all(
-    batch.map(async (m) => await renderMessage(ctx, m, "queued", members))
-  );
+  const messages = first.threadId
+    ? [await renderMention(ctx, first, members)]
+    : await Promise.all(
+        batch.map(async (m) => await renderMessage(ctx, m, "queued", members))
+      );
   const previous = await ctx.db
     .query("turns")
     .withIndex("by_participant", (q) => q.eq("participantId", participantId))
     .order("desc")
-    .filter((q) => q.eq(q.field("ritualId"), undefined))
+    .filter((q) =>
+      q.and(
+        q.eq(q.field("ritualId"), undefined),
+        q.eq(q.field("scribeRunId"), undefined)
+      )
+    )
     .first();
   const stopper =
     previous?.status === "interrupted" && previous.stoppedByParticipantId
       ? await ctx.db.get(previous.stoppedByParticipantId)
       : null;
+  // A follow-up to a review or its decision may only read the document.
+  const context = contextBlock(
+    await loadRoomContext(ctx, room, members),
+    first.followUpRitualId ? "read" : "write"
+  );
   const prompt = turnPrompt({
-    context: contextBlock(await loadRoomContext(ctx, room, members)),
+    context,
     messages,
     stoppedBy: stopper?.displayName,
   });
@@ -193,6 +218,7 @@ export const dispatchNext = async (
     ],
     roomId: room._id,
     status: "queued",
+    threadId: first.threadId,
   });
   await ctx.db.insert("commands", {
     runnerId: room.runnerId,
@@ -207,7 +233,14 @@ export const dispatchNext = async (
         delivery: "delivered",
         steering: undefined,
       });
-      const posted = await findLedger(ctx, m.roomId, "message.posted", m._id);
+      const posted = m.commentId
+        ? await findLedger(
+            ctx,
+            m.roomId,
+            "document.comment_posted",
+            m.commentId
+          )
+        : await findLedger(ctx, m.roomId, "message.posted", m._id);
       return posted?._id;
     })
   );
@@ -225,9 +258,49 @@ export const dispatchNext = async (
 };
 
 // Only a running ordinary turn takes a steer. A follow-up to a review or
-// decision always runs as its own turn, so it neither takes nor gives one.
+// decision, a turn answering a thread mention, and a scribe turn always run
+// as their own turn, so they neither take nor give one.
 export const takesSteer = (turn: Doc<"turns"> | null): turn is Doc<"turns"> =>
-  turn?.status === "running" && !turn.followUp;
+  turn?.status === "running" &&
+  !turn.followUp &&
+  !turn.threadId &&
+  !turn.scribeRunId;
+
+// The runner is back online: every agent in its rooms with a thread delivery
+// that waited for it gets its next turn.
+export const dispatchWaitingMentions = async (
+  ctx: MutationCtx,
+  runnerId: Id<"runners">
+) => {
+  const rooms = await ctx.db
+    .query("rooms")
+    .withIndex("by_runner", (q) => q.eq("runnerId", runnerId))
+    .collect();
+  await Promise.all(
+    rooms.map(async (room) => {
+      const participants = await ctx.db
+        .query("participants")
+        .withIndex("by_room", (q) => q.eq("roomId", room._id))
+        .collect();
+      await Promise.all(
+        participants
+          .filter((p) => p.kind === "harness")
+          .map(async (p) => {
+            const waiting = await ctx.db
+              .query("messages")
+              .withIndex("by_to_delivery", (q) =>
+                q.eq("toParticipantId", p._id).eq("delivery", "queued")
+              )
+              .filter((q) => q.neq(q.field("threadId"), undefined))
+              .first();
+            if (waiting) {
+              await dispatchNext(ctx, p._id);
+            }
+          })
+      );
+    })
+  );
+};
 
 // "Steer now": hand a waiting message to the runner for the agent's running
 // turn. The runner reports the harness's verdict through steerResult.

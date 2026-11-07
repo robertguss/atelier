@@ -10,10 +10,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { HarnessEvent, TurnInput, TurnRequest } from "@atelier/shared";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 
+import { FakeRoomConvex } from "../fake-room-convex.ts";
+import { createRoomToolsServer } from "../room-tools-server.ts";
+import type { RoomToolsClient } from "../room-tools.ts";
 import { turnInput } from "./events.ts";
 import { blockedEditReason } from "./pi-guard-extension.ts";
+import atelierRoomTools from "./pi-room-tools-extension.ts";
 import { piHarness } from "./pi.ts";
 
 // A fake Pi RPC process. It records its arguments and every line it reads,
@@ -21,6 +25,7 @@ import { piHarness } from "./pi.ts";
 const FAKE_PI = `import {createInterface} from 'node:readline';
 import {appendFileSync, writeFileSync} from 'node:fs';
 writeFileSync(new URL('./argv.json', import.meta.url), JSON.stringify(process.argv.slice(2)));
+writeFileSync(new URL('./env.json', import.meta.url), JSON.stringify({url: process.env.ATELIER_ROOM_URL ?? null, token: process.env.ATELIER_ROOM_TOKEN ?? null}));
 const out = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
 let last = '';
 const finish = (text) => {
@@ -35,6 +40,11 @@ createInterface({input:process.stdin}).on('line', (line) => {
   if (command.type === 'prompt') {
     ok({disposition:'started'});
     if (command.message === 'steer') out({type:'tool_execution_start', toolCallId:'call-1', toolName:'bash', args:{command:'sleep 5 && echo one'}});
+    else if (command.message === 'doc') {
+      out({type:'tool_execution_start', toolCallId:'doc-1', toolName:'atelier_add_block', args:{kind:'paragraph', text:'We chose blue.'}});
+      out({type:'tool_execution_end', toolCallId:'doc-1', toolName:'atelier_add_block', result:{content:[]}, isError:false});
+      finish('noted');
+    }
     else if (command.message === 'ui') out({type:'extension_ui_request', id:'ui-1', method:'confirm', title:'Allow?', message:'Run it?'});
     else finish('done');
   } else if (command.type === 'steer') {
@@ -51,6 +61,15 @@ createInterface({input:process.stdin}).on('line', (line) => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
+// The value at `keys` inside parsed JSON, or undefined where the path breaks.
+const at = (value: unknown, ...keys: string[]): unknown => {
+  let current = value;
+  for (const key of keys) {
+    current = isRecord(current) ? current[key] : undefined;
+  }
+  return current;
+};
+
 const parseJson = (text: string): unknown => JSON.parse(text);
 
 interface FakePi {
@@ -61,6 +80,7 @@ interface FakePi {
     onEvent?: (ev: HarnessEvent, input: TurnInput) => Promise<void>
   ) => Promise<HarnessEvent[]>;
   argv: () => Promise<string[]>;
+  env: () => Promise<unknown>;
   stdin: () => Promise<unknown[]>;
 }
 
@@ -84,6 +104,9 @@ const withFakePi = async (fn: (fake: FakePi) => Promise<void>) => {
         return argv;
       },
       dir,
+      async env() {
+        return parseJson(await readFile(path.join(dir, "env.json"), "utf-8"));
+      },
       async run(req, input, onEvent) {
         const activeInput = input ?? turnInput();
         const events: HarnessEvent[] = [];
@@ -115,6 +138,65 @@ const withFakePi = async (fn: (fake: FakePi) => Promise<void>) => {
   } finally {
     await rm(dir, { force: true, recursive: true });
   }
+};
+
+const roomTools = {
+  token: "ROOM-TOKEN-SECRET",
+  url: "http://127.0.0.1:40123/mcp",
+};
+
+// What the extension registered with Pi, as far as these tests look.
+interface RegisteredTool {
+  name: string;
+  parameters: Record<string, unknown>;
+  execute: (callId: string, params: unknown) => Promise<unknown>;
+}
+
+// Serves the tools from a real endpoint, as the runner does, and points
+// the extension at it through its environment.
+const withEndpoint = async (
+  fn: (endpoint: {
+    calls: FakeRoomConvex["calls"];
+    revoke: () => void;
+    tools: RegisteredTool[];
+  }) => Promise<void> | void
+) => {
+  const convex = new FakeRoomConvex({
+    "documentTools:addBlockForTurn": () => ({
+      blockId: "b9",
+      ok: true,
+      rev: 1,
+    }),
+  });
+  const client: RoomToolsClient = convex;
+  const server = createRoomToolsServer({ client, secret: "s3cret" });
+  try {
+    const route = await server.issue("turn-7");
+    vi.stubEnv("ATELIER_ROOM_URL", route.url);
+    vi.stubEnv("ATELIER_ROOM_TOKEN", route.token);
+    const tools: RegisteredTool[] = [];
+    await atelierRoomTools({
+      registerTool: (tool) => {
+        tools.push(tool);
+      },
+    });
+    await fn({
+      calls: convex.calls,
+      revoke: () => {
+        server.revoke(route.token);
+      },
+      tools,
+    });
+  } finally {
+    vi.unstubAllEnvs();
+    await server.close();
+  }
+};
+
+const addBlock = (tools: RegisteredTool[]) => {
+  const add = tools.find((t) => t.name === "atelier_add_block");
+  assert(add, "the extension registers atelier_add_block");
+  return add;
 };
 
 describe(piHarness, () => {
@@ -238,6 +320,204 @@ describe(piHarness, () => {
       const extension = argv[argv.indexOf("--extension") + 1];
       expect(extension ?? "").toMatch(/\/pi-guard-extension\.ts$/u);
       expect(argv.slice(-2)).toStrictEqual(["--session", "/tmp/s.jsonl"]);
+    });
+  });
+
+  describe("the room document extension", () => {
+    const environment = {
+      token: roomTools.token,
+      url: roomTools.url,
+    };
+
+    it("is loaded and its tools allowed with edits off, the token only in its environment", async () => {
+      await withFakePi(async (fake) => {
+        await fake.run({
+          editsEnabled: false,
+          resumeSessionId: "/tmp/s.jsonl",
+          roomTools,
+        });
+        const argv = await fake.argv();
+        const extension = argv[argv.indexOf("--extension") + 1] ?? "";
+        expect({
+          argv,
+          argvHoldsToken: JSON.stringify(argv).includes("ROOM-TOKEN-SECRET"),
+          env: await fake.env(),
+          isRoomExtension: extension.endsWith("/pi-room-tools-extension.ts"),
+        }).toStrictEqual({
+          argv: [
+            "--mode",
+            "rpc",
+            "--tools",
+            "read,grep,find,ls,atelier_*",
+            "--extension",
+            extension,
+            "--session",
+            "/tmp/s.jsonl",
+          ],
+          argvHoldsToken: false,
+          env: environment,
+          isRoomExtension: true,
+        });
+      });
+    });
+
+    it("is loaded beside the edit guard with edits on, the token only in its environment", async () => {
+      await withFakePi(async (fake) => {
+        await fake.run({ editsEnabled: true, roomTools });
+        const argv = await fake.argv();
+        const extensions = argv.filter((_, i) => argv[i - 1] === "--extension");
+        expect({
+          argvHoldsToken: JSON.stringify(argv).includes("ROOM-TOKEN-SECRET"),
+          env: await fake.env(),
+          extensions: extensions.map((e) => path.basename(e)).toSorted(),
+          tools: argv.slice(0, 4),
+        }).toStrictEqual({
+          argvHoldsToken: false,
+          env: environment,
+          extensions: ["pi-guard-extension.ts", "pi-room-tools-extension.ts"],
+          tools: [
+            "--mode",
+            "rpc",
+            "--tools",
+            "read,grep,find,ls,edit,write,atelier_*",
+          ],
+        });
+      });
+    });
+  });
+
+  it("a Pi review runs with no tools, extensions or MCP and gets no document route, even if one is passed", async () => {
+    await withFakePi(async (fake) => {
+      await fake.run({
+        independentReview: true,
+        resumeSessionId: "/tmp/s.jsonl",
+        roomTools,
+      });
+      await expect(fake.argv()).resolves.toStrictEqual([
+        "--mode",
+        "rpc",
+        "--no-tools",
+        "--no-extensions",
+        "--no-mcp",
+        "--no-session",
+      ]);
+      await expect(fake.env()).resolves.toStrictEqual({
+        token: null,
+        url: null,
+      });
+    });
+  });
+
+  it("a Pi document tool call shows up as a turn item with the tool name and no token", async () => {
+    await withFakePi(async (fake) => {
+      const events = await fake.run({ prompt: "doc", roomTools });
+      expect(
+        events.filter(
+          (ev) => ev.type === "tool_call" || ev.type === "tool_result"
+        )
+      ).toStrictEqual([
+        {
+          id: "doc-1",
+          name: "atelier_add_block",
+          summary: "",
+          type: "tool_call",
+        },
+        { id: "doc-1", ok: true, type: "tool_result" },
+      ]);
+      expect(JSON.stringify(events)).not.toMatch(/ROOM-TOKEN-SECRET/u);
+    });
+  });
+
+  it("a Pi scribe turn starts a fresh session it never saves, with edits off and the room tools extension", async () => {
+    await withFakePi(async (fake) => {
+      await fake.run({ editsEnabled: false, roomTools, scribe: true });
+      const argv = await fake.argv();
+      const extension = argv[argv.indexOf("--extension") + 1] ?? "";
+      expect(argv).toStrictEqual([
+        "--mode",
+        "rpc",
+        "--tools",
+        "read,grep,find,ls,atelier_*",
+        "--extension",
+        extension,
+        "--no-session",
+      ]);
+      expect(extension).toMatch(/\/pi-room-tools-extension\.ts$/u);
+    });
+  });
+
+  describe("the Pi room tools extension", () => {
+    it("registers the endpoint's tools with their schemas", async () => {
+      await withEndpoint(({ tools }) => {
+        const add = addBlock(tools);
+        expect({
+          names: tools.map((t) => t.name),
+          required: add.parameters.required,
+          type: add.parameters.type,
+        }).toStrictEqual({
+          names: [
+            "atelier_read_document",
+            "atelier_read_thread",
+            "atelier_add_block",
+            "atelier_update_block",
+            "atelier_delete_block",
+            "atelier_comment",
+          ],
+          required: ["kind", "text"],
+          type: "object",
+        });
+      });
+    });
+
+    it("forwards a call as this turn, and keeps bad arguments from Convex", async () => {
+      await withEndpoint(async ({ calls, tools }) => {
+        const add = addBlock(tools);
+        const added = await add.execute("call-1", {
+          kind: "paragraph",
+          text: "We chose blue.",
+        });
+        const callsAfterGoodCall = [...calls];
+        const refused = await add.execute("call-2", { kind: "paragraph" });
+        expect({
+          added,
+          callsAfterBadCall: calls.length,
+          callsAfterGoodCall,
+          refused: at(refused, "isError"),
+        }).toStrictEqual({
+          added: {
+            content: [
+              {
+                text: "Added block b9 at rev 1. Pass that rev as baseRev to change it later.",
+                type: "text",
+              },
+            ],
+            details: undefined,
+            isError: false,
+          },
+          callsAfterBadCall: 1,
+          callsAfterGoodCall: [
+            {
+              args: {
+                kind: "paragraph",
+                secret: "s3cret",
+                text: "We chose blue.",
+                turnId: "turn-7",
+              },
+              name: "documentTools:addBlockForTurn",
+            },
+          ],
+          refused: true,
+        });
+      });
+    });
+
+    it("fails once the turn's token is revoked", async () => {
+      await withEndpoint(async ({ revoke, tools }) => {
+        revoke();
+        await expect(
+          addBlock(tools).execute("call-3", { kind: "paragraph", text: "Late" })
+        ).rejects.toThrow(/no longer work/u);
+      });
     });
   });
 

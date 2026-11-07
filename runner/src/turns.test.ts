@@ -18,6 +18,8 @@ import type {
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
 import { eventQueue } from "./adapters/events.ts";
+import { documentTools, scribeTools } from "./room-tools.ts";
+import type { RoomToolSet } from "./room-tools.ts";
 import { createTurns } from "./turns.ts";
 import type { TurnsClient } from "./turns.ts";
 
@@ -72,6 +74,8 @@ interface FakeRun {
   events: ReturnType<typeof eventQueue>;
   steers: string[];
   edits: boolean[];
+  /** Thrown by the adapter once its events run out. */
+  crash?: Error;
 }
 
 // A harness the test drives by pushing events into the running turn.
@@ -107,6 +111,9 @@ const fakeHarness = () => {
       });
       runs.push(run);
       yield* events;
+      if (run.crash) {
+        throw run.crash;
+      }
     },
     async version() {
       return await Promise.resolve("fake 1.0");
@@ -129,14 +136,43 @@ const runJob = (turnId: string) => ({
   type: "run_turn",
 });
 
+// Issues one token per turn and records what is still live.
+const fakeRoomTools = () => {
+  const live = new Map<string, string>();
+  const issued: { turnId: string; token: string; tools?: RoomToolSet }[] = [];
+  let next = 0;
+  return {
+    async issue(turnId: string, tools?: RoomToolSet) {
+      next += 1;
+      const token = `room-token-${next}`;
+      live.set(token, turnId);
+      issued.push({ token, tools, turnId });
+      return await Promise.resolve({
+        token,
+        url: "http://127.0.0.1:40123/mcp",
+      });
+    },
+    issued,
+    live,
+    revoke(token: string) {
+      live.delete(token);
+    },
+  };
+};
+
 const setup = (extraJobs: Record<string, unknown> = {}) => {
   const convex = new FakeConvex({ "c-run": runJob("t1"), ...extraJobs });
   const client: TurnsClient = convex;
   const { harness, runs } = fakeHarness();
+  const roomTools = fakeRoomTools();
+  const transcript: unknown[] = [];
   const turns = createTurns({
-    appendTranscript() {},
+    appendTranscript(_turnId, record) {
+      transcript.push(record);
+    },
     client,
     harnesses: { claude: harness },
+    roomTools,
     secret: "s3cret",
     transcriptPath: (turnId) => `/tmp/${turnId}.ndjson`,
   });
@@ -144,7 +180,9 @@ const setup = (extraJobs: Record<string, unknown> = {}) => {
     calls: convex.calls,
     named: (name: string) => convex.named(name),
     replies: convex.replies,
+    roomTools,
     runs,
+    transcript,
     turns,
   };
 };
@@ -189,9 +227,30 @@ const end = (run: FakeRun, ...events: HarnessEvent[]) => {
   run.events.end();
 };
 
+const startScribe = async () => {
+  const scribe = {
+    ...runJob("t-scribe"),
+    commandId: "c-scribe",
+    documentMode: "scribe",
+    participant: {
+      harness: "claude",
+      id: "p-claude",
+      sessionId: "ordinary-session",
+    },
+  };
+  const s = setup({ "c-scribe": scribe });
+  s.replies["runner:start"] = () => ({ editsEnabled: true });
+  const turn = s.turns.handle("c-scribe");
+  await until(() => s.runs.length > 0);
+  const [run] = s.runs;
+  assert(run);
+  return { run, s, turn };
+};
+
 describe(createTurns, () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("a question raises a card, and an answer command resolves the harness with the payload", async () => {
@@ -484,5 +543,230 @@ describe(createTurns, () => {
     expect(
       names.indexOf("runner:sessionStarted") < names.indexOf("runner:finish")
     ).toBeTruthy();
+  });
+
+  it("an ordinary turn gets a room tools token, and it is revoked before the turn finishes", async () => {
+    const s = setup();
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [issued] = s.roomTools.issued;
+    const [run] = s.runs;
+    assert(issued && run);
+    expect(issued.turnId).toBe("t1");
+    expect(run.req.roomTools).toStrictEqual({
+      token: issued.token,
+      url: "http://127.0.0.1:40123/mcp",
+    });
+    let liveAtFinish = -1;
+    s.replies["runner:finish"] = () => {
+      liveAtFinish = s.roomTools.live.size;
+    };
+    end(run, { text: "done", type: "final" });
+    await turn;
+    expect(s.named("runner:finish")).toHaveLength(1);
+    // Revoked before Convex hears the turn finished.
+    expect(liveAtFinish).toBe(0);
+    expect(s.roomTools.live.size).toBe(0);
+  });
+
+  it("a finish that Convex rejects fails the turn at once, so a scribe run does not hold the document until its lease lapses", async () => {
+    const s = setup();
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+    s.replies["runner:finish"] = () => {
+      throw new Error("Too many writes in one mutation");
+    };
+    vi.spyOn(console, "error").mockImplementation(() => {
+      // The runner reports the failure; the test only checks what Convex hears.
+    });
+    end(run, { text: "done", type: "final" });
+    await turn;
+    const failures = s.named("runner:fail");
+    expect(failures).toHaveLength(1);
+    expect(String(failures[0]?.error)).toMatch(/could not save its result/u);
+    expect(failures[0]?.interrupted).toBeUndefined();
+  });
+
+  it("a failed turn revokes its room tools token", async () => {
+    const s = setup();
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+    expect(s.roomTools.live.size).toBe(1);
+    end(run, { message: "Model overloaded", retryable: true, type: "error" });
+    await turn;
+    expect(s.named("runner:fail")[0]?.error).toBe("Model overloaded");
+    expect(s.roomTools.live.size).toBe(0);
+  });
+
+  it("a cancelled turn revokes its room tools token", async () => {
+    const s = setup({
+      "c-stop": {
+        commandId: "c-stop",
+        payload: { reason: "Stopped by Robert" },
+        turn: { id: "t1" },
+        type: "interrupt",
+      },
+    });
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    expect(s.roomTools.live.size).toBe(1);
+    await s.turns.handle("c-stop");
+    await turn;
+    expect(s.named("runner:fail")[0]?.interrupted).toBeTruthy();
+    expect(s.roomTools.live.size).toBe(0);
+  });
+
+  it("an adapter that throws still has its room tools token revoked", async () => {
+    const s = setup();
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+    expect(s.roomTools.live.size).toBe(1);
+    run.crash = new Error("claude exited with code 1");
+    run.events.end();
+    await turn;
+    expect(s.named("runner:fail")[0]?.error).toBe("claude exited with code 1");
+    expect(s.roomTools.live.size).toBe(0);
+  });
+
+  it("an independent review gets no room tools token", async () => {
+    const review = {
+      ...runJob("t-review"),
+      commandId: "c-review",
+      turn: { id: "t-review", independentReview: true, prompt: "Review" },
+    };
+    const s = setup({ "c-review": review });
+    const turn = s.turns.handle("c-review");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+    expect(run.req.roomTools).toBeUndefined();
+    expect(s.roomTools.issued).toHaveLength(0);
+    end(run, { text: "Looks fine", type: "final" });
+    await turn;
+  });
+
+  it("the room tools token never reaches Convex, the transcript or the logs", async () => {
+    vi.useFakeTimers({
+      now: 0,
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+        "Date",
+      ],
+    });
+    const logged: unknown[] = [];
+    vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      logged.push(args);
+    });
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      logged.push(args);
+    });
+    const s = setup();
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+    const toolEvents: HarnessEvent[] = [
+      {
+        id: "call-1",
+        name: "mcp__atelier__add_block",
+        summary: "add_block paragraph",
+        type: "tool_call",
+      },
+      { id: "call-1", ok: true, type: "tool_result" },
+    ];
+    for (const event of toolEvents) {
+      run.events.push(event);
+    }
+    await idle();
+    vi.advanceTimersByTime(500);
+    await until(() => s.named("runner:recordTurnItems").length > 0);
+    end(run, { text: "done", type: "final" });
+    await turn;
+    const [issued] = s.roomTools.issued;
+    assert(issued);
+    expect(logged.length).toBeGreaterThan(0);
+    for (const where of [s.calls, s.transcript, logged]) {
+      expect(JSON.stringify(where)).not.toContain(issued.token);
+    }
+  });
+
+  describe("a scribe turn", () => {
+    it("starts fresh with edits off and the scribe tools, and no write tool beside the draft", async () => {
+      const { run, s, turn } = await startScribe();
+      expect({
+        editsEnabled: run.req.editsEnabled,
+        resumeSessionId: run.req.resumeSessionId,
+        scribe: run.req.scribe,
+        tools: s.roomTools.issued[0]?.tools === scribeTools,
+      }).toStrictEqual({
+        editsEnabled: false,
+        resumeSessionId: undefined,
+        scribe: true,
+        tools: true,
+      });
+      expect(scribeTools.map((t) => t.name)).toStrictEqual([
+        "read_document",
+        "draft_keep",
+        "draft_replace",
+        "draft_add",
+        "draft_remove",
+        "draft_move",
+      ]);
+      expect(
+        scribeTools.some(
+          (t) => documentTools.includes(t) && t.name !== "read_document"
+        )
+      ).toBeFalsy();
+      end(run, { text: "Tidied", type: "final" });
+      await turn;
+    });
+
+    it("raises no question cards and never saves a session", async () => {
+      const { run, s, turn } = await startScribe();
+      await expect(run.input.onQuestion(card)).rejects.toThrow(
+        /without asking questions/u
+      );
+      end(
+        run,
+        { sessionId: "scribe-session", type: "session" },
+        { text: "Tidied", type: "final" }
+      );
+      await turn;
+      const [finished] = s.named("runner:finish");
+      expect({
+        finishedSession: finished?.sessionId,
+        hands: s.named("runner:raiseHand"),
+        savedSessions: s.named("runner:sessionStarted"),
+        transcriptHoldsOrdinarySession: JSON.stringify(s.transcript).includes(
+          "ordinary-session"
+        ),
+      }).toStrictEqual({
+        finishedSession: undefined,
+        hands: [],
+        savedSessions: [],
+        transcriptHoldsOrdinarySession: false,
+      });
+    });
+  });
+
+  it("an ordinary turn gets the ordinary document tools", async () => {
+    const s = setup();
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+    expect(run.req.scribe).toBeUndefined();
+    expect(s.roomTools.issued[0]?.tools).toBeUndefined();
+    end(run, { text: "done", type: "final" });
+    await turn;
   });
 });

@@ -38,6 +38,9 @@ export const steer = mutation({
     if (message.followUpRitualId) {
       throw new Error("A follow-up runs as its own turn");
     }
+    if (message.threadId) {
+      throw new Error("A mention in a thread runs as its own turn");
+    }
     const room = await requireRunnerOnline(
       ctx,
       await ctx.db.get(message.roomId)
@@ -237,6 +240,8 @@ export const pane = query({
             startedAt: t.startedAt ?? null,
             status: t.status,
             stoppedByParticipantId: t.stoppedByParticipantId ?? null,
+            // Set on a turn answering a thread mention; its reply is in that thread.
+            threadId: t.threadId ?? null,
             waitingOnHandId: t.waitingOnHandId ?? null,
           };
         })

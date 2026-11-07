@@ -1,7 +1,10 @@
-import { useConvexAuth } from "convex/react";
+import { api } from "@atelier/backend/api";
+import { Link } from "@tanstack/react-router";
+import { useConvexAuth, useQuery } from "convex/react";
 import type { ReactNode } from "react";
 
 import { SignInPanel } from "~/auth/ClerkShell";
+import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 import {
   StandalonePage,
@@ -57,6 +60,31 @@ export const SignedInOnly = ({ children }: { children: ReactNode }) => {
   }
   if (!isAuthenticated) {
     return <SignInScreen title="Sign in to Atelier" />;
+  }
+  // oxlint-disable-next-line react/jsx-no-useless-fragment -- Returning children bare types the component as returning ReactNode, which includes promises, and fails promise-function-async.
+  return <>{children}</>;
+};
+
+// For pages only the owner may use. Everyone else sees `title` and a way back.
+export const OwnerOnly = ({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) => {
+  const me = useQuery(api.me.get, {});
+  if (me === undefined) {
+    return <PageSpinner />;
+  }
+  if (!(me.signedIn && me.isOwner)) {
+    return (
+      <MessagePage title={title} description="This page is for the room owner.">
+        <Button variant="outline" render={<Link to="/" />}>
+          Your rooms
+        </Button>
+      </MessagePage>
+    );
   }
   // oxlint-disable-next-line react/jsx-no-useless-fragment -- Returning children bare types the component as returning ReactNode, which includes promises, and fails promise-function-async.
   return <>{children}</>;

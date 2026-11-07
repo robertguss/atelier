@@ -30,8 +30,24 @@ export interface TurnRequest {
   editsEnabled: boolean;
   /** Sealed independent review: fresh session, supplied snapshot, no execution tools. */
   independentReview?: boolean;
-  /** Always includes the Atelier MCP server. */
+  /**
+   * The turn acts as scribe for the room document: a fresh session that is
+   * never saved, file edits off, no question cards, and the scribe's draft
+   * tools in `roomTools` instead of the ordinary document tools.
+   */
+  scribe?: boolean;
+  /**
+   * Extra MCP servers for the turn. The runner sends none: the room document
+   * tools travel in `roomTools`, and each adapter attaches them its own way.
+   */
   mcpServers: McpServerSpec[];
+  /**
+   * The runner's loopback endpoint for the room document tools, and this
+   * turn's bearer token for it. Absent on independent reviews. The token is a
+   * secret: pass it in config headers or the environment, never in argv, and
+   * never write it to a transcript.
+   */
+  roomTools?: { url: string; token: string };
 }
 
 /** One question the agent asked through its harness's own question prompt. */

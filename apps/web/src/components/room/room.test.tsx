@@ -43,6 +43,19 @@ interface Pane {
 
 let pane: Pane;
 
+let teamMessages: {
+  _id: string;
+  at: number;
+  authorParticipantId: string;
+  body: string;
+}[];
+
+const teamMessage = (
+  _id: string,
+  authorParticipantId: string,
+  body: string
+) => ({ _id, at: 1000, authorParticipantId, body });
+
 const agent = (
   participantId: string,
   harness: string,
@@ -144,13 +157,22 @@ const room = (access: "owner" | "member" = "owner") => {
     room: { _id: ROOM, editsEnabled: pane.editsEnabled, name: "Pricing plan" },
   });
   backend.queries["agent:pane"] = () => pane;
-  backend.queries["team:list"] = () => [];
+  backend.queries["team:list"] = () => teamMessages;
   backend.queries["members:list"] = () => ({ invites: [], members: [] });
+  backend.queries["documents:get"] = () => ({
+    blocks: [],
+    documentId: "d1",
+    rev: 1,
+  });
 };
 
 // What a room query does once the caller is no longer a member.
 const notAMember = () => {
   throw new Error("Not a member of this room");
+};
+
+const showTeam = () => {
+  fireEvent.click(screen.getByRole("button", { name: /^Show team chat/u }));
 };
 
 const openRoom = async (access: "owner" | "member" = "owner") => {
@@ -163,6 +185,8 @@ const openRoom = async (access: "owner" | "member" = "owner") => {
 describe("room screen", () => {
   beforeEach(() => {
     resetBackend();
+    window.localStorage.clear();
+    teamMessages = [];
     pane = {
       agents: [
         agent(CLAUDE, "claude", "Claude"),
@@ -177,9 +201,113 @@ describe("room screen", () => {
     };
   });
 
+  describe("layout", () => {
+    it("opens on the document, with the agent pane expanded and team chat collapsed the first time", async () => {
+      await openRoom();
+      expect(screen.getByRole("main")).toContainElement(
+        screen.getByRole("region", { name: "Room document" })
+      );
+      expect(
+        screen.getByRole("region", { name: "Agents" })
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("region", { name: "Team chat" })
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Show team chat" })
+      ).toBeInTheDocument();
+    });
+
+    it("reopens the side panels as they were last left", async () => {
+      const first = await openRoom();
+      fireEvent.click(screen.getByRole("button", { name: "Hide agents" }));
+      showTeam();
+      first.unmount();
+
+      await openRoom();
+      expect(
+        screen.queryByRole("region", { name: "Agents" })
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Show agents" })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("region", { name: "Team chat" })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("region", { name: "Room document" })
+      ).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Show agents" }));
+      expect(
+        screen.getByRole("textbox", { name: "To Claude" })
+      ).toBeInTheDocument();
+    });
+
+    it("flags a pending question card on the collapsed agent pane", async () => {
+      pane.agents = [
+        agent(CLAUDE, "claude", "Claude", {
+          activeTurnId: "t1",
+          status: "waiting",
+        }),
+      ];
+      pane.turns = [turn({ waitingOnHandId: "h1" })];
+      pane.cards = [card({})];
+      await openRoom();
+      fireEvent.click(screen.getByRole("button", { name: "Hide agents" }));
+      const handle = screen.getByRole("button", {
+        name: "Show agents: 1 question",
+      });
+      expect(within(handle).getByText("1 question")).toBeInTheDocument();
+    });
+
+    it("flags a running turn on the collapsed agent pane", async () => {
+      pane.agents = [
+        agent(CLAUDE, "claude", "Claude", {
+          activeTurnId: "t1",
+          status: "running",
+        }),
+      ];
+      pane.turns = [turn({})];
+      await openRoom();
+      fireEvent.click(screen.getByRole("button", { name: "Hide agents" }));
+      expect(
+        screen.getByRole("button", { name: "Show agents: Working" })
+      ).toBeInTheDocument();
+    });
+
+    it("counts unread team messages on the collapsed team chat, leaving out the person's own", async () => {
+      teamMessages = [
+        teamMessage("tm1", DANA, "Too big?"),
+        teamMessage("tm2", ROBERT, "Maybe"),
+        teamMessage("tm3", DANA, "Cut it"),
+      ];
+      await openRoom();
+      expect(
+        screen.getByRole("button", { name: "Show team chat: 2 unread" })
+      ).toBeInTheDocument();
+
+      showTeam();
+      expect(screen.getByText("Cut it")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Hide team chat" }));
+      expect(
+        screen.getByRole("button", { name: "Show team chat" })
+      ).toBeInTheDocument();
+
+      teamMessages = [...teamMessages, teamMessage("tm4", DANA, "Agreed then")];
+      act(() => {
+        pushBackend();
+      });
+      expect(
+        screen.getByRole("button", { name: "Show team chat: 1 unread" })
+      ).toBeInTheDocument();
+    });
+  });
+
   describe("composers", () => {
     it("labels each composer by its audience", async () => {
       await openRoom();
+      showTeam();
       expect(
         screen.getByRole("textbox", { name: "To Claude" })
       ).toBeInTheDocument();
@@ -190,6 +318,7 @@ describe("room screen", () => {
 
     it("sends Enter in the team composer to the team only and keeps focus there", async () => {
       await openRoom();
+      showTeam();
       const team = screen.getByRole("textbox", { name: "To team only" });
       team.focus();
       fireEvent.change(team, {
@@ -198,12 +327,12 @@ describe("room screen", () => {
       fireEvent.keyDown(team, { key: "Enter" });
 
       await waitFor(() => {
-        expect(backend.mutations["team:post"]).toHaveBeenCalledWith({
+        expect(mutation("team:post")).toHaveBeenCalledWith({
           body: "between us, this plan is too big",
           roomId: ROOM,
         });
       });
-      expect(backend.mutations["messages:send"]).not.toHaveBeenCalled();
+      expect(mutation("messages:send")).not.toHaveBeenCalled();
       expect(document.activeElement).toBe(team);
     });
 
@@ -213,17 +342,17 @@ describe("room screen", () => {
       toClaude.focus();
       fireEvent.change(toClaude, { target: { value: "Draft the plan" } });
       fireEvent.keyDown(toClaude, { key: "Enter", shiftKey: true });
-      expect(backend.mutations["messages:send"]).not.toHaveBeenCalled();
+      expect(mutation("messages:send")).not.toHaveBeenCalled();
 
       fireEvent.keyDown(toClaude, { key: "Enter" });
       await waitFor(() => {
-        expect(backend.mutations["messages:send"]).toHaveBeenCalledWith({
+        expect(mutation("messages:send")).toHaveBeenCalledWith({
           body: "Draft the plan",
           roomId: ROOM,
           toParticipantId: CLAUDE,
         });
       });
-      expect(backend.mutations["team:post"]).not.toHaveBeenCalled();
+      expect(mutation("team:post")).not.toHaveBeenCalled();
     });
 
     it("defaults the agent composer to the agent waiting on an open card", async () => {
@@ -260,15 +389,15 @@ describe("room screen", () => {
       );
 
       await waitFor(() => {
-        expect(backend.mutations["messages:send"]).toHaveBeenCalledWith({
+        expect(mutation("messages:send")).toHaveBeenCalledWith({
           body: "Stop, keep it short",
           roomId: ROOM,
           steer: true,
           toParticipantId: CLAUDE,
         });
       });
-      expect(backend.mutations["messages:send"]).toHaveBeenCalledOnce();
-      expect(backend.mutations["agent:steer"]).not.toHaveBeenCalled();
+      expect(mutation("messages:send")).toHaveBeenCalledOnce();
+      expect(mutation("agent:steer")).not.toHaveBeenCalled();
     });
 
     it("keeps the target while the person is typing, even when another agent raises a card", async () => {
@@ -295,7 +424,7 @@ describe("room screen", () => {
       expect(composer).toHaveValue("Keep the plan small");
       fireEvent.keyDown(composer, { key: "Enter" });
       await waitFor(() => {
-        expect(backend.mutations["messages:send"]).toHaveBeenCalledWith({
+        expect(mutation("messages:send")).toHaveBeenCalledWith({
           body: "Keep the plan small",
           roomId: ROOM,
           toParticipantId: CLAUDE,
@@ -317,7 +446,7 @@ describe("room screen", () => {
       fireEvent.change(toClaude, { target: { value: "Draft the plan" } });
       fireEvent.keyDown(toClaude, { key: "Enter" });
       await waitFor(() => {
-        expect(backend.mutations["messages:send"]).toHaveBeenCalledOnce();
+        expect(mutation("messages:send")).toHaveBeenCalledOnce();
       });
 
       fireEvent.change(toClaude, {
@@ -363,7 +492,7 @@ describe("room screen", () => {
       fireEvent.click(within(open).getByRole("button", { name: "Answer" }));
 
       await waitFor(() => {
-        expect(backend.mutations["hands:answer"]).toHaveBeenCalledWith({
+        expect(mutation("hands:answer")).toHaveBeenCalledWith({
           answers: [{ labels: ["Large"], questionId: "scope" }],
           handId: "h1",
         });
@@ -444,7 +573,7 @@ describe("room screen", () => {
       fireEvent.change(late, { target: { value: "Small, please" } });
       fireEvent.click(screen.getByRole("button", { name: "Send late answer" }));
       await waitFor(() => {
-        expect(backend.mutations["messages:send"]).toHaveBeenCalledWith({
+        expect(mutation("messages:send")).toHaveBeenCalledWith({
           body: "Small, please",
           roomId: ROOM,
           toParticipantId: CLAUDE,
@@ -488,7 +617,7 @@ describe("room screen", () => {
         within(queue).getByText("Use the old pricing")
       ).toBeInTheDocument();
       fireEvent.click(within(queue).getByRole("button", { name: "Steer now" }));
-      expect(backend.mutations["agent:steer"]).toHaveBeenCalledWith({
+      expect(mutation("agent:steer")).toHaveBeenCalledWith({
         messageId: "m-q",
       });
     });
@@ -576,7 +705,7 @@ describe("room screen", () => {
       await openRoom();
       expect(screen.getByText("it")).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Stop Claude" }));
-      expect(backend.mutations["messages:cancel"]).toHaveBeenCalledWith({
+      expect(mutation("messages:cancel")).toHaveBeenCalledWith({
         turnId: "t1",
       });
     });
@@ -664,7 +793,7 @@ describe("room screen", () => {
       fireEvent.click(
         screen.getByRole("switch", { name: /agents may edit files/iu })
       );
-      expect(backend.mutations["rooms:setEditsEnabled"]).toHaveBeenCalledWith({
+      expect(mutation("rooms:setEditsEnabled")).toHaveBeenCalledWith({
         on: true,
         roomId: ROOM,
       });
@@ -699,7 +828,7 @@ describe("room screen", () => {
           screen.getByText("https://atelier.example/invite/tok")
         ).toBeInTheDocument();
       });
-      expect(backend.actions["invites:create"]).toHaveBeenCalledWith({
+      expect(action("invites:create")).toHaveBeenCalledWith({
         email: "dana@example.com",
         roomId: ROOM,
       });
