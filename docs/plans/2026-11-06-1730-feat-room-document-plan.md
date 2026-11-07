@@ -346,7 +346,7 @@ Considered and not built:
 | U2   | Human editing, leases, history and restore            | `convex/blocks.ts`, `convex/history.ts`, `convex/lib/document.ts`                                                 | U1         |
 | U3   | Comment threads, anchoring and mentions               | `convex/threads.ts`, `convex/lib/anchor.ts`, `convex/lib/dispatch.ts`, `convex/runner.ts`                         | U1, U2     |
 | U4   | Runner-facing document functions and the claim digest | `convex/documentTools.ts`, `convex/lib/visibility.ts`, `convex/lib/prompt.ts`, `convex/runner.ts`                 | U1–U3      |
-| U5   | Runner tool core and loopback endpoint                | `runner/src/roomTools.ts`, `runner/src/roomToolsServer.ts`, `runner/src/turns.ts`                                 | U0, U4     |
+| U5   | Runner tool core and loopback endpoint                | `runner/src/room-tools.ts`, `runner/src/room-tools-server.ts`, `runner/src/turns.ts`                              | U0, U4     |
 | U6   | Adapter wiring for Claude, Codex and Pi               | `packages/shared/src/harness.ts`, `runner/src/adapters/*`                                                         | U0, U5     |
 | U7   | Scribe runs                                           | `convex/scribe.ts`, `convex/runner.ts`, `convex/messages.ts`, `runner/src/turns.ts`                               | U2–U6      |
 | U8   | Document-first room layout and block editing          | `apps/web/src/components/room/RoomView.tsx`, `apps/web/src/components/document/*`                                 | U1, U2     |
@@ -503,7 +503,7 @@ Backend paths are under `packages/backend/`.
 
 - Create: `packages/backend/convex/documentTools.ts`
 - Modify: `packages/backend/convex/lib/visibility.ts` (`canWriteDocument`), `packages/backend/convex/lib/prompt.ts` (`<room_document>`, `neutralize`, the edit-switch line), `packages/backend/convex/runner.ts` (`claim` returns the digest and the tool mode; `finish` records the seen rev with the session), `packages/backend/convex/lib/sessions.ts`, `packages/backend/convex/schema.ts` (`participants.documentRevSeen`, the follow-up session entry's seen rev)
-- Test: `packages/backend/tests/documentTools.test.ts`, additions to `packages/backend/tests/prompt.test.ts` and `packages/backend/tests/isolation.test.ts`
+- Test: `packages/backend/tests/document-tools.test.ts`, additions to `packages/backend/tests/prompt.test.ts` and `packages/backend/tests/isolation.test.ts`
 
 **Approach:**
 
@@ -539,9 +539,9 @@ Backend paths are under `packages/backend/`.
 
 **Files:**
 
-- Create: `runner/src/roomTools.ts` (tool definitions and Convex calls), `runner/src/roomToolsServer.ts` (loopback MCP endpoint and token table)
+- Create: `runner/src/room-tools.ts` (tool definitions and Convex calls), `runner/src/room-tools-server.ts` (loopback MCP endpoint and token table)
 - Modify: `runner/src/turns.ts` (issue a token at start, revoke it in every exit path), `runner/package.json` (test script)
-- Test: `runner/src/roomTools.test.ts`, `runner/src/roomToolsServer.test.ts`
+- Test: `runner/src/room-tools.test.ts`, `runner/src/room-tools-server.test.ts`
 
 **Approach:**
 
@@ -606,7 +606,7 @@ Backend paths are under `packages/backend/`.
 **Files:**
 
 - Create: `packages/backend/convex/scribe.ts`
-- Modify: `packages/backend/convex/runner.ts` (`claim`, `sessionStarted`, `finish`, `failTurn`, `recover`, `reclaimExpiredLeases`), `packages/backend/convex/lib/dispatch.ts` (`takesSteer`, `activeOrdinaryTurn`), `packages/backend/convex/rooms.ts` (`setEditsEnabled`), `packages/backend/convex/messages.ts` (`cancel`), `packages/backend/convex/schema.ts` (`turns.scribeRunId`), `runner/src/turns.ts` (fresh unsaved session, edits off, cards denied), `runner/src/roomTools.ts` (draft tools)
+- Modify: `packages/backend/convex/runner.ts` (`claim`, `sessionStarted`, `finish`, `failTurn`, `recover`, `reclaimExpiredLeases`), `packages/backend/convex/lib/dispatch.ts` (`takesSteer`, `activeOrdinaryTurn`), `packages/backend/convex/rooms.ts` (`setEditsEnabled`), `packages/backend/convex/messages.ts` (`cancel`), `packages/backend/convex/schema.ts` (`turns.scribeRunId`), `runner/src/turns.ts` (fresh unsaved session, edits off, cards denied), `runner/src/room-tools.ts` (draft tools)
 - Test: `packages/backend/tests/scribe.test.ts`, additions to `runner/src/turns.test.ts`
 
 **Approach:**

@@ -258,7 +258,6 @@ describe("comment threads", () => {
       claudeTurns: claudeTurns.length,
       codexTurns: codexTurns.length,
       deliveries: allDeliveries.length,
-      delivery: allDeliveries[0],
       mentions: defined(defined(awaited20.open[0]).comments[0]).mentions,
       prompt: {
         commentTags: prompt.match(/<comment /gu)?.length,
@@ -273,22 +272,23 @@ describe("comment threads", () => {
             prompt
           ),
       },
-      turn,
-    }).toMatchObject({
+    }).toStrictEqual({
       claudeTurns: 0,
       codexTurns: 0,
       deliveries: 1,
-      delivery: {
-        authorParticipantId: robert._id,
-        delivery: "delivered",
-        threadId,
-        toParticipantId: pi._id,
-      },
       mentions: [{ participantId: pi._id, state: "answering" }],
       prompt: {
         commentTags: 1,
         shown: [true, true, true, true],
         usesOwnerEnvelope: true,
+      },
+    });
+    expect({ delivery: allDeliveries[0], turn }).toMatchObject({
+      delivery: {
+        authorParticipantId: robert._id,
+        delivery: "delivered",
+        threadId,
+        toParticipantId: pi._id,
       },
       turn: {
         requestedByParticipantIds: [robert._id],
@@ -435,19 +435,23 @@ describe("comment threads", () => {
     const commands = awaited11.filter((c) => c.turnId === defined(turn)._id);
     expect({
       commands: commands.map((c) => [c.type, c.status]),
-      delivered: awaited12[0],
-      turn,
-      waiting,
-    }).toMatchObject({
+      mentions: waiting.mentions,
+      state: waiting.state,
+      turnsWhileOffline: waiting.turns,
+    }).toStrictEqual({
       commands: [["run_turn", "pending"]],
+      mentions: [{ participantId: pi._id, state: "waitingForRunner" }],
+      state: "open",
+      turnsWhileOffline: 0,
+    });
+    expect({
+      delivered: awaited12[0],
+      queued: waiting.delivery,
+      turn,
+    }).toMatchObject({
       delivered: { deliveredTurnId: defined(turn)._id, delivery: "delivered" },
+      queued: { delivery: "queued", toParticipantId: pi._id },
       turn: { status: "queued", threadId },
-      waiting: {
-        delivery: { delivery: "queued", toParticipantId: pi._id },
-        mentions: [{ participantId: pi._id, state: "waitingForRunner" }],
-        state: "open",
-        turns: 0,
-      },
     });
   });
 

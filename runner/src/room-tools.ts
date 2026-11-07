@@ -1,5 +1,5 @@
 // The room document tools a model uses during a turn. One core serves every
-// harness: the loopback MCP endpoint (roomToolsServer.ts) for Codex and Pi,
+// harness: the loopback MCP endpoint (room-tools-server.ts) for Codex and Pi,
 // and an in-process SDK server for Claude. Each tool forwards to a
 // runner-secret Convex function that applies every rule itself, so this file
 // only validates the shape of the arguments and turns Convex's answer, or its
