@@ -193,9 +193,13 @@ export const dispatchNext = async (
       ? await ctx.db.get(previous.stoppedByParticipantId)
       : null;
   // A follow-up to a review or its decision may only read the document.
+  // Claude asks through its own question tool, so only the others are
+  // pointed at raise_hand.
+  const agent = await ctx.db.get(participantId);
   const context = contextBlock(
     await loadRoomContext(ctx, room, members),
-    first.followUpRitualId ? "read" : "write"
+    first.followUpRitualId ? "read" : "write",
+    { raiseHand: agent?.harness !== undefined && agent.harness !== "claude" }
   );
   const prompt = turnPrompt({
     context,

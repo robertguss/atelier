@@ -285,6 +285,38 @@ describe(piHarness, () => {
     });
   });
 
+  it("Pi reports that it can raise cards, which it does through raise_hand", () => {
+    expect(piHarness({ onRaw() {} }).capabilities.canRaiseCards).toBeTruthy();
+  });
+
+  it("Pi keeps a run going past 30 minutes while a tool call is pending", async () => {
+    await withFakePi(async (fake) => {
+      vi.useFakeTimers({
+        shouldAdvanceTime: true,
+        toFake: ["setTimeout", "clearTimeout"],
+      });
+      try {
+        const events = await fake.run(
+          { prompt: "steer" },
+          turnInput(),
+          async (ev, input) => {
+            if (ev.type === "tool_call") {
+              await vi.advanceTimersByTimeAsync(31 * 60_000);
+              await input.steer("answer");
+            }
+          }
+        );
+        expect(events.some((ev) => ev.type === "error")).toBeFalsy();
+        expect(events.at(-1)).toStrictEqual({
+          text: "steered by answer",
+          type: "final",
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("Pi with edits on adds edit and write plus the guard extension; with edits off its arguments are unchanged", async () => {
     await withFakePi(async (fake) => {
       await fake.run({
@@ -462,6 +494,9 @@ describe(piHarness, () => {
             "atelier_update_block",
             "atelier_delete_block",
             "atelier_comment",
+            "atelier_read_handbook",
+            "atelier_recent_decisions",
+            "atelier_raise_hand",
           ],
           required: ["kind", "text"],
           type: "object",

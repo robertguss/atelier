@@ -149,6 +149,7 @@ const roomTools = {
 const atelierConfig = {
   "mcp_servers.atelier.bearer_token_env_var": "ATELIER_ROOM_TOKEN",
   "mcp_servers.atelier.default_tools_approval_mode": "approve",
+  "mcp_servers.atelier.tool_timeout_sec": 7500,
   "mcp_servers.atelier.url": "http://127.0.0.1:40123/mcp",
 };
 
@@ -345,7 +346,7 @@ describe(codexHarness, () => {
     expect(!results.some((e) => e.type === "final")).toBeTruthy();
   });
 
-  it("Codex with edits off keeps the read-only sandbox, never asks, and raises no cards", async () => {
+  it("Codex with edits off keeps the read-only sandbox, never asks, and refuses its own question prompt (cards come through raise_hand)", async () => {
     await using fake = await fakeCodex({
       steps: [
         {
@@ -385,7 +386,7 @@ describe(codexHarness, () => {
       turnApprovalPolicy: at(turn, "params", "approvalPolicy"),
       turnSandboxPolicy: at(turn, "params", "sandboxPolicy"),
     }).toStrictEqual({
-      canRaiseCards: false,
+      canRaiseCards: true,
       questionErrorCode: -32_601,
       threadApprovalPolicy: "never",
       threadSandbox: "read-only",

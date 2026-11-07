@@ -1,10 +1,12 @@
 // A Pi extension the runner loads on every turn except independent reviews.
-// It offers the room document tools as Pi tools named atelier_<tool>. When Pi
+// It offers the room tools as Pi tools named atelier_<tool>. When Pi
 // loads it, it asks the runner's loopback endpoint for the tool list, so the
 // runner's tool core stays their only definition, and forwards each call there.
 // The endpoint and this turn's token arrive in ATELIER_ROOM_URL and
 // ATELIER_ROOM_TOKEN; the token never appears in arguments or tool output.
 // Pi loads this file itself, so it imports nothing but Node built-ins.
+
+import { request } from "node:http";
 
 export const TOOL_PREFIX = "atelier_";
 
@@ -51,6 +53,45 @@ const isListedTool = (value: unknown): value is ListedTool =>
 const present = (value: string | undefined): value is string =>
   value !== undefined && value !== "";
 
+// One JSON-RPC POST. node:http rather than fetch: fetch gives up after five
+// minutes without a reply, and raise_hand waits for a person, up to hours.
+// Aborting destroys the socket, so the runner sees the agent stop waiting.
+const post = async (
+  url: string,
+  token: string,
+  body: string,
+  signal?: AbortSignal
+) =>
+  // oxlint-disable-next-line promise/avoid-new -- node:http reports through callbacks and events
+  await new Promise<{ ok: boolean; text: string }>((resolve, reject) => {
+    const req = request(
+      url,
+      {
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        method: "POST",
+        signal,
+      },
+      (res) => {
+        let text = "";
+        res.setEncoding("utf-8");
+        res.on("data", (chunk: string) => {
+          text += chunk;
+        });
+        res.on("end", () => {
+          const status = res.statusCode ?? 0;
+          resolve({ ok: status >= 200 && status < 300, text });
+        });
+        res.on("error", reject);
+      }
+    );
+    req.on("error", reject);
+    req.end(body);
+  });
+
 const atelierRoomTools = async (pi: ExtensionApi) => {
   const url = process.env.ATELIER_ROOM_URL;
   const token = process.env.ATELIER_ROOM_TOKEN;
@@ -61,22 +102,18 @@ const atelierRoomTools = async (pi: ExtensionApi) => {
   let seq = 0;
   const rpc = async (method: string, params: unknown, signal?: AbortSignal) => {
     seq += 1;
-    const res = await fetch(url, {
-      body: JSON.stringify({ id: seq, jsonrpc: "2.0", method, params }),
-      headers: {
-        accept: "application/json",
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-      method: "POST",
-      signal,
-    });
+    const res = await post(
+      url,
+      token,
+      JSON.stringify({ id: seq, jsonrpc: "2.0", method, params }),
+      signal
+    );
     if (!res.ok) {
-      throw new Error("The document tools no longer work for this turn.");
+      throw new Error("The room tools no longer work for this turn.");
     }
-    const reply: unknown = await res.json();
+    const reply: unknown = JSON.parse(res.text);
     if (!isRecord(reply)) {
-      throw new Error("The document tools sent a reply Pi could not read.");
+      throw new Error("The room tools sent a reply Pi could not read.");
     }
     if (isRecord(reply.error)) {
       throw new Error(String(reply.error.message));
@@ -97,7 +134,7 @@ const atelierRoomTools = async (pi: ExtensionApi) => {
           signal
         );
         if (!isTextResult(result)) {
-          throw new Error("The document tool sent a result Pi could not read.");
+          throw new Error("The room tool sent a result Pi could not read.");
         }
         return {
           content: result.content,
@@ -105,7 +142,7 @@ const atelierRoomTools = async (pi: ExtensionApi) => {
           isError: result.isError === true,
         };
       },
-      label: `Room document: ${tool.name}`,
+      label: `Atelier: ${tool.name}`,
       name: TOOL_PREFIX + tool.name,
       parameters: tool.inputSchema,
     });

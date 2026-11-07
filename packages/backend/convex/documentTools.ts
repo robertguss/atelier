@@ -27,6 +27,7 @@ import {
   isOwnBlock,
   participantNames,
 } from "./lib/documentDigest";
+import { agentDecisions, decisionLine } from "./lib/prompt";
 import { required } from "./lib/required";
 import {
   DRAFT_OP_LIMIT,
@@ -42,7 +43,8 @@ import { createThread, postComment } from "./lib/threads";
 import { canWriteDocument, documentMode } from "./lib/visibility";
 import { blockKind } from "./schema";
 
-// The room document tools a model turn calls through the runner. Each takes
+// The room tools a model turn calls through the runner: the room document,
+// and the handbook and recent decisions. Each takes
 // the runner secret and the turn, and Convex applies every rule itself: the
 // author is the turn's participant, never an argument; the turn must be
 // running under its claimed command; reviews never see the document and
@@ -346,6 +348,45 @@ export const readThreadForTurn = query({
       passage: thread.exact,
       state: thread.state,
     };
+  },
+});
+
+// The room's handbook as it is now. The prompt carries the copy from when
+// the turn was queued.
+export const readHandbookForTurn = query({
+  args: { secret: v.string(), turnId: v.id("turns") },
+  handler: async (ctx, { secret, turnId }) => {
+    const loaded = await loadTurn(ctx, secret, turnId, "read");
+    if (!loaded.ok) {
+      return loaded;
+    }
+    const room = required(await ctx.db.get(loaded.turn.roomId), "room");
+    return { handbook: room.handbook, ok: true as const };
+  },
+});
+
+const DECISIONS_DEFAULT = 10;
+const DECISIONS_MAX = 50;
+
+// The room's latest decisions, oldest first, in the agent-visible view the
+// context block uses: never a rationale or a decision made in a review.
+export const recentDecisionsForTurn = query({
+  args: {
+    limit: v.optional(v.number()),
+    secret: v.string(),
+    turnId: v.id("turns"),
+  },
+  handler: async (ctx, { secret, turnId, limit }) => {
+    const loaded = await loadTurn(ctx, secret, turnId, "read");
+    if (!loaded.ok) {
+      return loaded;
+    }
+    const count = Math.min(
+      DECISIONS_MAX,
+      Math.max(1, Math.trunc(limit ?? DECISIONS_DEFAULT))
+    );
+    const decisions = await agentDecisions(ctx, loaded.turn.roomId, count);
+    return { lines: decisions.map(decisionLine), ok: true as const };
   },
 });
 

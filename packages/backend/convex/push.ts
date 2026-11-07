@@ -9,7 +9,7 @@ import {
   internalMutation,
   internalAction,
 } from "./_generated/server";
-import type { ActionCtx } from "./_generated/server";
+import type { ActionCtx, MutationCtx } from "./_generated/server";
 import { requireOwner } from "./lib/auth";
 
 const BATCH_SIZE = 100;
@@ -95,6 +95,15 @@ export const recipients = internalQuery({
       .collect();
   },
 });
+// Devices Expo reported as no longer registered.
+const deleteTokens = async (ctx: MutationCtx, ids: Id<"pushTokens">[]) => {
+  await Promise.all(
+    ids.map(async (id) => {
+      await ctx.db.delete(id);
+    })
+  );
+};
+
 export const result = internalMutation({
   args: {
     invalidTokens: v.array(v.id("pushTokens")),
@@ -107,30 +116,23 @@ export const result = internalMutation({
   },
   handler: async (ctx, { ritualId, status, invalidTokens }) => {
     await ctx.db.patch(ritualId, { pushStatus: status });
-    await Promise.all(
-      invalidTokens.map(async (id) => {
-        await ctx.db.delete(id);
-      })
-    );
+    await deleteTokens(ctx, invalidTokens);
   },
 });
-// Sends one batch of at most BATCH_SIZE notifications and records the outcome.
-// Returns how many Expo accepted; throws if Expo rejected any.
-const sendBatch = async (
-  ctx: ActionCtx,
-  ritualId: Id<"rituals">,
-  batch: Doc<"pushTokens">[]
-) => {
+interface PushMessage {
+  title: string;
+  body: string;
+  data: Record<string, string>;
+}
+
+// Sends one message to a batch of at most BATCH_SIZE devices. Returns how
+// many Expo accepted, the devices it says are gone, and whether it rejected
+// any other.
+const expoSend = async (batch: Doc<"pushTokens">[], message: PushMessage) => {
   const accessToken = process.env.EXPO_ACCESS_TOKEN;
   const response = await fetch("https://exp.host/--/api/v2/push/send", {
     body: JSON.stringify(
-      batch.map((t) => ({
-        body: "All participants have finished. Open Atelier to read their answers.",
-        data: { ritualId },
-        sound: "default",
-        title: "Review ready",
-        to: t.token,
-      }))
+      batch.map((t) => ({ ...message, sound: "default", to: t.token }))
     ),
     headers: {
       "Content-Type": "application/json",
@@ -156,6 +158,21 @@ const sendBatch = async (
   const failed = tickets.some(
     (t) => ticketStatus(t) !== "ok" && ticketError(t) !== "DeviceNotRegistered"
   );
+  return { accepted, failed, invalidTokens };
+};
+
+// Sends one batch of review notifications and records the outcome. Returns
+// how many Expo accepted; throws if Expo rejected any.
+const sendBatch = async (
+  ctx: ActionCtx,
+  ritualId: Id<"rituals">,
+  batch: Doc<"pushTokens">[]
+) => {
+  const { accepted, failed, invalidTokens } = await expoSend(batch, {
+    body: "All participants have finished. Open Atelier to read their answers.",
+    data: { ritualId },
+    title: "Review ready",
+  });
   await ctx.runMutation(internal.push.result, {
     invalidTokens,
     ritualId,
@@ -206,5 +223,70 @@ export const send = internalAction({
       });
       throw error;
     }
+  },
+});
+
+// Who a raised card's push goes to, and what it says. Null once the card
+// has closed, so a card answered at once sends nothing.
+export const handPush = internalQuery({
+  args: { handId: v.id("hands") },
+  handler: async (ctx, { handId }) => {
+    const hand = await ctx.db.get(handId);
+    if (hand?.status !== "raised") {
+      return null;
+    }
+    const agent = await ctx.db.get(hand.participantId);
+    // shortcut: every registered device gets it. Only owners can register
+    // today, and there is one owner; once rooms have different owners, send
+    // to the room owner's devices only.
+    const tokens = await ctx.db.query("pushTokens").collect();
+    return {
+      agentName: agent?.displayName ?? "An agent",
+      participantId: hand.participantId,
+      roomId: hand.roomId,
+      tokens,
+    };
+  },
+});
+
+export const dropTokens = internalMutation({
+  args: { tokenIds: v.array(v.id("pushTokens")) },
+  handler: async (ctx, { tokenIds }) => {
+    await deleteTokens(ctx, tokenIds);
+  },
+});
+
+// Tells the owner's phone that an agent is waiting on a card. Only the
+// agent's name leaves Convex, never the question.
+export const sendHand = internalAction({
+  args: { handId: v.id("hands") },
+  handler: async (ctx, { handId }): Promise<null> => {
+    const push = await ctx.runQuery(internal.push.handPush, { handId });
+    if (push === null || push.tokens.length === 0) {
+      return null;
+    }
+    const message = {
+      body: `${push.agentName} has a question. Open Atelier to answer it.`,
+      data: { participantId: push.participantId, roomId: push.roomId },
+      title: "Question waiting",
+    };
+    let failed = false;
+    const gone: Id<"pushTokens">[] = [];
+    for (let i = 0; i < push.tokens.length; i += BATCH_SIZE) {
+      // oxlint-disable-next-line eslint/no-await-in-loop -- batches go out one at a time
+      const sent = await expoSend(
+        push.tokens.slice(i, i + BATCH_SIZE),
+        message
+      );
+      gone.push(...sent.invalidTokens);
+      failed ||= sent.failed;
+    }
+    if (gone.length > 0) {
+      await ctx.runMutation(internal.push.dropTokens, { tokenIds: gone });
+    }
+    if (failed) {
+      throw new Error("Expo rejected a push ticket");
+    }
+    return null;
   },
 });

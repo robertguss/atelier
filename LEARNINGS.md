@@ -248,6 +248,60 @@ test owner identity.
   document, Claude wrote to it in 3 turns, Codex in 2 and Pi in 2, and none
   commented. Tune the tool descriptions if that proves too quiet or too noisy.
 
+## raise_hand long-call probes (2026-11-07)
+
+Run live with Robert's logins through the real runner adapters, in a
+throwaway repo under `/tmp`, against a stub `atelier` endpoint whose `wait`
+tool replied after a set time: Codex CLI 0.166.0 `app-server` (`gpt-6.1-sol`,
+low effort) and Pi 1.4.0 (`openai/gpt-6-astra`, low thinking). The probe
+script was not kept.
+
+- **Both harnesses hold a tool call for 40 minutes.** Codex with
+  `mcp_servers.atelier.tool_timeout_sec` set (the default is 60 s; an 82 s call
+  also passed) and Pi through the extension's `node:http` client (Node's
+  `fetch` gives up after 300 s without response headers) each returned the
+  2400 s result to the model, which then answered with it. Pi needed the
+  adapter's own 30-minute run timer gone; the runner's pausable turn deadline
+  replaces it.
+- **How each harness abandons a call.** Aborting a Codex turn mid-call closes
+  the HTTP connection _and_ sends `notifications/cancelled` with the call's
+  JSON-RPC id (`reason: "MCP request cancelled by caller"`). Aborting a Pi run
+  closes the connection. The endpoint treats either as "the agent stopped
+  waiting" and withdraws the card.
+- **Codex keeps calling the model while an MCP call is pending.** During the
+  40-minute wait it emitted a `thread/tokenUsage/updated` about every 13 s
+  (183 in total), each a reasoning step with ~30 output tokens over the cached
+  context, which grew by ~59 tokens each time. The call itself was unaffected.
+  A raise_hand card left open for two hours therefore costs Codex roughly 550
+  small model calls against Robert's ChatGPT plan limits. Watch
+  `account/rateLimits/updated` if this proves expensive.
+- Asked to call the tool, both models called it at once and waited; neither
+  asked in plain text or called a `sleep` tool.
+
+## raise_hand live check (2026-11-07)
+
+Run against the Convex dev deployment with this branch pushed, a second runner
+named `mcp-tools-live-check` (Robert's own runner kept running) and a
+throwaway room under `/tmp`, driven with `npx convex run --identity` as a test
+owner identity. Codex CLI 0.167.0, Pi 1.4.0, Claude Code 2.1.319.
+
+- **Codex asked in plain text until the prompt named the tool.** Asked to let
+  Robert pick a database, Codex replied with a plain-text question and ended
+  its turn, although the `atelier` server was ready and `raise_hand` was
+  listed. Told to use `raise_hand`, it did. The room context block for Codex
+  and Pi now says to call `raise_hand` when a person's answer is needed;
+  after that, both raised a card unprompted on the first try. Claude's block
+  does not mention it, since Claude asks through its own question tool.
+- Codex's card was answered on the card on a resumed session and Pi's in chat
+  (the chat message started no new turn); each turn continued with the
+  answer, and the decisions showed in `recent_decisions` for all three
+  harnesses. Stopping a Pi turn with an open card marked the card cancelled
+  and Pi idle. The pane showed all three agents able to raise cards.
+- `read_handbook` worked on all three harnesses but only on an empty
+  handbook: nothing can edit a handbook yet (rooms are created with `""`).
+- A `push:sendHand` action ran successfully for each raised card, but no
+  device is registered on the dev deployment, so no notification was sent.
+
 ## Shared rooms build pitfalls
 
 How to set up and run shared rooms is in [docs/shared-rooms.md](docs/shared-rooms.md).

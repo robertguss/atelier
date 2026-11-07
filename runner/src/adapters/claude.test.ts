@@ -721,7 +721,7 @@ describe(claudeHarness, () => {
     expect(steered).toBe("rejected");
   });
 
-  it("an ordinary Claude turn gets the in-process Atelier server, with no route or token in its arguments", async () => {
+  it("an ordinary Claude turn gets the in-process Atelier server without raise_hand, with no route or token in its arguments", async () => {
     const { calls } = await runFake([init, result("ok")], { roomTools });
     // In-process servers are declared in initialize, not passed as --mcp-config,
     // and without --strict-mcp-config the user's own MCP servers still load.
@@ -744,6 +744,8 @@ describe(claudeHarness, () => {
       "update_block",
       "delete_block",
       "comment",
+      "read_handbook",
+      "recent_decisions",
     ]);
     expect(JSON.stringify(calls)).not.toMatch(/ROOM-TOKEN-SECRET|40123/u);
   });

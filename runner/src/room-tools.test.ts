@@ -1,15 +1,17 @@
+import type { QuestionAnswer, QuestionCard } from "@atelier/shared";
 import { describe, expect, it, vi } from "vitest";
 
 import { FakeRoomConvex } from "./fake-room-convex.ts";
 import type { FakeArgs } from "./fake-room-convex.ts";
 import {
+  QuestionClosedError,
   callRoomTool,
   claudeRoomToolsServer,
   documentTools,
   listTools,
   scribeTools,
 } from "./room-tools.ts";
-import type { RoomToolResult, RoomToolsClient } from "./room-tools.ts";
+import type { AskRoom, RoomToolResult, RoomToolsClient } from "./room-tools.ts";
 
 // Records every query and mutation by name and answers from `replies`.
 const fakeConvex = (
@@ -292,7 +294,7 @@ describe(callRoomTool, () => {
       {}
     );
     expect(text(unknown)).toBe(
-      "There is no tool named settle_thread. The tools are read_document, read_thread, add_block, update_block, delete_block, comment."
+      "There is no tool named settle_thread. The tools are read_document, read_thread, add_block, update_block, delete_block, comment, read_handbook, recent_decisions, raise_hand."
     );
     expect(convex.calls).toHaveLength(0);
   });
@@ -323,7 +325,7 @@ describe(callRoomTool, () => {
     }
   });
 
-  it("the tool list gives every document tool a JSON schema for its arguments", () => {
+  it("the tool list gives every ordinary tool a JSON schema for its arguments", () => {
     const tools = listTools();
     expect(tools.map((t) => t.name)).toStrictEqual([
       "read_document",
@@ -332,7 +334,13 @@ describe(callRoomTool, () => {
       "update_block",
       "delete_block",
       "comment",
+      "read_handbook",
+      "recent_decisions",
+      "raise_hand",
     ]);
+    expect(
+      tools.find((t) => t.name === "raise_hand")?.inputSchema.required
+    ).toStrictEqual(["question"]);
     const update = tools.find((t) => t.name === "update_block");
     const add = tools.find((t) => t.name === "add_block");
     const kind = isRecord(add?.inputSchema.properties)
@@ -358,7 +366,7 @@ describe(callRoomTool, () => {
       return await Promise.resolve<RoomToolResult>({
         content: [{ text: "ok", type: "text" }],
       });
-    });
+    }, documentTools);
     const registered: unknown = at(server.instance, "_registeredTools");
     const comment = at(registered, "comment");
     const handler = at(comment, "handler");
@@ -503,5 +511,246 @@ describe(callRoomTool, () => {
       });
       expect(refused.isError).toBeTruthy();
     });
+  });
+});
+
+describe("the room context tools", () => {
+  it("read_handbook returns the handbook, or says there is none", async () => {
+    let handbook = "1. Ship small.";
+    const convex = fakeConvex({
+      "documentTools:readHandbookForTurn": () => ({ handbook, ok: true }),
+    });
+    const read = async () =>
+      text(
+        await callRoomTool(convex.client, "s3cret", "t1", "read_handbook", {})
+      );
+    await expect(read()).resolves.toBe("1. Ship small.");
+    handbook = "  \n";
+    await expect(read()).resolves.toBe("This room has no handbook.");
+    expect(convex.calls[0]).toStrictEqual({
+      args: { secret: "s3cret", turnId: "t1" },
+      name: "documentTools:readHandbookForTurn",
+    });
+  });
+
+  it("read_handbook shows a refusal as text", async () => {
+    const convex = fakeConvex({
+      "documentTools:readHandbookForTurn": () => ({
+        message: "This turn is no longer running.",
+        ok: false,
+        reason: "turn_ended",
+      }),
+    });
+    const result = await callRoomTool(
+      convex.client,
+      "s3cret",
+      "t1",
+      "read_handbook",
+      {}
+    );
+    expect({ error: result.isError, text: text(result) }).toStrictEqual({
+      error: true,
+      text: "Not done (turn_ended): This turn is no longer running.",
+    });
+  });
+
+  it("recent_decisions passes the limit and lists the decisions, or says there are none", async () => {
+    let lines = [
+      "- Which? → Postgres (decided by Robert, 2026-11-07 10:00 UTC)",
+    ];
+    const convex = fakeConvex({
+      "documentTools:recentDecisionsForTurn": () => ({ lines, ok: true }),
+    });
+    const listed = await callRoomTool(
+      convex.client,
+      "s3cret",
+      "t1",
+      "recent_decisions",
+      { limit: 3 }
+    );
+    expect(text(listed)).toBe(
+      "Recent decisions, oldest first:\n- Which? → Postgres (decided by Robert, 2026-11-07 10:00 UTC)"
+    );
+    expect(convex.calls[0]?.args).toStrictEqual({
+      limit: 3,
+      secret: "s3cret",
+      turnId: "t1",
+    });
+    lines = [];
+    const none = await callRoomTool(
+      convex.client,
+      "s3cret",
+      "t1",
+      "recent_decisions",
+      {}
+    );
+    expect(text(none)).toBe("No decisions yet.");
+    expect(convex.calls[1]?.args).toStrictEqual({
+      secret: "s3cret",
+      turnId: "t1",
+    });
+  });
+});
+
+const raise = async (args: unknown, ask?: AskRoom, signal?: AbortSignal) => {
+  const convex = fakeConvex();
+  const result = await callRoomTool(
+    convex.client,
+    "s3cret",
+    "t1",
+    "raise_hand",
+    args,
+    undefined,
+    { ask, signal }
+  );
+  expect(convex.calls).toHaveLength(0);
+  return result;
+};
+const answering =
+  (answer: QuestionAnswer, seen: QuestionCard[] = []): AskRoom =>
+  async (card) => {
+    seen.push(card);
+    return await Promise.resolve(answer);
+  };
+
+describe("raise_hand", () => {
+  it("puts one question with its options on a card that always allows a written answer", async () => {
+    const seen: QuestionCard[] = [];
+    const stop = new AbortController();
+    let signal: AbortSignal | undefined;
+    await raise(
+      { options: ["Postgres", "SQLite"], question: "Which database?" },
+      async (card, given) => {
+        seen.push(card);
+        signal = given;
+        return await Promise.resolve({
+          handId: "h1",
+          message: "none",
+          noDecision: true as const,
+          requestId: card.requestId,
+        });
+      },
+      stop.signal
+    );
+    const [card] = seen;
+    expect(card?.questions).toStrictEqual([
+      {
+        allowFreeText: true,
+        header: "",
+        id: "q1",
+        multiSelect: false,
+        options: [{ label: "Postgres" }, { label: "SQLite" }],
+        text: "Which database?",
+      },
+    ]);
+    expect(card?.requestId).toMatch(/^[\da-f-]{36}$/u);
+    expect(signal).toBe(stop.signal);
+  });
+
+  it("returns who answered and what, on the card or in chat", async () => {
+    const onCard = await raise(
+      { question: "Which?" },
+      answering({
+        answeredBy: "Robert",
+        answers: [
+          {
+            freeText: "but keep it small",
+            labels: ["SQLite"],
+            question: "Which?",
+            questionId: "q1",
+          },
+        ],
+        handId: "h1",
+        requestId: "r1",
+        via: "card",
+      })
+    );
+    const inChat = await raise(
+      { question: "Which?" },
+      answering({
+        answeredBy: "Dana",
+        answers: [
+          {
+            freeText: "use SQLite",
+            labels: [],
+            question: "Which?",
+            questionId: "q1",
+          },
+        ],
+        handId: "h1",
+        requestId: "r1",
+        via: "chat",
+      })
+    );
+    expect([text(onCard), text(inChat)]).toStrictEqual([
+      "Robert answered on the card: SQLite; but keep it small",
+      "Dana answered in chat: use SQLite",
+    ]);
+  });
+
+  it("passes on the no-decision message when nobody answered in time", async () => {
+    const result = await raise(
+      { question: "Which?" },
+      answering({
+        handId: "h1",
+        message: "No one answered this question within 2 hours.",
+        noDecision: true,
+        requestId: "r1",
+      })
+    );
+    expect(text(result)).toBe("No one answered this question within 2 hours.");
+  });
+
+  it("reports a question that closed without an answer, and a turn that cannot ask, as errors", async () => {
+    const closed = await raise({ question: "Which?" }, async () => {
+      await Promise.resolve();
+      throw new QuestionClosedError("The turn ended");
+    });
+    const cannot = await raise({ question: "Which?" });
+    expect([
+      [closed.isError, text(closed)],
+      [cannot.isError, text(cannot)],
+    ]).toStrictEqual([
+      [
+        true,
+        "Not done (turn_ended): No answer came before the question closed.",
+      ],
+      [
+        true,
+        "Not done (no_questions): This turn cannot ask the room questions.",
+      ],
+    ]);
+  });
+
+  it("says the question never reached the room when the card could not be raised", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {
+      // The failure is logged for the runner's operator; the test checks what the model reads.
+    });
+    try {
+      const result = await raise({ question: "Which?" }, async () => {
+        await Promise.resolve();
+        throw new Error("connection lost");
+      });
+      expect([result.isError, text(result)]).toStrictEqual([
+        true,
+        "Not done (not_raised): The question could not be put to the room. Try again, or ask in your reply.",
+      ]);
+      expect(logged).toHaveBeenCalledOnce();
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("rejects an empty question or option without raising a card", async () => {
+    const seen: QuestionCard[] = [];
+    const ask = answering(
+      { handId: "h", message: "", noDecision: true, requestId: "r" },
+      seen
+    );
+    const empty = await raise({ question: "  " }, ask);
+    const badOption = await raise({ options: [""], question: "Which?" }, ask);
+    expect([empty.isError, badOption.isError]).toStrictEqual([true, true]);
+    expect(text(empty)).toMatch(/^Those arguments don't fit raise_hand/u);
+    expect(seen).toHaveLength(0);
   });
 });

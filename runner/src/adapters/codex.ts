@@ -201,20 +201,23 @@ const reviewConfigFor = (read: unknown): Record<string, unknown> => {
 };
 
 const ROOM_TOKEN_ENV = "ATELIER_ROOM_TOKEN";
+// Above the 2-hour question card ceiling, so the card closes first.
+const TOOL_TIMEOUT_SEC = 2 * 60 * 60 + 5 * 60;
 
 export const codexHarness = (opts: {
   executable: string;
   onRaw: (id: string, event: unknown) => void;
 }): Harness => ({
-  // Codex asks in plain text: its question prompt only reaches a client in Plan mode.
-  capabilities: { canRaiseCards: false },
+  // Codex's own question prompt only reaches a client in Plan mode, so it
+  // raises cards through the room's raise_hand tool instead.
+  capabilities: { canRaiseCards: true },
   id: "codex",
   async *runTurn(req, signal, input) {
     signal.throwIfAborted();
     if (req.mcpServers.length) {
       throw new Error("Per-turn MCP injection is not implemented");
     }
-    // Reviews never get the document tools. Elsewhere Codex reaches them as
+    // Reviews never get the room tools. Elsewhere Codex reaches them as
     // the `atelier` MCP server, pre-approved so no call waits on an answer.
     // The token goes in the app-server's environment, never in argv.
     const room = req.independentReview === true ? undefined : req.roomTools;
@@ -222,6 +225,8 @@ export const codexHarness = (opts: {
       ? {
           "mcp_servers.atelier.bearer_token_env_var": ROOM_TOKEN_ENV,
           "mcp_servers.atelier.default_tools_approval_mode": "approve",
+          // A question card waits up to 2 hours; the default is 60 seconds.
+          "mcp_servers.atelier.tool_timeout_sec": TOOL_TIMEOUT_SEC,
           "mcp_servers.atelier.url": room.url,
         }
       : undefined;
