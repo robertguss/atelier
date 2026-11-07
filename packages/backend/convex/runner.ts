@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
@@ -847,6 +848,7 @@ export const raiseHand = mutation({
       subjectId: handId,
       type: "hand.raised",
     });
+    await ctx.scheduler.runAfter(0, internal.push.sendHand, { handId });
     return handId;
   },
 });

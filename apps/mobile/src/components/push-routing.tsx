@@ -5,7 +5,7 @@ import { router } from "expo-router";
 import { useEffect } from "react";
 import { Platform } from "react-native";
 
-import { notificationRitualId } from "../lib/notification-route";
+import { notificationTarget } from "../lib/notification-route";
 
 // What one mounted listener shares with its effect cleanup.
 interface Routing {
@@ -14,8 +14,8 @@ interface Routing {
   remove?: () => void;
 }
 
-// Opens the ritual a tapped notification names, including the tap that
-// launched the app, until the routing is disposed.
+// Opens the review or room a tapped notification names, including the tap
+// that launched the app, until the routing is disposed.
 const routeNotificationTaps = async (routing: Routing) => {
   const notifications = await import("expo-notifications");
   if (routing.disposed) {
@@ -25,12 +25,25 @@ const routeNotificationTaps = async (routing: Routing) => {
     if (routing.disposed) {
       return;
     }
-    const id = notificationRitualId(response, routing.lastId);
-    if (id === undefined || id === "" || !response) {
+    const target = notificationTarget(response, routing.lastId);
+    if (target === undefined || !response) {
       return;
     }
     routing.lastId = response.notification.request.identifier;
-    router.push({ params: { id }, pathname: "/ritual/[id]" });
+    if (target.kind === "ritual") {
+      router.push({ params: { id: target.id }, pathname: "/ritual/[id]" });
+    } else {
+      // The asking agent is preselected, so its question shows by the composer.
+      router.push({
+        params: {
+          id: target.id,
+          ...(target.participantId === undefined
+            ? {}
+            : { participantId: target.participantId }),
+        },
+        pathname: "/room/[id]",
+      });
+    }
   };
   const subscription =
     notifications.addNotificationResponseReceivedListener(open);

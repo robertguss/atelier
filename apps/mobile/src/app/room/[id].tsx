@@ -219,6 +219,7 @@ const Composer = ({
   onSent,
   participants,
   waitingAgents,
+  openQuestions,
   decisionId,
   onReview,
   initialParticipantId,
@@ -236,6 +237,10 @@ const Composer = ({
     harness?: string;
   }[];
   waitingAgents: Set<Id<"participants">>;
+  openQuestions: Map<
+    Id<"participants">,
+    { text: string; options: { label: string }[] }[]
+  >;
 }) => {
   const send = useMutation(api.messages.send);
   const add = useMutation(api.rooms.addParticipant);
@@ -323,9 +328,17 @@ const Composer = ({
         </Muted>
       ) : null}
       {target && waitingAgents.has(target._id) ? (
-        <Muted style={{ paddingHorizontal: 12 }}>
-          This will answer {target.displayName}&apos;s question
-        </Muted>
+        <View style={{ paddingHorizontal: 12 }}>
+          {openQuestions.get(target._id)?.map((q) => (
+            <Body key={q.text} selectable>
+              {q.text}
+              {q.options.length
+                ? `\nOptions: ${q.options.map((o) => o.label).join(", ")}`
+                : ""}
+            </Body>
+          ))}
+          <Muted>This will answer {target.displayName}&apos;s question</Muted>
+        </View>
       ) : null}
       {error ? (
         <Body style={{ color: "#d33", paddingHorizontal: 12 }}>{error}</Body>
@@ -418,6 +431,20 @@ const Room = () => {
       .filter((a) => a.status === "waiting")
       .map((a) => a.participantId)
   );
+  // The questions on each agent's open cards, shown above the composer, so
+  // a reply typed there can answer them.
+  const openQuestions = new Map<
+    Id<"participants">,
+    { text: string; options: { label: string }[] }[]
+  >();
+  for (const card of pane?.cards ?? []) {
+    if (card.status === "raised") {
+      openQuestions.set(card.participantId, [
+        ...(openQuestions.get(card.participantId) ?? []),
+        ...card.questions,
+      ]);
+    }
+  }
 
   return (
     <>
@@ -520,6 +547,7 @@ const Room = () => {
             }}
             participants={data.participants.filter((p) => p.kind === "harness")}
             waitingAgents={waitingAgents}
+            openQuestions={openQuestions}
             onSent={() => {
               stickToBottom.current = true;
             }}

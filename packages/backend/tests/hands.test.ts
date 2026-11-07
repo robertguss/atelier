@@ -965,3 +965,86 @@ describe("room context tools", () => {
     ).rejects.toThrow(/Bad runner secret/u);
   });
 });
+
+describe("push for a raised card", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    process.env.ATELIER_OWNER_EMAILS = "owner@example.com";
+    process.env.ATELIER_RUNNER_SECRET = SECRET;
+    process.env.CLERK_SECRET_KEY = "sk_test";
+    process.env.ATELIER_WEB_URL = "https://atelier.example.com/";
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("raising a card schedules one push for it", async () => {
+    const s = await setup();
+    const { handId } = await waitingClaude(s);
+    const scheduled = await s.t.run(
+      async (ctx) => await ctx.db.system.query("_scheduled_functions").collect()
+    );
+    expect(
+      scheduled
+        .filter((f) => f.name.startsWith("push:"))
+        .map((f) => ({ args: f.args, name: f.name }))
+    ).toStrictEqual([{ args: [{ handId }], name: "push:sendHand" }]);
+  });
+
+  it("the push names the agent and the room, never the question, and drops devices Expo says are gone", async () => {
+    const s = await setup();
+    await s.owner.mutation(api.push.register, {
+      platform: "ios",
+      token: "ExpoPushToken[device_1]",
+    });
+    const { handId } = await waitingClaude(s, [
+      question("scope", "SECRET-QUESTION-TEXT"),
+    ]);
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        data: [{ details: { error: "DeviceNotRegistered" }, status: "error" }],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await s.t.action(internal.push.sendHand, { handId });
+    const [firstCall] = fetchMock.mock.calls;
+    assert(firstCall, "the push was sent");
+    const sent = firstCall[1]?.body;
+    assert(typeof sent === "string", "the push body is JSON text");
+    const body = sent;
+    expect(body).not.toContain("SECRET-QUESTION-TEXT");
+    expect(JSON.parse(body)).toStrictEqual([
+      {
+        body: "Claude has a question. Open Atelier to answer it.",
+        data: { participantId: s.claude._id, roomId: s.roomId },
+        sound: "default",
+        title: "Question waiting",
+        to: "ExpoPushToken[device_1]",
+      },
+    ]);
+    await expect(s.owner.query(api.push.readiness, {})).resolves.toStrictEqual({
+      registered: false,
+    });
+  });
+
+  it("a card closed before the push goes out sends nothing", async () => {
+    const s = await setup();
+    await s.owner.mutation(api.push.register, {
+      platform: "ios",
+      token: "ExpoPushToken[device_1]",
+    });
+    const { handId } = await waitingClaude(s);
+    await s.owner.mutation(api.hands.answer, {
+      answers: [{ labels: ["Option A"], questionId: "scope" }],
+      handId,
+    });
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      s.t.query(internal.push.handPush, { handId })
+    ).resolves.toBeNull();
+    await s.t.action(internal.push.sendHand, { handId });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
