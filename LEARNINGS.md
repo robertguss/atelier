@@ -363,6 +363,17 @@ Findings from the browser pass are in
   changes. For parallel workers on an unmerged branch, create the worktrees
   yourself (`git worktree add --detach <dir> <sha>`) and point each worker at
   its own.
+- `npx convex env get <NAME>` exits 0 and prints "✖ Environment variable
+  ... not found" when the variable is unset, so test the output, not the exit
+  code. Check a secret by length and prefix only.
+- The Clerk CLI (`npx -y clerk@4.1.0`, already logged in on the Mac) manages
+  the instance. Atelier is `app_3LiFMTVI7EVwIxVjfMf63v25NrP`, dev instance
+  `wealthy-mackerel-1108` (Convex's `CLERK_JWT_ISSUER_DOMAIN`). To rotate the
+  secret key without showing it, pipe `clerk env pull --app <id> --instance
+  dev --print | grep '^CLERK_SECRET_KEY='` over ssh into `npx convex env set`.
+  `clerk config pull` / `clerk config patch --json ... --dry-run` read and
+  change settings; sign-up mode is `auth_access_control.sign_up_mode`, set to
+  `restricted` on 2026-11-07.
 
 ## Quality tooling (2026-11-06)
 
