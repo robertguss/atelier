@@ -184,6 +184,43 @@ Claude Code 2.1.318 through Agent SDK 0.3.318 (Haiku and Sonnet), Codex CLI
   extension reports only in TUI mode, so it is silent under RPC either way.
 - Consequence: the Pi edit guard is feasible as a runner-shipped extension.
 
+## Room document tool probes (2026-11-07)
+
+Run live with Robert's logins in throwaway git repos under `/tmp`, using
+`runner/scripts/probe-room-tools.ts`: Claude Code through Agent SDK 0.3.318
+(Haiku), Codex CLI 0.166.0 `app-server` (`gpt-6.1-sol`, low effort) and Pi
+1.4.0 (`openai/gpt-6-astra`, low thinking). Each harness got one stub `echo`
+tool from the runner, on a fresh session and then on a resumed one.
+
+- **Claude:** an in-process `createSdkMcpServer({ name: 'atelier', alwaysLoad: true })`
+  in `mcpServers` loads next to Robert's own claude.ai servers
+  (`source: "sdk"`), is listed in `init.tools` as `mcp__atelier__echo`, and
+  works after `resume`. Its calls reach `canUseTool`, so the deny-by-default
+  handler must allow `mcp__atelier__*`. Do not use an HTTP entry with a token
+  in `headers`: the SDK passes non-SDK servers to the CLI as a `--mcp-config`
+  argument, where any process can read it. The SDK needs `zod` as a peer
+  dependency for `tool()` schemas.
+- **Codex:** `config` keys `mcp_servers.atelier.url` and
+  `mcp_servers.atelier.bearer_token_env_var` (token in the app-server's
+  environment, not argv) work on `thread/start` and again on `thread/resume`.
+  Without more, every call needs approval: under `approvalPolicy: 'never'` the
+  call fails with "MCP tool call requires approval, but approval policy is
+  never", and under `untrusted` Codex sends `mcpServer/elicitation/request`
+  (`_meta.codex_approval_kind: "mcp_tool_call"`). Adding
+  `mcp_servers.atelier.default_tools_approval_mode = "approve"` pre-approves
+  only this server's tools: calls then run with no request under both
+  `never`/read-only and `untrusted`/workspace-write, on start and resume.
+  Answering the elicitation with `{ action: 'accept', content: null }` also
+  works, including with a granular policy, but is not needed.
+- **Pi:** a `--extension` file that calls `pi.registerTool()` (TypeBox schema
+  from `typebox`, which Pi resolves for extensions) and forwards to the
+  loopback endpoint with a token from `RpcClient`'s `env` works with
+  `--tools read,grep,find,ls,atelier_echo`, and again with `--session`.
+  Naming no `mcp__` entry in `--tools` leaves Robert's own MCP tools as they
+  were. `registerMcpServer` was not needed.
+- The stub server bound `127.0.0.1` on port 0 and got ports in the 37000–45000
+  range, outside the 3000–9999 range exe.dev forwards.
+
 ## Shared rooms build pitfalls
 
 How to set up and run shared rooms is in [docs/shared-rooms.md](docs/shared-rooms.md).
