@@ -17,3 +17,19 @@ export function visibleMessage(m: Doc<'messages'>, isOwner: boolean, { ownerSees
 export function visibleTurn(t: Doc<'turns'>, isOwner: boolean) {
   return !t.ritualId && (isOwner || !t.followUp);
 }
+
+// What a model turn may do with the room document. An independent review
+// never sees it, so reviews stay blind. A follow-up to a review or its
+// decision may read it but never change it, so review content cannot reach a
+// document a teammate reads. Every other turn may write.
+export type DocumentMode = 'none' | 'read' | 'write';
+
+export function documentMode(t: Doc<'turns'>): DocumentMode {
+  if (t.ritualId) return 'none';
+  if (t.followUp) return 'read';
+  return 'write';
+}
+
+export function canWriteDocument(t: Doc<'turns'>) {
+  return documentMode(t) === 'write';
+}

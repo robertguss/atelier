@@ -100,7 +100,9 @@ export async function dispatchNext(ctx: MutationCtx, participantId: Id<'particip
     .filter((q) => q.eq(q.field('ritualId'), undefined))
     .first();
   const stopper = previous?.status === 'interrupted' && previous.stoppedByParticipantId ? await ctx.db.get(previous.stoppedByParticipantId) : null;
-  const prompt = turnPrompt({ context: contextBlock(await loadRoomContext(ctx, room, members)), stoppedBy: stopper?.displayName, messages });
+  // A follow-up to a review or its decision may only read the document.
+  const context = contextBlock(await loadRoomContext(ctx, room, members), first.followUpRitualId ? 'read' : 'write');
+  const prompt = turnPrompt({ context, stoppedBy: stopper?.displayName, messages });
 
   const turnId = await ctx.db.insert('turns', {
     roomId: room._id,

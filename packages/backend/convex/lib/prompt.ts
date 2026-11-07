@@ -29,9 +29,9 @@ export type Envelope = {
 
 // Tags that delimit agent-facing structure. A body or name that contains one
 // is escaped so nobody can forge another author's message or the room block.
-const STRUCTURE_TAG = /<(\/?)(message|room_context|comment)\b/gi;
+const STRUCTURE_TAG = /<(\/?)(message|room_context|comment|room_document)\b/gi;
 
-function neutralize(text: string) {
+export function neutralize(text: string) {
   return text.replace(STRUCTURE_TAG, (_m, slash: string, name: string) => `&lt;${slash}${name}`);
 }
 
@@ -59,13 +59,19 @@ export function envelope(e: Envelope) {
   return `<message from="${attr(agentName(e.author))}" role="${e.role}" sent="${formatTime(e.sentAt)}" delivery="${e.delivery}">\n${neutralize(e.body)}\n</message>`;
 }
 
-export function contextBlock(c: RoomContext) {
+// What the turn may do with the room document. File edits never gate it.
+const DOCUMENT_LINE = {
+  write: 'Room document: you may add and update your own blocks and comment on others.',
+  read: 'Room document: read-only in this turn.',
+};
+
+export function contextBlock(c: RoomContext, documentMode: 'read' | 'write') {
   const lines = [
     '<room_context>',
     `You are working in the Atelier room "${neutralize(c.roomName)}". More than one person can message you; each message is wrapped in a <message> tag naming its author.`,
     'People in this room:',
     ...c.members.map((m) => `- ${neutralize(agentName(m.name))} (${m.role})`),
-    `File edits: ${c.editsEnabled ? 'on' : 'off'}`,
+    `File edits: ${c.editsEnabled ? 'on' : 'off'}. ${DOCUMENT_LINE[documentMode]}`,
   ];
   if (c.handbook.trim()) lines.push('Room handbook:', neutralize(c.handbook.trim()));
   lines.push('Recent decisions:');

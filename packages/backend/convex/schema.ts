@@ -149,6 +149,9 @@ export default defineSchema({
     reasoning: v.optional(v.string()),
     displayName: v.string(),
     harnessSessionId: v.optional(v.string()),
+    // The document rev that session has seen, so its next turn is shown only
+    // what changed since. It belongs to `harnessSessionId`, never another session.
+    documentRevSeen: v.optional(v.number()),
     userId: v.optional(v.id('users')),
   }).index('by_room', ['roomId']),
 
@@ -225,8 +228,9 @@ export default defineSchema({
     endedAt: v.optional(v.number()),
     // Marks a turn that follows up an independent review or its decision.
     // Such a turn is owner-only and must never be batched with other
-    // messages. `separateSession` is fixed at claim: true when the room had an
-    // active teammate, so the turn ran on the review's own session.
+    // messages. `separateSession` is fixed at claim: true when the turn ran on
+    // the review's own session. Every follow-up claimed once rooms had a
+    // document is; older solo follow-ups continued the ordinary session.
     followUp: v.optional(
       v.object({
         ritualId: v.id('rituals'),
@@ -244,6 +248,9 @@ export default defineSchema({
     // Set on a turn that answers an @mention in a comment thread. It runs
     // alone, takes no steer, and its final text becomes a reply in the thread.
     threadId: v.optional(v.id('threads')),
+    // The document rev the turn's claim showed it. Saved beside its session
+    // when the turn finishes, never before, so a failed turn advances nothing.
+    documentRev: v.optional(v.number()),
   })
     .index('by_room', ['roomId'])
     .index('by_ritual', ['ritualId'])
@@ -280,9 +287,12 @@ export default defineSchema({
     ownerSubject: v.optional(v.string()),
     snapshot: v.optional(v.string()),
     pushStatus: v.optional(v.union(v.literal('queued'), v.literal('sent'), v.literal('skipped'), v.literal('failed'))),
-    // In rooms with a teammate, follow-ups run on these harness sessions, one
-    // per participant, never on the participant's ordinary session.
-    followUpSessions: v.optional(v.array(v.object({ participantId: v.id('participants'), sessionId: v.string() }))),
+    // Follow-ups run on these harness sessions, one per participant, never on
+    // the participant's ordinary session. Each keeps the document rev its
+    // session has seen.
+    followUpSessions: v.optional(
+      v.array(v.object({ participantId: v.id('participants'), sessionId: v.string(), documentRevSeen: v.optional(v.number()) })),
+    ),
   }).index('by_room', ['roomId']),
 
   reviewSnapshots: defineTable({
@@ -514,7 +524,9 @@ export default defineSchema({
     turnId: v.optional(v.id('turns')),
   })
     // A thread's comments in order.
-    .index('by_thread', ['threadId']),
+    .index('by_thread', ['threadId'])
+    // A model turn's comments, to apply its per-turn cap.
+    .index('by_turn', ['turnId']),
 
   // Robert's templates: an ordered list of headings, each with optional
   // guidance text. Atelier's default is a code constant, not a row.

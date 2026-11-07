@@ -1,14 +1,17 @@
 import { v } from 'convex/values';
 import type { Doc, Id } from './_generated/dataModel';
 import { internalMutation, mutation, query, type MutationCtx } from './_generated/server';
-import { hasActiveTeammate, requireRunnerSecret } from './lib/auth';
+import { requireRunnerSecret } from './lib/auth';
 import { closeOpenCards, expireUnanswered } from './lib/cards';
 import { dispatchNext, isActiveTurnStatus, steerRejected } from './lib/dispatch';
+import { ensureDocument } from './lib/document';
+import { documentDigest, withDigest } from './lib/documentDigest';
 import { record } from './lib/ledger';
 import { reviewFinished } from './lib/review';
 import { sessionResetAfter } from './lib/sessions';
 import { postComment } from './lib/threads';
 import { setStreamedText } from './lib/turnActivity';
+import { documentMode } from './lib/visibility';
 import { cardQuestion, harnessId } from './schema';
 
 // Functions the runner calls. Each takes the runner secret instead of a Clerk
@@ -63,23 +66,37 @@ export const claim = mutation({
     const editsEnabled = room.editsEnabled === true;
     if (turn.editsEnabled !== editsEnabled) await ctx.db.patch(turn._id, { editsEnabled });
 
-    let sessionId = turn.ritualId ? undefined : participant.harnessSessionId;
+    // A review never resumes a session. A follow-up never continues the
+    // ordinary session, even alone with the owner: that session could later
+    // write review content into the document a teammate reads. It runs on a
+    // session kept on its review, fixed here so finish saves to it.
+    let session: { sessionId?: string; documentRevSeen?: number } = {};
     if (turn.followUp && !turn.ritualId) {
-      // With a teammate in the room, a follow-up must not continue the
-      // ordinary session, or the agent would later repeat the review to them.
-      // The choice is fixed here so finish saves to the session it resumed.
-      const separateSession = await hasActiveTeammate(ctx, room._id);
-      await ctx.db.patch(turn._id, { followUp: { ...turn.followUp, separateSession } });
-      if (separateSession) {
-        const ritual = await ctx.db.get(turn.followUp.ritualId);
-        sessionId = ritual ? followUpSession(ritual, participant._id) : undefined;
-      }
+      await ctx.db.patch(turn._id, { followUp: { ...turn.followUp, separateSession: true } });
+      const ritual = await ctx.db.get(turn.followUp.ritualId);
+      session = ritual?.followUpSessions?.find((s) => s.participantId === participant._id) ?? {};
+    } else if (!turn.ritualId) {
+      session = { sessionId: participant.harnessSessionId, documentRevSeen: participant.documentRevSeen };
+    }
+    const sessionId = session.sessionId;
+
+    // The document as it is now, not as it was at dispatch. A resumed
+    // session is shown what changed since the rev it has seen; any other
+    // session is shown the whole document. Reviews are shown nothing.
+    const mode = documentMode(turn);
+    let prompt = turn.prompt;
+    if (mode !== 'none') {
+      const document = (await ctx.db.get(await ensureDocument(ctx, room._id)))!;
+      const seenRev = sessionId === undefined ? undefined : session.documentRevSeen;
+      prompt = withDigest(prompt, await documentDigest(ctx, document, { participantId: participant._id, mode, seenRev }));
+      await ctx.db.patch(turn._id, { documentRev: document.rev });
     }
 
     return {
       commandId,
       type: 'run_turn' as const,
-      turn: { id: turn._id, prompt: turn.prompt, independentReview: !!turn.ritualId, ritualId: turn.ritualId },
+      documentMode: mode,
+      turn: { id: turn._id, prompt, independentReview: !!turn.ritualId, ritualId: turn.ritualId },
       participant: {
         id: participant._id,
         harness: participant.harness,
@@ -157,7 +174,7 @@ export const finish = mutation({
     });
     await ctx.db.patch(args.commandId, { status: 'done', leaseExpiresAt: undefined });
     await closeOpenCards(ctx, args.turnId, 'cancelled', 'The turn ended before anyone answered');
-    if (args.sessionId && !turn.ritualId) await saveSession(ctx, turn, args.sessionId);
+    if (args.sessionId && !turn.ritualId) await saveSession(ctx, turn, args.sessionId, turn.documentRev);
 
     // A turn answering a thread mention replies in the thread, not the chat.
     const participant = await ctx.db.get(turn.participantId);
@@ -288,8 +305,8 @@ export const steerResult = mutation({
 
 // Saves the harness session id as soon as the runner sees it, so a turn
 // interrupted before it finishes can still be resumed. Follows the same rules
-// as finish: reviews never save a session, and a follow-up in a shared room
-// saves to its review.
+// as finish: reviews never save a session, and a follow-up saves to its
+// review. Only finish records the document rev the session has seen.
 export const sessionStarted = mutation({
   args: { secret: v.string(), turnId: v.id('turns'), sessionId: v.string() },
   handler: async (ctx, { secret, turnId, sessionId }) => {
@@ -375,9 +392,21 @@ export const reportCapabilities = mutation({
   },
 });
 
-async function saveSession(ctx: MutationCtx, turn: Doc<'turns'>, sessionId: string) {
-  if (turn.followUp?.separateSession) await saveFollowUpSession(ctx, turn.followUp.ritualId, turn.participantId, sessionId);
-  else if (!(await sessionResetAfter(ctx, turn))) await ctx.db.patch(turn.participantId, { harnessSessionId: sessionId });
+// Saves the session a turn ran on, with the document rev the turn was shown
+// when it finished. Without a rev, a session already stored keeps its own,
+// and a different session has seen no rev yet.
+async function saveSession(ctx: MutationCtx, turn: Doc<'turns'>, sessionId: string, documentRevSeen?: number) {
+  if (turn.followUp?.separateSession) {
+    await saveFollowUpSession(ctx, turn.followUp.ritualId, turn.participantId, sessionId, documentRevSeen);
+  } else if (!(await sessionResetAfter(ctx, turn))) {
+    const participant = (await ctx.db.get(turn.participantId))!;
+    const stored = { sessionId: participant.harnessSessionId, documentRevSeen: participant.documentRevSeen };
+    await ctx.db.patch(turn.participantId, { harnessSessionId: sessionId, documentRevSeen: seenRev(stored, sessionId, documentRevSeen) });
+  }
+}
+
+function seenRev(stored: { sessionId?: string; documentRevSeen?: number }, sessionId: string, documentRevSeen?: number) {
+  return documentRevSeen ?? (stored.sessionId === sessionId ? stored.documentRevSeen : undefined);
 }
 
 async function failTurn(
@@ -430,15 +459,22 @@ async function abandonControlCommands(ctx: MutationCtx, turn: Doc<'turns'>, runn
   for (const m of steering) if (m.steering?.turnId === turn._id) await ctx.db.patch(m._id, { delivery: 'queued', steering: undefined });
 }
 
-function followUpSession(ritual: Doc<'rituals'>, participantId: Id<'participants'>) {
-  return ritual.followUpSessions?.find((s) => s.participantId === participantId)?.sessionId;
-}
-
-async function saveFollowUpSession(ctx: MutationCtx, ritualId: Id<'rituals'>, participantId: Id<'participants'>, sessionId: string) {
+async function saveFollowUpSession(
+  ctx: MutationCtx,
+  ritualId: Id<'rituals'>,
+  participantId: Id<'participants'>,
+  sessionId: string,
+  documentRevSeen?: number,
+) {
   const ritual = await ctx.db.get(ritualId);
   if (!ritual) return;
-  const others = (ritual.followUpSessions ?? []).filter((s) => s.participantId !== participantId);
-  await ctx.db.patch(ritualId, { followUpSessions: [...others, { participantId, sessionId }] });
+  const sessions = ritual.followUpSessions ?? [];
+  const stored = sessions.find((s) => s.participantId === participantId) ?? {};
+  const others = sessions.filter((s) => s.participantId !== participantId);
+  const rev = seenRev(stored, sessionId, documentRevSeen);
+  await ctx.db.patch(ritualId, {
+    followUpSessions: [...others, { participantId, sessionId, ...(rev === undefined ? {} : { documentRevSeen: rev }) }],
+  });
 }
 
 function providerOf(harness: Doc<'participants'>['harness']) {
