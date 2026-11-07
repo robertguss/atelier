@@ -221,6 +221,33 @@ tool from the runner, on a fresh session and then on a resumed one.
 - The stub server bound `127.0.0.1` on port 0 and got ports in the 37000–45000
   range, outside the 3000–9999 range exe.dev forwards.
 
+## Room document live checks (2026-11-07)
+
+Run against the Convex dev deployment with this branch pushed, using a second
+runner named `room-document-live-check` (Robert's own runner kept running) and
+a throwaway room under `/tmp`, driven with `npx convex run --identity` as a
+test owner identity.
+
+- Claude, Codex and Pi each added, updated and deleted their own block and
+  commented on Robert's heading, with edits off on a fresh session and with
+  edits on on a resumed session. Tool calls appeared as turn items named
+  `mcp__atelier__*`, `atelier.*` and `atelier_*`. Pi's `atelier_*` pattern in
+  `--tools` and registering the tools when Pi loads the extension both work.
+- After Robert edited Claude's block, Claude's next update kept his fix. Each
+  model's attempt to overwrite another model's block was refused and it
+  commented instead.
+- An @Codex comment produced a reply in the thread, not in the agent pane.
+- A review and a review follow-up left the document unchanged. The follow-up
+  in a solo room ran with `separateSession: true` and said the document was
+  read-only for it.
+- Scribe runs committed with each harness (Codex's run on an `ephemeral`
+  thread). Codex merged three notes into one scribe block crediting all three
+  authors and re-attached all four threads to it. During a run a person's edit
+  was refused; Stop left the document byte-identical with the lock cleared.
+- Unprompted use: given five ordinary requests that never mention the
+  document, Claude wrote to it in 3 turns, Codex in 2 and Pi in 2, and none
+  commented. Tune the tool descriptions if that proves too quiet or too noisy.
+
 ## Shared rooms build pitfalls
 
 How to set up and run shared rooms is in [docs/shared-rooms.md](docs/shared-rooms.md).
