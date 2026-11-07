@@ -117,6 +117,19 @@ const result = (text: string) => ({
     uuid: `r-${text}`,
   },
 });
+const backgroundTasks = (tasks: { ambient?: boolean }[]) => ({
+  emit: {
+    subtype: "background_tasks_changed",
+    tasks: tasks.map((task, i) => ({
+      description: `task ${i}`,
+      task_id: `b${i}`,
+      task_type: "local_bash",
+      ...task,
+    })),
+    type: "system",
+    uuid: `bg-${tasks.length}`,
+  },
+});
 const streamed = (id: string, text: string) => [
   {
     emit: {
@@ -775,6 +788,110 @@ describe(claudeHarness, () => {
       text: "first\n\nsecond",
       type: "final",
     });
+  });
+
+  it("while a background task runs after the result, a steer is still taken and runs", async () => {
+    let steer: Promise<SteerOutcome> | undefined;
+    const { calls, events } = await runFake(
+      [
+        init,
+        backgroundTasks([{ ambient: false }]),
+        result("started"),
+        { waitUser: true },
+        {
+          emit: {
+            command_uuid: "$STEER",
+            state: "started",
+            type: "command_lifecycle",
+          },
+        },
+        result("steered"),
+        backgroundTasks([]),
+        result("finished"),
+      ],
+      {
+        onEvent(ev, input) {
+          if (ev.type === "final" && ev.text === "started") {
+            steer = input.steer("Say steered");
+          }
+        },
+      }
+    );
+    await expect(steer).resolves.toBe("steered");
+    const [, steered] = calls.filter((c) => c.type === "user");
+    expect({
+      inputClosed: calls.some((c) => c.eof === true),
+      last: events.findLast((e) => e.type === "final"),
+      priority: at(steered, "priority"),
+      withdrawn: calls.some(
+        (c) =>
+          c.type === "control_request" &&
+          at(c, "request", "subtype") === "cancel_async_message"
+      ),
+    }).toStrictEqual({
+      inputClosed: true,
+      last: {
+        narration: "",
+        text: "started\n\nsteered\n\nfinished",
+        type: "final",
+      },
+      priority: "next",
+      withdrawn: false,
+    });
+  });
+
+  it("an ambient background task does not hold the input open after the result", async () => {
+    let steer: Promise<SteerOutcome> | undefined;
+    const { calls } = await runFake(
+      [
+        init,
+        toolUse("t1", "Bash", { command: "sleep 6" }),
+        backgroundTasks([{ ambient: true }]),
+        { waitUser: true },
+        result("only"),
+      ],
+      {
+        cancelled: true,
+        onEvent(ev, input) {
+          if (ev.type === "tool_call") {
+            steer = input.steer("Too late");
+          }
+        },
+      }
+    );
+    await expect(steer).resolves.toBe("rejected");
+    expect(calls.some((c) => c.eof === true)).toBeTruthy();
+  });
+
+  it("the input closes once the background tasks finish, withdrawing a steer that has not run", async () => {
+    let steer: Promise<SteerOutcome> | undefined;
+    const { calls } = await runFake(
+      [
+        init,
+        backgroundTasks([{ ambient: false }]),
+        result("started"),
+        { waitUser: true },
+        backgroundTasks([]),
+        result("finished"),
+      ],
+      {
+        cancelled: true,
+        onEvent(ev, input) {
+          if (ev.type === "final" && ev.text === "started") {
+            steer = input.steer("Too slow");
+          }
+        },
+      }
+    );
+    await expect(steer).resolves.toBe("rejected");
+    expect({
+      inputClosed: calls.some((c) => c.eof === true),
+      withdrawn: calls.some(
+        (c) =>
+          c.type === "control_request" &&
+          at(c, "request", "subtype") === "cancel_async_message"
+      ),
+    }).toStrictEqual({ inputClosed: true, withdrawn: true });
   });
 
   it("independent review options are unchanged, with no Atelier server even if a route is passed", async () => {

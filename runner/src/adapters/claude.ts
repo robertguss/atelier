@@ -603,6 +603,8 @@ export const claudeHarness = (opts: {
       sawText: false,
       usage: { inputTokens: 0, outputTokens: 0 },
     };
+    let sawResult = false;
+    let backgroundWork = 0;
     try {
       for await (const msg of q) {
         opts.onRaw(req.turnId, msg);
@@ -610,7 +612,16 @@ export const claudeHarness = (opts: {
           settle(uuid, "steered");
         }
         yield* harnessEvents(msg, state);
-        if (msg.type === "result" && accepting) {
+        if (msg.type === "result") {
+          sawResult = true;
+        }
+        if (
+          msg.type === "system" &&
+          msg.subtype === "background_tasks_changed"
+        ) {
+          backgroundWork = msg.tasks.filter((t) => t.ambient !== true).length;
+        }
+        if (accepting && sawResult && backgroundWork === 0) {
           // Take no more steers. One that hasn't folded is withdrawn so
           // the room can queue it again. If the CLI already started it
           // as its next turn, it counts as steered once that shows.
