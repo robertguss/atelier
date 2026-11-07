@@ -249,9 +249,9 @@ describe("document tools for models", () => {
       "The cache is warmed on boot, slowly."
     );
     const removed = await tool.remove(second.blockId, second.rev);
-    expect({ removed, updated }).toMatchObject({
+    expect({ removed, updatedOk: updated.ok }).toStrictEqual({
       removed: { ok: true },
-      updated: { ok: true },
+      updatedOk: true,
     });
 
     const written = await block(t, first.blockId);
@@ -305,12 +305,15 @@ describe("document tools for models", () => {
     );
     const removal = await tool.remove(codexBlock.blockId, codexBlock.rev);
     const awaited6 = await block(t, codexBlock.blockId);
-    expect({ refused, removal, text: awaited6.text }).toMatchObject({
-      refused: {
-        message: stringMatching(/^(?=.*Codex)(?=.*comment)/isu),
-        ok: false,
-        reason: "not_your_block",
-      },
+    const message = refused.ok ? "" : refused.message;
+    expect({
+      message: [/Codex/u.test(message), /comment/iu.test(message)],
+      refused,
+      removal,
+      text: awaited6.text,
+    }).toMatchObject({
+      message: [true, true],
+      refused: { ok: false, reason: "not_your_block" },
       removal: { ok: false, reason: "not_your_block" },
       text: "Ship the pricing page on Friday.",
     });

@@ -492,22 +492,24 @@ describe("scribe", () => {
     const ledger = await t.run(
       async (ctx) => await ctx.db.query("ledger").collect()
     );
+    const checkpointAfter = await checkpointBlocks(
+      t,
+      documentId,
+      "after_scribe"
+    );
     expect({
-      changeSet,
-      checkpointAfter: await checkpointBlocks(t, documentId, "after_scribe"),
+      checkpointAfter,
       draft: await draftRows(t, run.scribeRunId),
-      history: history.page[0],
-      lock: [doc.scribeRunId, doc.scribeLockExpiresAt],
+      lockFields: ["scribeRunId", "scribeLockExpiresAt"].filter(
+        (field) => field in doc
+      ),
       mergedAwayStillThere: [piNote, stale].map((id) =>
         after.some((b) => b.blockId === id)
       ),
-      mergedBlock,
       originalText: original.blocks.find((b) => b.blockId === stale)?.text,
       others,
       piDetached: piThread.detachedBeforeChangeSetId,
-      piThread,
       runStatus: runAfter.status,
-      staleThread,
       started: ledger
         .filter((e) => e.type === "document.scribe_started")
         .map((e) => ({
@@ -515,42 +517,15 @@ describe("scribe", () => {
           payload: e.payload as unknown,
           subjectId: e.subjectId,
         })),
-    }).toMatchObject({
-      changeSet: {
-        actorParticipantId: s.claude._id,
-        revisionCount: 3,
-        scribeRunId: run.scribeRunId,
-      },
+    }).toStrictEqual({
       checkpointAfter: after,
       draft: [],
-      history: {
-        _id: defined(changeSet)._id,
-        actorParticipantId: s.claude._id,
-        kind: "scribe_run",
-        scribeParticipantId: s.claude._id,
-        scribeStartedByParticipantId: s.danaP._id,
-      },
-      lock: [undefined, undefined],
+      lockFields: [],
       mergedAwayStillThere: [false, false],
-      mergedBlock: {
-        author: {
-          credits: [s.codex._id, s.pi._id],
-          kind: "scribe",
-          participantId: s.claude._id,
-        },
-        sourceBlockIds: [codexNote, piNote],
-        text: "Postgres is fine for the queue at our size (Codex, Pi).",
-      },
       originalText: "Ask Sam about the Friday freeze.",
       others: [],
       piDetached: undefined,
-      piThread: { blockId: codexNote, state: "open" },
       runStatus: "committed",
-      staleThread: {
-        blockId: stale,
-        detachedBeforeChangeSetId: defined(changeSet)._id,
-        state: "open",
-      },
       started: [
         {
           actorParticipantId: s.danaP._id,
@@ -563,6 +538,41 @@ describe("scribe", () => {
           subjectId: run.scribeRunId,
         },
       ],
+    });
+    expect({
+      changeSet,
+      history: history.page[0],
+      mergedBlock,
+      piThread,
+      staleThread,
+    }).toMatchObject({
+      changeSet: {
+        actorParticipantId: s.claude._id,
+        revisionCount: 3,
+        scribeRunId: run.scribeRunId,
+      },
+      history: {
+        _id: defined(changeSet)._id,
+        actorParticipantId: s.claude._id,
+        kind: "scribe_run",
+        scribeParticipantId: s.claude._id,
+        scribeStartedByParticipantId: s.danaP._id,
+      },
+      mergedBlock: {
+        author: {
+          credits: [s.codex._id, s.pi._id],
+          kind: "scribe",
+          participantId: s.claude._id,
+        },
+        sourceBlockIds: [codexNote, piNote],
+        text: "Postgres is fine for the queue at our size (Codex, Pi).",
+      },
+      piThread: { blockId: codexNote, state: "open" },
+      staleThread: {
+        blockId: stale,
+        detachedBeforeChangeSetId: defined(changeSet)._id,
+        state: "open",
+      },
     });
   });
 
@@ -994,14 +1004,13 @@ describe("scribe", () => {
     const order = after.map((b) => b._id);
     const [changeSet] = await scribeChangeSets(s.t, s.documentId);
     expect({
-      keptBlock: after.find((b) => b._id === ids[5]),
       movedAfterHeading:
         order.indexOf(defined(ids[200])) - order.indexOf(s.happened._id),
       revisions: defined(changeSet).revisionCount,
       startedWith: before.size,
       untouched: untouched.map((b) => [state(b), b.rev]),
-    }).toMatchObject({
-      keptBlock: state(defined(before.get(defined(ids[5])))),
+      untouchedCount: untouched.length,
+    }).toStrictEqual({
       movedAfterHeading: 1,
       revisions: 4,
       startedWith: 300,
@@ -1009,8 +1018,11 @@ describe("scribe", () => {
         state(defined(before.get(b._id))),
         revs.get(b._id),
       ]),
+      untouchedCount: 295,
     });
-    expect(untouched).toHaveLength(295);
+    expect(after.find((b) => b._id === ids[5])).toMatchObject(
+      state(defined(before.get(defined(ids[5]))))
+    );
   });
 
   it("a later draft operation on the same block supersedes the earlier one", async () => {
@@ -1179,11 +1191,13 @@ describe("scribe", () => {
       async (ctx) => await ctx.db.query("commands").collect()
     );
     const settings = awaited2.filter((c) => c.type === "settings");
-    expect(settings.map((c) => c.turnId)).toStrictEqual([codexTurn.turnId]);
-    expect(
-      defined(await s.t.run(async (ctx) => await ctx.db.get(run.turnId)))
-        .editsEnabled
-    ).toBeFalsy();
+    const scribeTurn = defined(
+      await s.t.run(async (ctx) => await ctx.db.get(run.turnId))
+    );
+    expect({
+      editsEnabled: scribeTurn.editsEnabled,
+      settings: settings.map((c) => c.turnId),
+    }).toStrictEqual({ editsEnabled: false, settings: [codexTurn.turnId] });
   });
 
   it("a 600-block document of 4,000-character blocks checkpoints before the run, and a draft replacing every block commits", async () => {

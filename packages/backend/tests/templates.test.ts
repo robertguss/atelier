@@ -100,7 +100,7 @@ describe("templates", () => {
     const lists: unknown[] = [];
     const listed = async () => {
       const templates = await owner.query(api.templates.list, {});
-      lists.push(templates.map((x) => [x.name, x.sections]));
+      lists.push(templates.map((x) => [x._id, x.name, x.sections]));
     };
     await listed();
     const templateId = await owner.mutation(api.templates.create, {
@@ -151,8 +151,8 @@ describe("templates", () => {
       late: [true],
       lists: [
         [],
-        [["Discovery", [{ heading: "Goal" }]]],
-        [["Discovery v2", SECTIONS]],
+        [[templateId, "Discovery", [{ heading: "Goal" }]]],
+        [[templateId, "Discovery v2", SECTIONS]],
         [],
       ],
       refused: [true, true],

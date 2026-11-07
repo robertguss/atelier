@@ -185,13 +185,16 @@ describe("document history", () => {
       paginationOpts: { cursor: null, numItems: 2 },
       roomId,
     });
-    expect(
-      first.page.map((c) => [c.kind, c.actorParticipantId, c.at])
-    ).toStrictEqual([
-      ["human_edit", robert._id, about(seededAt + 2000)],
-      ["human_edit", danaParticipant._id, about(seededAt + 1000)],
-    ]);
-    expect(first.isDone).toBeFalsy();
+    expect({
+      isDone: first.isDone,
+      page: first.page.map((c) => [c.kind, c.actorParticipantId, c.at]),
+    }).toStrictEqual({
+      isDone: false,
+      page: [
+        ["human_edit", robert._id, about(seededAt + 2000)],
+        ["human_edit", danaParticipant._id, about(seededAt + 1000)],
+      ],
+    });
     const second = await dana.query(api.history.list, {
       paginationOpts: { cursor: first.continueCursor, numItems: 2 },
       roomId,

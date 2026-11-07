@@ -24,6 +24,7 @@ import type * as lib_document from "../lib/document.js";
 import type * as lib_documentDigest from "../lib/documentDigest.js";
 import type * as lib_ledger from "../lib/ledger.js";
 import type * as lib_prompt from "../lib/prompt.js";
+import type * as lib_required from "../lib/required.js";
 import type * as lib_review from "../lib/review.js";
 import type * as lib_scribe from "../lib/scribe.js";
 import type * as lib_sessions from "../lib/sessions.js";
@@ -67,6 +68,7 @@ declare const fullApi: ApiFromModules<{
   "lib/documentDigest": typeof lib_documentDigest;
   "lib/ledger": typeof lib_ledger;
   "lib/prompt": typeof lib_prompt;
+  "lib/required": typeof lib_required;
   "lib/review": typeof lib_review;
   "lib/scribe": typeof lib_scribe;
   "lib/sessions": typeof lib_sessions;
