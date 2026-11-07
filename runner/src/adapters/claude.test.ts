@@ -117,6 +117,28 @@ const result = (text: string) => ({
     uuid: `r-${text}`,
   },
 });
+const streamed = (id: string, text: string) => [
+  {
+    emit: {
+      event: { message: { id }, type: "message_start" },
+      parent_tool_use_id: null,
+      type: "stream_event",
+      uuid: `ms-${id}`,
+    },
+  },
+  {
+    emit: {
+      event: {
+        delta: { text, type: "text_delta" },
+        index: 0,
+        type: "content_block_delta",
+      },
+      parent_tool_use_id: null,
+      type: "stream_event",
+      uuid: `d-${id}`,
+    },
+  },
+];
 const toolUse = (id: string, name: string, input: unknown) => ({
   emit: {
     message: {
@@ -199,6 +221,10 @@ const runFake = async (steps: unknown[], opts: Options = {}) => {
   }
 };
 
+const finalsOf = async (steps: unknown[]) => {
+  const { events } = await runFake([init, ...steps]);
+  return events.filter((e) => e.type === "final");
+};
 describe(claudeHarness, () => {
   it("AskUserQuestion becomes a card, and the answer maps back by question text", async () => {
     const cards: QuestionCard[] = [];
@@ -314,6 +340,54 @@ describe(claudeHarness, () => {
         at(response, "updatedInput", "annotations", q.question, "notes")
       )
     ).toStrictEqual(questions.map(() => mentionsRobert));
+  });
+
+  it("a chat answer tells Claude one message answers every question, and a card answer keeps its short note", async () => {
+    const questions = [
+      {
+        header: "Color",
+        options: [{ label: "Red" }],
+        question: "Which color?",
+      },
+      { header: "Size", options: [{ label: "S" }], question: "Which size?" },
+    ];
+    const notesFor = async (via: "chat" | "card") => {
+      const { decision } = await runFake(
+        [
+          init,
+          permission("ask1", "AskUserQuestion", { questions }),
+          result("ok"),
+        ],
+        {
+          onQuestion: async (card) =>
+            await Promise.resolve<QuestionAnswer>({
+              answeredBy: "Dana",
+              answers: card.questions.map((q) => ({
+                freeText: "Red, small",
+                labels: [],
+                question: q.text,
+                questionId: q.id,
+              })),
+              handId: "h1",
+              requestId: card.requestId,
+              via,
+            }),
+        }
+      );
+      const response = decision("ask1");
+      return questions.map((q) =>
+        at(response, "updatedInput", "annotations", q.question, "notes")
+      );
+    };
+    const chat = await notesFor("chat");
+    const card = await notesFor("card");
+    expect({ card, chat }).toStrictEqual({
+      card: ["Answered by Dana", "Answered by Dana"],
+      chat: [
+        "Answered in chat by Dana. The one message answers every question on the card.",
+        "Answered in chat by Dana. The one message answers every question on the card.",
+      ],
+    });
   });
 
   it("a card closed without an answer tells Claude no decision was made", async () => {
@@ -584,13 +658,44 @@ describe(claudeHarness, () => {
         (e) => e.type === "tool_call" || e.type === "tool_result"
       ),
     }).toStrictEqual({
-      finalEvent: { text: "Done, in blue", type: "final" },
+      finalEvent: { narration: "", text: "Done, in blue", type: "final" },
       inputClosesAfterResult: true,
       tools: [
         { id: "t1", name: "Bash", summary: "sleep 6", type: "tool_call" },
         { id: "t1", ok: true, type: "tool_result" },
         { id: "t2", name: "Bash", summary: "false", type: "tool_call" },
         { id: "t2", ok: false, type: "tool_result" },
+      ],
+    });
+  });
+
+  it("the final event carries the text streamed before the answer as narration", async () => {
+    const oneResult = await finalsOf([
+      ...streamed("m1", "Let me check"),
+      toolUse("t1", "Read", { file_path: "a.md" }),
+      ...streamed("m2", "The answer"),
+      result("The answer"),
+    ]);
+    const twoResults = await finalsOf([
+      ...streamed("m1", "A"),
+      toolUse("t1", "Bash", { command: "ls" }),
+      result("A"),
+      toolUse("t2", "Bash", { command: "ls" }),
+      ...streamed("m2", "B"),
+      result("B"),
+    ]);
+    const noNarration = await finalsOf([
+      ...streamed("m1", "Just the answer"),
+      result("Just the answer"),
+    ]);
+    expect({ noNarration, oneResult, twoResults }).toStrictEqual({
+      noNarration: [{ narration: "", text: "Just the answer", type: "final" }],
+      oneResult: [
+        { narration: "Let me check", text: "The answer", type: "final" },
+      ],
+      twoResults: [
+        { narration: "", text: "A", type: "final" },
+        { narration: "", text: "A\n\nB", type: "final" },
       ],
     });
   });
@@ -630,7 +735,11 @@ describe(claudeHarness, () => {
       )
     ).toBeTruthy();
     expect(calls.some((c) => c.eof === true)).toBeTruthy();
-    expect(events.at(-1)).toStrictEqual({ text: "first", type: "final" });
+    expect(events.at(-1)).toStrictEqual({
+      narration: "",
+      text: "first",
+      type: "final",
+    });
     await expect(channel.steer("After the turn")).resolves.toBe("rejected");
   });
 
@@ -662,6 +771,7 @@ describe(claudeHarness, () => {
     );
     await expect(steer).resolves.toBe("steered");
     expect(events.findLast((e) => e.type === "final")).toStrictEqual({
+      narration: "",
       text: "first\n\nsecond",
       type: "final",
     });

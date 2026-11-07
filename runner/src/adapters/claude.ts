@@ -118,6 +118,11 @@ const isAskedQuestion = (value: unknown): value is AskedQuestion =>
 const askedQuestions = (value: unknown): AskedQuestion[] =>
   Array.isArray(value) && value.every(isAskedQuestion) ? value : [];
 
+const answerNote = (name: string, via: "card" | "chat") =>
+  via === "chat"
+    ? `Answered in chat by ${name}. The one message answers every question on the card.`
+    : `Answered by ${name}`;
+
 // Puts Claude's question prompt to the room as a card and hands back the
 // first answer in the shape AskUserQuestion expects: answers keyed by
 // question text, with who answered in the notes.
@@ -159,7 +164,9 @@ const askRoom = async (
         ...a.labels,
         ...(a.freeText === undefined || a.freeText === "" ? [] : [a.freeText]),
       ].join(", ");
-      annotations[question] = { notes: `Answered by ${answer.answeredBy}` };
+      annotations[question] = {
+        notes: answerNote(answer.answeredBy, answer.via),
+      };
     }
   }
   return {
@@ -245,6 +252,8 @@ const steeredUuids = (msg: SDKMessage): string[] => {
 interface StreamState {
   sawText: boolean;
   finals: string[];
+  messages: string[];
+  narrations: string[];
   usage: { inputTokens: number; outputTokens: number };
 }
 
@@ -257,11 +266,15 @@ const streamEvents = (
   }
   const ev = msg.event;
   const events: HarnessEvent[] = [];
-  if (ev.type === "message_start" && state.sawText) {
-    events.push({ text: "\n\n", type: "text_delta" });
+  if (ev.type === "message_start") {
+    state.messages.push("");
+    if (state.sawText) {
+      events.push({ text: "\n\n", type: "text_delta" });
+    }
   }
   if (ev.type === "content_block_delta" && ev.delta.type === "text_delta") {
     state.sawText = true;
+    state.messages[Math.max(state.messages.length - 1, 0)] += ev.delta.text;
     events.push({ text: ev.delta.text, type: "text_delta" });
   }
   return events;
@@ -280,9 +293,18 @@ const resultEvents = (
   };
   if (msg.subtype === "success" && !msg.is_error) {
     state.finals.push(msg.result);
+    const reported = state.messages.findLastIndex((m) => m !== "");
+    state.narrations.push(
+      ...state.messages.filter((m, i) => m !== "" && i !== reported)
+    );
+    state.messages = [];
     return [
       usage,
-      { text: state.finals.filter(Boolean).join("\n\n"), type: "final" },
+      {
+        narration: state.narrations.join("\n\n"),
+        text: state.finals.filter(Boolean).join("\n\n"),
+        type: "final",
+      },
     ];
   }
   const detail =
@@ -576,6 +598,8 @@ export const claudeHarness = (opts: {
 
     const state: StreamState = {
       finals: [],
+      messages: [],
+      narrations: [],
       sawText: false,
       usage: { inputTokens: 0, outputTokens: 0 },
     };

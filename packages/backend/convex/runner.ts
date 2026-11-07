@@ -510,6 +510,7 @@ export const finish = mutation({
     commandId: v.id("commands"),
     finalText: v.string(),
     model: v.optional(v.string()),
+    narration: v.optional(v.string()),
     secret: v.string(),
     sessionId: v.optional(v.string()),
     transcriptRef: v.string(),
@@ -536,7 +537,11 @@ export const finish = mutation({
     ) {
       throw new Error("Invalid turn command");
     }
-    // The streamed text stays on the turn, so the pane can keep showing it.
+    // The streamed text stays on the turn, so the pane can keep showing it;
+    // narration, when sent, replaces it so the answer is not shown twice.
+    if (args.narration !== undefined) {
+      await setStreamedText(ctx, args.turnId, args.narration);
+    }
     await ctx.db.patch(args.turnId, {
       endedAt: Date.now(),
       finalText: args.finalText,

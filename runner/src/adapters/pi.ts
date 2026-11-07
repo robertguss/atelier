@@ -127,6 +127,7 @@ export const piHarness = (opts: {
         }
       };
       const events = eventQueue();
+      const messageTexts: string[] = [];
       let failed = false;
       const unsubscribe = client.onEvent((ev) => {
         opts.onRaw(req.turnId, ev);
@@ -161,6 +162,11 @@ export const piHarness = (opts: {
         }
         if (ev.type === "message_end" && ev.message.role === "assistant") {
           const m = ev.message;
+          messageTexts.push(
+            m.content
+              .flatMap((block) => (block.type === "text" ? [block.text] : []))
+              .join("")
+          );
           events.push({
             costUsd: m.usage.cost.total,
             inputTokens: m.usage.input,
@@ -215,6 +221,7 @@ export const piHarness = (opts: {
             yield { sessionId: state.sessionFile, type: "session" };
           }
           yield {
+            narration: messageTexts.filter(Boolean).slice(0, -1).join("\n\n"),
             text: (await client.getLastAssistantText()) ?? "",
             type: "final",
           };

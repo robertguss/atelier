@@ -28,9 +28,12 @@ writeFileSync(new URL('./argv.json', import.meta.url), JSON.stringify(process.ar
 writeFileSync(new URL('./env.json', import.meta.url), JSON.stringify({url: process.env.ATELIER_ROOM_URL ?? null, token: process.env.ATELIER_ROOM_TOKEN ?? null}));
 const out = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
 let last = '';
-const finish = (text) => {
+const say = (text) => {
   last = text;
   out({type:'message_end', message:{role:'assistant', stopReason:'stop', content:[{type:'text', text}], usage:{input:3, output:2, cost:{total:0}}}});
+};
+const finish = (text) => {
+  say(text);
   out({type:'agent_settled', aborted:false});
 };
 createInterface({input:process.stdin}).on('line', (line) => {
@@ -44,6 +47,12 @@ createInterface({input:process.stdin}).on('line', (line) => {
       out({type:'tool_execution_start', toolCallId:'doc-1', toolName:'atelier_add_block', args:{kind:'paragraph', text:'We chose blue.'}});
       out({type:'tool_execution_end', toolCallId:'doc-1', toolName:'atelier_add_block', result:{content:[]}, isError:false});
       finish('noted');
+    }
+    else if (command.message === 'narrate') {
+      say('Checking the file');
+      out({type:'tool_execution_start', toolCallId:'call-2', toolName:'bash', args:{command:'ls'}});
+      out({type:'tool_execution_end', toolCallId:'call-2', toolName:'bash', result:{content:[]}, isError:false});
+      finish('The answer');
     }
     else if (command.message === 'ui') out({type:'extension_ui_request', id:'ui-1', method:'confirm', title:'Allow?', message:'Run it?'});
     else finish('done');
@@ -279,6 +288,7 @@ describe(piHarness, () => {
         { id: "call-1", ok: true, type: "tool_result" },
       ]);
       expect(events.at(-1)).toStrictEqual({
+        narration: "",
         text: "steered by Use the other file",
         type: "final",
       });
@@ -308,6 +318,7 @@ describe(piHarness, () => {
         );
         expect(events.some((ev) => ev.type === "error")).toBeFalsy();
         expect(events.at(-1)).toStrictEqual({
+          narration: "",
           text: "steered by answer",
           type: "final",
         });
@@ -556,10 +567,22 @@ describe(piHarness, () => {
     });
   });
 
+  it("Pi reports the assistant messages before the last as narration", async () => {
+    await withFakePi(async (fake) => {
+      const events = await fake.run({ prompt: "narrate" });
+      expect(events.at(-1)).toStrictEqual({
+        narration: "Checking the file",
+        text: "The answer",
+        type: "final",
+      });
+    });
+  });
+
   it("Pi cancels an extension UI request so the turn completes", async () => {
     await withFakePi(async (fake) => {
       const events = await fake.run({ prompt: "ui" });
       expect(events.at(-1)).toStrictEqual({
+        narration: "",
         text: "ui answered",
         type: "final",
       });

@@ -114,7 +114,7 @@ export type HarnessEvent =
       outputTokens: number;
       costUsd?: number;
     }
-  | { type: "final"; text: string }
+  | { type: "final"; text: string; narration?: string }
   | { type: "error"; message: string; retryable: boolean };
 
 export interface HarnessCapabilities {

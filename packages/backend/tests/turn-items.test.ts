@@ -61,6 +61,48 @@ const setup = async () => {
   return { claude, dana, owner, roomId, t };
 };
 
+const partialAfterFinish = async (narration?: string) => {
+  const { t, owner, roomId, claude } = await setup();
+  const turnId = await owner.mutation(api.messages.send, {
+    body: "Go",
+    roomId,
+    toParticipantId: claude._id,
+  });
+  assert(turnId, "the message starts a turn");
+  const commands = await t.run(
+    async (ctx) => await ctx.db.query("commands").collect()
+  );
+  const command = commands.find(
+    (c) => c.turnId === turnId && c.type === "run_turn"
+  );
+  assert(command, "the turn has a run_turn command");
+  await t.mutation(api.runner.claim, {
+    commandId: command._id,
+    secret: SECRET,
+  });
+  await t.mutation(api.runner.start, {
+    harnessVersion: "test",
+    secret: SECRET,
+    turnId,
+  });
+  await t.mutation(api.runner.progress, {
+    commandId: command._id,
+    partialText: "Looking first\n\nThe answer",
+    secret: SECRET,
+    turnId,
+  });
+  await t.mutation(api.runner.finish, {
+    commandId: command._id,
+    finalText: "The answer",
+    secret: SECRET,
+    transcriptRef: "/tmp/t.ndjson",
+    turnId,
+    ...(narration === undefined ? {} : { narration }),
+  });
+  const pane = await owner.query(api.agent.pane, { roomId });
+  return pane.turns.find((x) => x.id === turnId)?.partialText;
+};
+
 describe("turn items", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -142,5 +184,16 @@ describe("turn items", () => {
     await expect(
       t.run(async (ctx) => await ctx.db.query("turnItems").collect())
     ).resolves.toHaveLength(2);
+  });
+
+  it("finish with narration replaces the streamed text, an empty narration clears it, and no narration keeps it", async () => {
+    const replaced = await partialAfterFinish("Looking first");
+    const cleared = await partialAfterFinish("");
+    const kept = await partialAfterFinish();
+    expect({ cleared, kept, replaced }).toStrictEqual({
+      cleared: "",
+      kept: "Looking first\n\nThe answer",
+      replaced: "Looking first",
+    });
   });
 });

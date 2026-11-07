@@ -237,6 +237,26 @@ describe(codexHarness, () => {
     ).toBeTruthy();
   });
 
+  it("Codex joins every agent message into the final text and reports no narration", async () => {
+    await using fake = await fakeCodex({
+      steps: [
+        { send: message("First part") },
+        { send: message("Second part") },
+        { send: completed },
+      ],
+    });
+    const results = await collect(
+      codexHarness({ executable: fake.executable, onRaw() {} }).runTurn(
+        request(fake.dir),
+        new AbortController().signal,
+        turnInput()
+      )
+    );
+    expect(results.filter((e) => e.type === "final")).toStrictEqual([
+      { narration: "", text: "First part\n\nSecond part", type: "final" },
+    ]);
+  });
+
   it("Codex initialize opts into the experimental API", async () => {
     await using fake = await fakeCodex({ steps: [{ send: completed }] });
     await collect(

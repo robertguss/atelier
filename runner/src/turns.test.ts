@@ -255,6 +255,18 @@ const startScribe = async () => {
   return { run, s, turn };
 };
 
+const finishedWith = async (...events: HarnessEvent[]) => {
+  const s = setup();
+  const turn = s.turns.handle("c-run");
+  await until(() => s.runs.length > 0);
+  const [run] = s.runs;
+  assert(run);
+  end(run, ...events);
+  await turn;
+  const [finished] = s.named("runner:finish");
+  return { finalText: finished?.finalText, narration: finished?.narration };
+};
+
 describe(createTurns, () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -371,6 +383,21 @@ describe(createTurns, () => {
     ]);
     end(run, { text: "done", type: "final" });
     await turn;
+  });
+
+  it("finish carries the narration the harness reported, and clears the stream when the answer is the whole stream", async () => {
+    const withNarration = await finishedWith(
+      { text: "Looking first", type: "text_delta" },
+      { narration: "Looking first", text: "The answer", type: "final" }
+    );
+    const wholeStream = await finishedWith(
+      { text: "Only the stream", type: "text_delta" },
+      { narration: "Only the stream", text: "", type: "final" }
+    );
+    expect({ wholeStream, withNarration }).toStrictEqual({
+      wholeStream: { finalText: "Only the stream", narration: "" },
+      withNarration: { finalText: "The answer", narration: "Looking first" },
+    });
   });
 
   it("an interrupt command aborts the running turn, which ends interrupted", async () => {
