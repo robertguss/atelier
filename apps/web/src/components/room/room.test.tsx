@@ -479,6 +479,22 @@ describe("room screen", () => {
       ).not.toBeInTheDocument();
     });
 
+    it('offers only "Send" while the target agent waits on its question card', async () => {
+      pane.agents = [
+        agent(CLAUDE, "claude", "Claude", {
+          activeTurnId: "t1",
+          status: "waiting",
+          takesSteer: true,
+        }),
+      ];
+      pane.turns = [turn({})];
+      await openRoom();
+      expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Send and steer now" })
+      ).not.toBeInTheDocument();
+    });
+
     it("pins the pane to the newest message after a send from mid-history", async () => {
       pane.turns = [turn({ partialText: "History.", status: "done" })];
       await openRoom();

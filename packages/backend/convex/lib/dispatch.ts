@@ -130,7 +130,7 @@ const takeWhile = <T>(items: T[], keep: (item: T) => boolean) => {
 };
 
 // A follow-up to a review or decision, and a thread delivery, never share a turn.
-const runsAlone = (m: Doc<"messages">) =>
+export const runsAlone = (m: Doc<"messages">) =>
   Boolean(m.followUpRitualId) || Boolean(m.threadId);
 
 // Start the agent's next turn from everything waiting for it, if it is idle.

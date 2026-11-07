@@ -72,12 +72,6 @@ export type TimelineItem =
       cards: PaneCard[];
     };
 
-/**
- * The agent pane's timeline, oldest first: people's messages to agents that
- * have left the queue, and each turn with its replies, the messages delivered
- * into it and its closed cards. Open cards are pinned above the composer and
- * queued messages sit in the queue strip, so neither appears here.
- */
 const append = (
   map: Map<string, PaneMessage[]>,
   id: string,
@@ -86,6 +80,12 @@ const append = (
   map.set(id, [...(map.get(id) ?? []), message]);
 };
 
+/**
+ * The agent pane's timeline, oldest first: people's messages to agents that
+ * have left the queue, and each turn with its replies, the messages delivered
+ * into it and its closed cards. Open cards are pinned above the composer and
+ * queued messages sit in the queue strip, so neither appears here.
+ */
 export const buildTimeline = (pane: Pane): TimelineItem[] => {
   const turnIds = new Set<string>(pane.turns.map((t) => t.id));
   const replies = new Map<string, PaneMessage[]>();

@@ -9,6 +9,7 @@ import {
   isActiveTurnStatus,
   OFFLINE_AFTER_MS,
   requireRunnerOnline,
+  runsAlone,
   steerMessage,
   takesSteer,
 } from "./lib/dispatch";
@@ -218,7 +219,7 @@ export const pane = query({
         deliveredTurnId: m.deliveredTurnId ?? null,
         delivery: m.delivery ?? null,
         id: m._id,
-        maySteer: !m.followUpRitualId && !m.threadId,
+        maySteer: !runsAlone(m),
         toParticipantId: m.toParticipantId ?? null,
         // Set on an agent's reply.
         turnId: m.turnId ?? null,

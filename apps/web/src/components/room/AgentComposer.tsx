@@ -110,7 +110,7 @@ export const AgentComposer = ({
             {error}
           </p>
         ) : null}
-        {target.takesSteer ? (
+        {target.status === "running" && target.takesSteer ? (
           <Button
             size="sm"
             variant="outline"
