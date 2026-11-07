@@ -27,6 +27,7 @@ describe('room page', () => {
     expect(await screen.findByText(/recorded permanently/i)).toBeInTheDocument();
     expect(screen.getByText(/run on Robert.s machine/i)).toBeInTheDocument();
     expect(screen.getByText(/files outside the room.s folder/i)).toBeInTheDocument();
+    expect(screen.getByText(/room document is shared with the agents and kept permanently/i)).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Pricing plan' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /enter the room/i }));
@@ -40,11 +41,15 @@ describe('room page', () => {
     expect(screen.queryByText(/recorded permanently/i)).not.toBeInTheDocument();
   });
 
-  it('asks again when the stored notice version is older', async () => {
+  it('asks a teammate who accepted the first notice to accept the one about the document before entering', async () => {
     member(1);
     renderAt(`/rooms/${ROOM}`);
     expect(await screen.findByText(/the notice has changed/i)).toBeInTheDocument();
+    expect(screen.getByText(/room document is shared with the agents and kept permanently/i)).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Pricing plan' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /enter the room/i }));
+    expect(backend.mutations['members:acceptNotice']).toHaveBeenCalledWith({ roomId: ROOM, version: 2 });
   });
 
   it("tells a non-member they don't have access instead of failing", async () => {

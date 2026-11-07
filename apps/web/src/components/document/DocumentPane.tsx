@@ -2,10 +2,11 @@ import { api } from '@atelier/backend/api';
 import type { Id } from '@atelier/backend/dataModel';
 import { useMutation, useQuery } from 'convex/react';
 import { FileTextIcon, PlusIcon } from 'lucide-react';
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
 import { PageSpinner } from '~/components/page';
 import { errorText } from '~/components/room/errors';
 import { Button } from '~/components/ui/button';
+import { Input } from '~/components/ui/input';
 import { leaseHolder, sectionsOf, type DocBlock, type Passage, type Section, type ThreadsData } from '~/lib/document';
 import { useNow, type Names, type Participant } from '~/lib/room';
 import { renderedRange, selectionIn, sourceRange } from '~/lib/selection';
@@ -19,10 +20,12 @@ interface DocumentPaneProps {
   meId: string | null;
   /** The room's model participants, offered as mentions in comments. */
   models: readonly Participant[];
+  /** Only the owner writes templates. */
+  isOwner: boolean;
 }
 
 /** The room's shared document, edited one block at a time. */
-export function DocumentPane({ roomId, names, meId, models }: DocumentPaneProps) {
+export function DocumentPane({ roomId, names, meId, models, isOwner }: DocumentPaneProps) {
   const doc = useQuery(api.documents.get, { roomId });
   const threads = useQuery(api.threads.list, { roomId });
   const ensure = useMutation(api.documents.ensure);
@@ -109,6 +112,7 @@ export function DocumentPane({ roomId, names, meId, models }: DocumentPaneProps)
         <FileTextIcon className="size-4 text-muted-foreground" />
         <h2 className="text-sm font-medium">Document</h2>
         <span className="text-xs text-muted-foreground">Shared with everyone in the room, agents included.</span>
+        {isOwner ? <SaveAsTemplate roomId={roomId} /> : null}
       </header>
       <div className="@container min-h-0 flex-1 overflow-y-auto">{body}</div>
     </section>
@@ -201,5 +205,61 @@ function SectionAdd({
       <PlusIcon />
       {label}
     </Button>
+  );
+}
+
+/** Saves the document's headings, and any template guidance under them, as a new template. */
+function SaveAsTemplate({ roomId }: { roomId: Id<'rooms'> }) {
+  const save = useMutation(api.templates.saveFromRoom);
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await save({ roomId, name: name.trim() });
+      setSaved(name.trim());
+      setName('');
+      setOpen(false);
+    } catch (err) {
+      setError(errorText(err));
+    }
+    setBusy(false);
+  };
+
+  if (!open) {
+    return (
+      <div className="ml-auto flex items-center gap-2">
+        {saved ? <span className="text-xs text-muted-foreground">“{saved}” saved as a template.</span> : null}
+        <Button
+          size="xs"
+          variant="ghost-muted"
+          onClick={() => {
+            setSaved(null);
+            setOpen(true);
+          }}
+        >
+          Save as template
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <form className="ml-auto flex items-center gap-2" onSubmit={(e) => void submit(e)}>
+      {error ? <span className="text-xs text-destructive-foreground">{error}</span> : null}
+      <Input size="sm" aria-label="Template name" placeholder="Template name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+      <Button type="submit" size="xs" disabled={!name.trim() || busy}>
+        Save
+      </Button>
+      <Button type="button" size="xs" variant="ghost" onClick={() => setOpen(false)}>
+        Cancel
+      </Button>
+    </form>
   );
 }

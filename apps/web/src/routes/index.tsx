@@ -1,7 +1,7 @@
 import { api } from '@atelier/backend/api';
 import { Link, createFileRoute } from '@tanstack/react-router';
 import { useQuery } from 'convex/react';
-import { ChevronRightIcon } from 'lucide-react';
+import { ChevronRightIcon, PlusIcon } from 'lucide-react';
 import { useSignOut, useSignedInEmail } from '~/auth/ClerkShell';
 import { PageSpinner, SignedInOnly } from '~/components/page';
 import { Button } from '~/components/ui/button';
@@ -17,6 +17,8 @@ export const Route = createFileRoute('/')({
 
 function RoomList() {
   const rooms = useQuery(api.rooms.list, {});
+  const me = useQuery(api.me.get, {});
+  const isOwner = me?.signedIn === true && me.isOwner;
   const email = useSignedInEmail();
   const signOut = useSignOut();
 
@@ -31,13 +33,26 @@ function RoomList() {
           </Button>
         </div>
       </header>
+      {isOwner ? (
+        <div className="flex gap-2 pb-2">
+          <Button size="sm" render={<Link to="/rooms/new" />}>
+            <PlusIcon />
+            New room
+          </Button>
+          <Button size="sm" variant="ghost" render={<Link to="/templates" />}>
+            Templates
+          </Button>
+        </div>
+      ) : null}
       {rooms === undefined ? (
         <PageSpinner />
       ) : rooms.length === 0 ? (
         <Empty>
           <EmptyHeader>
             <EmptyTitle>No rooms yet</EmptyTitle>
-            <EmptyDescription>When Robert invites you to a room, open the invite link he sends you.</EmptyDescription>
+            <EmptyDescription>
+              {isOwner ? 'Create a room to start working with your agents.' : 'When Robert invites you to a room, open the invite link he sends you.'}
+            </EmptyDescription>
           </EmptyHeader>
         </Empty>
       ) : (

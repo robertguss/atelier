@@ -3,7 +3,7 @@ import type { Doc, Id } from '../_generated/dataModel';
 import type { MutationCtx, QueryCtx } from '../_generated/server';
 
 // Bump when the join notice text changes, so members are asked to read it again.
-export const NOTICE_VERSION = 1;
+export const NOTICE_VERSION = 2;
 
 // ATELIER_OWNER_EMAILS (comma-separated) lists the Clerk accounts with owner
 // powers. Everyone else reaches only the rooms they were invited to.

@@ -135,7 +135,13 @@ export function RoomView({ roomId, isOwner }: { roomId: Id<'rooms'>; isOwner: bo
           </>
         )}
         <main className="min-w-0 flex-1">
-          <DocumentPane roomId={roomId} names={names} meId={meId} models={data.participants.filter((p) => p.kind === 'harness')} />
+          <DocumentPane
+            roomId={roomId}
+            names={names}
+            meId={meId}
+            models={data.participants.filter((p) => p.kind === 'harness')}
+            isOwner={isOwner}
+          />
         </main>
         {narrow ? (
           <>

@@ -271,3 +271,23 @@ describe('adding, deleting and moving blocks', () => {
     expect(within(blockWith('Ideas & notes')).getByRole('button', { name: 'Move up' })).toBeDisabled();
   });
 });
+
+describe('saving the document as a template', () => {
+  it("saves the room's sections as a template under the name Robert gives", async () => {
+    await openRoom();
+    const pane = within(screen.getByRole('region', { name: 'Room document' }));
+    fireEvent.click(pane.getByRole('button', { name: 'Save as template' }));
+    fireEvent.change(pane.getByLabelText('Template name'), { target: { value: 'Pricing sessions' } });
+    fireEvent.click(pane.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(backend.mutations['templates:saveFromRoom']).toHaveBeenCalledWith({ roomId: ROOM, name: 'Pricing sessions' }),
+    );
+    expect(await pane.findByText(/saved as a template/i)).toBeInTheDocument();
+  });
+
+  it('offers a teammate no way to save a template', async () => {
+    await openRoom('member');
+    expect(screen.queryByRole('button', { name: 'Save as template' })).not.toBeInTheDocument();
+  });
+});

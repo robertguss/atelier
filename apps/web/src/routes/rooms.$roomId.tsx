@@ -84,6 +84,7 @@ function JoinNotice({ roomId, version, changed }: { roomId: Id<'rooms'>; version
               Your prompts can reach anything Robert's agents can, including files outside the room's folder and Robert's
               connected tools.
             </li>
+            <li>The room document is shared with the agents and kept permanently.</li>
           </ul>
         </>
       }

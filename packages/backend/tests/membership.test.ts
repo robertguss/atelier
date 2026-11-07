@@ -112,6 +112,22 @@ test('the join notice is stored by version on the member row', async () => {
   expect(await dana.query(api.members.notice, { roomId })).toEqual({ currentVersion: before.currentVersion, acceptedVersion: before.currentVersion });
 });
 
+test('a teammate who accepted the first notice must accept the current one before entering', async () => {
+  const { t, owner, dana, roomId } = await setup();
+  mockClerk();
+  const invite = await owner.action(api.invites.create, { roomId, email: 'dana@example.com' });
+  await dana.mutation(api.invites.accept, { token: tokenOf(invite.url) });
+  await t.run(async ctx => {
+    const row = (await ctx.db.query('roomMembers').collect()).find(m => m.role === 'member')!;
+    await ctx.db.patch(row._id, { noticeVersion: 1, noticeAcceptedAt: Date.now() });
+  });
+
+  expect(await dana.query(api.members.notice, { roomId })).toEqual({ currentVersion: 2, acceptedVersion: 1 });
+  await expect(dana.mutation(api.members.acceptNotice, { roomId, version: 1 })).rejects.toThrow(/notice has changed/);
+  await dana.mutation(api.members.acceptNotice, { roomId, version: 2 });
+  expect(await dana.query(api.members.notice, { roomId })).toEqual({ currentVersion: 2, acceptedVersion: 2 });
+});
+
 test('an invite for another address shows the masked address and cannot be accepted', async () => {
   const { t, owner, eve, roomId } = await setup();
   mockClerk();
