@@ -320,6 +320,25 @@ How to set up and run shared rooms is in [docs/shared-rooms.md](docs/shared-room
   and keep sending the person's text as typed (see the Claude probe notes
   above).
 
+## Web end-to-end testing (2026-11-07)
+
+Findings from the browser pass are in
+[docs/plans/2026-11-07-1100-web-e2e-findings.md](docs/plans/2026-11-07-1100-web-e2e-findings.md).
+
+- The runner reports harness capabilities only when it registers. After
+  merging runner changes, restart it, or the web keeps showing the old
+  capabilities ("Codex can't raise question cards") and agents get the old
+  room tools. Ask an agent to list its `atelier` tools to see what is live.
+- `ssh aurora-but-gold.exe.xyz '<cmd>'` works for checks from the Mac, but its
+  non-login shell has no `node` or `npx` on PATH, so `npx convex env list`
+  fails there. Run Convex commands from an interactive VM shell.
+- Claude in Chrome's `resize_window` does nothing on a maximized window. To
+  check the narrow layout, inject a 390 px same-origin iframe of the page; the
+  Clerk session carries over.
+- A Claude turn that backgrounds a command (Claude Code does this for
+  `sleep`) emits two `result` messages. Use one to reproduce steer and
+  streamed-text edge cases.
+
 ## Quality tooling (2026-11-06)
 
 - TypeScript stays on 6.0.3, the version Expo SDK 58 pins. TS 7 ships no
