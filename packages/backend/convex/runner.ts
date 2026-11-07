@@ -4,7 +4,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { requireRunnerSecret } from "./lib/auth";
-import { closeOpenCards, expireUnanswered } from "./lib/cards";
+import { closeOpenCards, expireUnanswered, withdrawCard } from "./lib/cards";
 import {
   dispatchNext,
   isActiveTurnStatus,
@@ -858,6 +858,19 @@ export const handTimedOut = mutation({
     const hand = await ctx.db.get(handId);
     if (hand) {
       await expireUnanswered(ctx, hand);
+    }
+  },
+});
+
+// The agent's question tool call ended without an answer while its turn
+// went on, so the card closes rather than wait on an agent that moved on.
+export const handWithdrawn = mutation({
+  args: { handId: v.id("hands"), secret: v.string() },
+  handler: async (ctx, { secret, handId }) => {
+    requireRunnerSecret(secret);
+    const hand = await ctx.db.get(handId);
+    if (hand) {
+      await withdrawCard(ctx, hand);
     }
   },
 });

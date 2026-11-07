@@ -746,3 +746,222 @@ describe("raised hands", () => {
     });
   });
 });
+
+describe("cards an agent stopped waiting on", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    process.env.ATELIER_OWNER_EMAILS = "owner@example.com";
+    process.env.ATELIER_RUNNER_SECRET = SECRET;
+    process.env.CLERK_SECRET_KEY = "sk_test";
+    process.env.ATELIER_WEB_URL = "https://atelier.example.com/";
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("a withdrawn card closes as cancelled with no decision, and a later message to the agent is not taken as its answer", async () => {
+    const s = await setup();
+    const { turnId, handId } = await waitingClaude(s);
+    await s.t.mutation(api.runner.handWithdrawn, { handId, secret: SECRET });
+    const [cancelled] = await ledger(s.t, "hand.cancelled");
+    assert(cancelled, "the withdrawal is in the ledger");
+    expect({
+      hand: await getHand(s.t, handId),
+      reason: payloadOf(cancelled),
+      turn: await turnState(s.t, turnId),
+    }).toMatchObject({
+      hand: { closeReason: "The agent stopped waiting", status: "cancelled" },
+      reason: { reason: "The agent stopped waiting" },
+      turn: { status: "running", waitingOnHandId: undefined },
+    });
+    await expect(decisions(s.t)).resolves.toHaveLength(0);
+
+    await s.owner.mutation(api.messages.send, {
+      body: "use option A",
+      roomId: s.roomId,
+      toParticipantId: s.claude._id,
+    });
+    await expect(findMessage(s.t, "use option A")).resolves.toMatchObject({
+      delivery: "queued",
+    });
+    await expect(commandsOfType(s.t, "answer")).resolves.toHaveLength(0);
+  });
+
+  it("withdrawing one of two open cards moves the turn's wait to the other", async () => {
+    const s = await setup();
+    const { turnId, handId } = await waitingClaude(s);
+    const second = await raise(
+      s.t,
+      turnId,
+      [question("depth", "How deep?")],
+      "req-2"
+    );
+    await s.t.mutation(api.runner.handWithdrawn, { handId, secret: SECRET });
+    await expect(turnState(s.t, turnId)).resolves.toMatchObject({
+      waitingOnHandId: second,
+    });
+  });
+
+  it("withdrawing a card that was already answered changes nothing", async () => {
+    const s = await setup();
+    const { handId } = await waitingClaude(s);
+    await s.owner.mutation(api.hands.answer, {
+      answers: [{ labels: ["Option A"], questionId: "scope" }],
+      handId,
+    });
+    await s.t.mutation(api.runner.handWithdrawn, { handId, secret: SECRET });
+    await expect(getHand(s.t, handId)).resolves.toMatchObject({
+      status: "answered",
+    });
+    await expect(decisions(s.t)).resolves.toHaveLength(1);
+    await expect(ledger(s.t, "hand.cancelled")).resolves.toHaveLength(0);
+  });
+});
+
+// A running Codex turn, the turn kind that reads these tools most.
+const runningCodex = async (s: Awaited<ReturnType<typeof setup>>) => {
+  const turnId = await s.owner.mutation(api.messages.send, {
+    body: "Look around",
+    roomId: s.roomId,
+    toParticipantId: s.codex._id,
+  });
+  assert(turnId, "the message starts a turn");
+  const commandId = await startTurn(s.t, turnId);
+  return { commandId, turnId };
+};
+
+const insertDecisions = async (
+  s: Awaited<ReturnType<typeof setup>>,
+  count: number
+) => {
+  for (let n = 1; n <= count; n += 1) {
+    // oxlint-disable-next-line eslint/no-await-in-loop -- decisions are inserted in order, so creation time orders them
+    await s.t.run(async (ctx) => {
+      await ctx.db.insert("decisions", {
+        answeredByParticipantId: s.robert._id,
+        choice: `choice ${n}`,
+        roomId: s.roomId,
+      });
+    });
+  }
+};
+
+describe("room context tools", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    process.env.ATELIER_OWNER_EMAILS = "owner@example.com";
+    process.env.ATELIER_RUNNER_SECRET = SECRET;
+    process.env.CLERK_SECRET_KEY = "sk_test";
+    process.env.ATELIER_WEB_URL = "https://atelier.example.com/";
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("the handbook tool returns the room's handbook as it is now, including an edit made after the turn was queued", async () => {
+    const s = await setup();
+    const { turnId } = await runningCodex(s);
+    const read = async () =>
+      await s.t.query(api.documentTools.readHandbookForTurn, {
+        secret: SECRET,
+        turnId,
+      });
+    await expect(read()).resolves.toStrictEqual({ handbook: "", ok: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.roomId, { handbook: "1. Ship small." });
+    });
+    await expect(read()).resolves.toStrictEqual({
+      handbook: "1. Ship small.",
+      ok: true,
+    });
+  });
+
+  it("the decisions tool returns the latest ten agent-visible decisions, oldest first, as the context block writes them", async () => {
+    const s = await setup();
+    const { turnId } = await runningCodex(s);
+    await insertDecisions(s, 12);
+    const result = await s.t.query(api.documentTools.recentDecisionsForTurn, {
+      secret: SECRET,
+      turnId,
+    });
+    assert(result.ok, "a running turn reads decisions");
+    expect(result.lines).toHaveLength(10);
+    expect(result.lines[0]).toMatch(
+      /^- choice 3 \(decided by Robert, \d{4}-\d\d-\d\d \d\d:\d\d UTC\)$/u
+    );
+    expect(result.lines[9]).toMatch(/^- choice 12 /u);
+  });
+
+  it("the decisions tool honours a limit between 1 and 50", async () => {
+    const s = await setup();
+    const { turnId } = await runningCodex(s);
+    await insertDecisions(s, 55);
+    const count = async (limit: number) => {
+      const result = await s.t.query(api.documentTools.recentDecisionsForTurn, {
+        limit,
+        secret: SECRET,
+        turnId,
+      });
+      assert(result.ok, "a running turn reads decisions");
+      return result.lines.length;
+    };
+    await expect(count(3)).resolves.toBe(3);
+    await expect(count(500)).resolves.toBe(50);
+    await expect(count(0)).resolves.toBe(1);
+  });
+
+  it("the decisions tool leaves out review decisions and their rationale", async () => {
+    const s = await setup();
+    const { turnId } = await runningCodex(s);
+    await s.t.run(async (ctx) => {
+      const ritualId = await ctx.db.insert("rituals", {
+        participantIds: [],
+        request: "r",
+        roomId: s.roomId,
+        status: "decided",
+        type: "independent_review",
+      });
+      await ctx.db.insert("decisions", {
+        choice: "REVIEW-CHOICE",
+        rationale: "REVIEW-RATIONALE",
+        ritualId,
+        roomId: s.roomId,
+      });
+    });
+    await insertDecisions(s, 2);
+    const result = await s.t.query(api.documentTools.recentDecisionsForTurn, {
+      secret: SECRET,
+      turnId,
+    });
+    assert(result.ok, "a running turn reads decisions");
+    expect(result.lines).toHaveLength(2);
+    expect(JSON.stringify(result)).not.toMatch(/REVIEW-/u);
+  });
+
+  it("both tools refuse once the turn has ended", async () => {
+    const s = await setup();
+    const { commandId, turnId } = await runningCodex(s);
+    await s.t.mutation(api.runner.finish, {
+      commandId,
+      finalText: "ok",
+      secret: SECRET,
+      transcriptRef: "/t",
+      turnId,
+    });
+    const args = { secret: SECRET, turnId };
+    await expect(
+      s.t.query(api.documentTools.readHandbookForTurn, args)
+    ).resolves.toMatchObject({ ok: false, reason: "turn_ended" });
+    await expect(
+      s.t.query(api.documentTools.recentDecisionsForTurn, args)
+    ).resolves.toMatchObject({ ok: false, reason: "turn_ended" });
+    await expect(
+      s.t.query(api.documentTools.readHandbookForTurn, {
+        ...args,
+        secret: "wrong",
+      })
+    ).rejects.toThrow(/Bad runner secret/u);
+  });
+});

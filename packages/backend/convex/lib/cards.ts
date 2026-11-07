@@ -257,6 +257,14 @@ export const expireUnanswered = async (
   }
 };
 
+// The agent stopped waiting on its card while its turn goes on: the card
+// closes with no decision. A card already answered or closed is left alone.
+export const withdrawCard = async (ctx: MutationCtx, hand: Doc<"hands">) => {
+  if (hand.status === "raised") {
+    await close(ctx, hand, "cancelled", "The agent stopped waiting");
+  }
+};
+
 // The turn ended under an open card: the card closes with no decision.
 // Stopped turns cancel it; a lost runner or a turn that ended otherwise
 // expires it.

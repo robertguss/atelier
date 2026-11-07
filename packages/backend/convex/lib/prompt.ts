@@ -96,6 +96,13 @@ const DOCUMENT_LINE = {
     "Room document: you may add and update your own blocks and comment on others.",
 };
 
+// One decision as an agent reads it, in the room context block and from
+// the recent_decisions tool alike.
+export const decisionLine = (d: AgentDecision) => {
+  const question = d.question ? `${neutralize(d.question)} → ` : "";
+  return `- ${question}${neutralize(d.choice)} (decided by ${neutralize(agentName(d.answeredBy))}, ${formatTime(d.at)})`;
+};
+
 export const contextBlock = (
   c: RoomContext,
   documentMode: keyof typeof DOCUMENT_LINE
@@ -114,13 +121,11 @@ export const contextBlock = (
   if (c.decisions.length === 0) {
     lines.push("- none yet");
   }
-  for (const d of c.decisions) {
-    const question = d.question ? `${neutralize(d.question)} → ` : "";
-    lines.push(
-      `- ${question}${neutralize(d.choice)} (decided by ${neutralize(agentName(d.answeredBy))}, ${formatTime(d.at)})`
-    );
-  }
-  lines.push(PRIVATE_CHANNEL_SENTENCE, "</room_context>");
+  lines.push(
+    ...c.decisions.map(decisionLine),
+    PRIVATE_CHANNEL_SENTENCE,
+    "</room_context>"
+  );
   return lines.join("\n");
 };
 
@@ -265,14 +270,15 @@ const cardQuestionText = (
 // follow-up, which stay the owner's.
 export const agentDecisions = async (
   ctx: QueryCtx,
-  roomId: Id<"rooms">
+  roomId: Id<"rooms">,
+  limit = RECENT_DECISIONS
 ): Promise<AgentDecision[]> => {
   const shown = [];
   for await (const d of ctx.db
     .query("decisions")
     .withIndex("by_room", (q) => q.eq("roomId", roomId))
     .order("desc")) {
-    if (shown.length === RECENT_DECISIONS) {
+    if (shown.length === limit) {
       break;
     }
     if (d.ritualId !== undefined) {
