@@ -122,9 +122,10 @@ decision for the whole card. Recent decisions appear in every agent's room
 context. A card left unanswered for 2 hours closes with no decision, and
 stopping the turn cancels its card.
 
-Only Claude raises cards. Codex and Pi ask in plain text in their reply, and
-the agent pane marks them "can't raise question cards". Answer them with an
-ordinary message.
+Claude raises cards through its own question tool, and Codex and Pi through
+the room's `raise_hand` tool, which asks one question at a time. A raised card
+also pushes to the owner's phone; tapping it opens the room with that agent
+selected and its question shown above the composer, where a reply answers it.
 
 ## The edit switch
 

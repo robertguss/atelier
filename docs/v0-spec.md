@@ -258,8 +258,9 @@ normalized `HarnessEvent`s.
   Claude Code itself classes as read-only. The callback turns the agent's own
   question tool into a question card, allows file edits inside the room folder
   while the edit switch is on, and denies everything else.
-- Codex and Pi have no question cards: they ask in plain text. How each
-  harness handles the edit switch is in [shared-rooms.md](shared-rooms.md).
+- Codex and Pi raise question cards through the room's `raise_hand` tool
+  (see "Atelier MCP server"). How each harness handles the edit switch is in
+  [shared-rooms.md](shared-rooms.md).
 - Every harness runs on the user's own login. The runner never reads or copies
   login tokens.
 
@@ -331,11 +332,20 @@ anchoring on the first answer that arrives.
 The runner serves a local MCP server, scoped to the turn's room, and adds it to
 every harness's MCP config for that turn.
 
-| Tool                             | What it does                                                                                                                                                                            |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `raise_hand(question, options?)` | Creates a `hand` and sends a push. The turn can carry on, or end and wait for the answer. Not built: question cards now come from each harness's own question tool (Claude only so far) |
-| `read_handbook()`                | Returns the room's handbook                                                                                                                                                             |
-| `recent_decisions(limit?)`       | Returns the room's latest decisions and their rationale                                                                                                                                 |
+| Tool                             | What it does                                                                                                                                                                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `raise_hand(question, options?)` | Puts a one-question card in front of the room and waits for the first answer, on the card or in chat, for up to 2 hours. Codex and Pi only: Claude asks through its own question tool, which allows several questions per card |
+| `read_handbook()`                | Returns the room's handbook as it is now                                                                                                                                                                                       |
+| `recent_decisions(limit?)`       | Returns the room's latest decisions (10 by default, up to 50) in the view the room context block uses. Never a rationale or a review decision                                                                                  |
+
+The tools join the room document tools on the same per-turn server: Claude
+gets it in-process, Codex as `mcp_servers.atelier`, Pi through a runner
+extension. Independent reviews get no room tools. Review follow-ups get all
+three, and their cards are the owner's alone. Scribe runs keep their draft
+tools and ask nothing. Every raised card, Claude's included, pushes to the
+owner's phone, naming the agent but not the question. If the agent stops
+waiting (its call is cancelled while the turn goes on), the card closes as
+cancelled.
 
 `post_finding` and `ask_peer` come later. `ask_peer` would be peer mode, which
 is out of scope.
