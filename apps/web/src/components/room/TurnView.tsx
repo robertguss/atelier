@@ -25,12 +25,14 @@ import type {
 import { cn } from "~/lib/utils";
 
 import { errorText } from "./errors";
+import { MessageRow } from "./MessageRow";
 import { QuestionCard } from "./QuestionCard";
 
 interface TurnViewProps {
   roomId: Id<"rooms">;
   turn: PaneTurn;
   replies: PaneMessage[];
+  delivered: PaneMessage[];
   cards: PaneCard[];
   tools: ToolItem[];
   names: Names;
@@ -188,6 +190,7 @@ export const TurnView = ({
   roomId,
   turn,
   replies,
+  delivered,
   cards,
   tools,
   names,
@@ -223,6 +226,9 @@ export const TurnView = ({
       ) : (
         <ThinkingNote turn={turn} hasTools={tools.length > 0} />
       )}
+      {delivered.map((message) => (
+        <MessageRow key={message.id} message={message} names={names} />
+      ))}
       {replies.map((reply) => (
         <StreamingMarkdown key={reply.id} text={reply.body} />
       ))}

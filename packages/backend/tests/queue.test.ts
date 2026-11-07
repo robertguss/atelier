@@ -224,6 +224,37 @@ describe("the agent message queue", () => {
     vi.unstubAllGlobals();
   });
 
+  it("the pane says Claude takes a steer while an ordinary turn runs, and that a queued message may steer", async () => {
+    const { t, owner, dana, roomId, claude, pi } = await setup();
+    const idle = await owner.query(api.agent.pane, { roomId });
+    expect(
+      idle.agents.map((a) => [a.participantId, a.takesSteer])
+    ).toStrictEqual([
+      [claude._id, false],
+      [pi._id, false],
+    ]);
+
+    const first = await sendTurn(owner, {
+      body: "Draft the plan",
+      roomId,
+      toParticipantId: claude._id,
+    });
+    await startTurn(t, first);
+    await dana.mutation(api.messages.send, {
+      body: "Also cover pricing",
+      roomId,
+      toParticipantId: claude._id,
+    });
+    const busy = await owner.query(api.agent.pane, { roomId });
+    expect({
+      claude: busy.agents.find((a) => a.participantId === claude._id)
+        ?.takesSteer,
+      maySteer: busy.messages.find((m) => m.body === "Also cover pricing")
+        ?.maySteer,
+      pi: busy.agents.find((a) => a.participantId === pi._id)?.takesSteer,
+    }).toStrictEqual({ claude: true, maySteer: true, pi: false });
+  });
+
   it("a teammate message sent while Claude works waits, then goes in as the next prompt attributed to her", async () => {
     const { t, owner, dana, roomId, claude } = await setup();
     const first = await sendTurn(owner, {
@@ -1144,6 +1175,11 @@ describe("the agent message queue", () => {
       sessionId: "followup-session",
       turnId: followUp,
     });
+    const followUpPane = await owner.query(api.agent.pane, { roomId });
+    expect(
+      followUpPane.agents.find((a) => a.participantId === claude._id)
+        ?.takesSteer
+    ).toBeFalsy();
     const [afterFollowUp, ritual] = await Promise.all([
       getDoc(t, claude._id),
       getDoc(t, ritualId),

@@ -576,6 +576,15 @@ describe("scribe", () => {
     });
   });
 
+  it("the pane says the agent running a scribe turn takes no steer", async () => {
+    const s = await setup();
+    await beginScribe(s.t, s.dana, s.roomId, s.claude._id);
+    const pane = await s.owner.query(api.agent.pane, { roomId: s.roomId });
+    expect(
+      pane.agents.find((a) => a.participantId === s.claude._id)
+    ).toMatchObject({ status: "running", takesSteer: false });
+  });
+
   it("the scribe turn is claimed with the scribe document mode, the full document with block ids, no session, edits off and the scribe instructions", async () => {
     const s = await setup();
     await s.owner.mutation(api.rooms.setEditsEnabled, {
