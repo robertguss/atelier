@@ -17,7 +17,7 @@ import type { FunctionReturnType } from "convex/server";
 import { turnInput } from "./adapters/events.ts";
 import { reviewSnapshot } from "./review.ts";
 import type { RoomToolsRoute, RoomToolsServer } from "./room-tools-server.ts";
-import { scribeTools } from "./room-tools.ts";
+import { QuestionClosedError, scribeTools } from "./room-tools.ts";
 
 const PROGRESS_MS = 500;
 const TURN_DEADLINE_MS = 30 * 60_000;
@@ -317,7 +317,7 @@ export const createTurns = ({
         if (!question) {
           return;
         }
-        question.reject(new Error("The agent stopped waiting"));
+        question.reject(new QuestionClosedError("The agent stopped waiting"));
         client
           .mutation(api.runner.handWithdrawn, { handId, secret })
           .catch((withdrawError: unknown) => {
@@ -588,7 +588,7 @@ export const createTurns = ({
       clearInterval(timer);
       deadline.clear();
       for (const requestId of questions.keys()) {
-        settle(requestId)?.reject(new Error("The turn ended"));
+        settle(requestId)?.reject(new QuestionClosedError("The turn ended"));
       }
       running.delete(turnId);
     }

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FakeRoomConvex } from "./fake-room-convex.ts";
 import type { FakeArgs } from "./fake-room-convex.ts";
 import {
+  QuestionClosedError,
   callRoomTool,
   claudeRoomToolsServer,
   documentTools,
@@ -703,7 +704,7 @@ describe("raise_hand", () => {
   it("reports a question that closed without an answer, and a turn that cannot ask, as errors", async () => {
     const closed = await raise({ question: "Which?" }, async () => {
       await Promise.resolve();
-      throw new Error("The turn ended");
+      throw new QuestionClosedError("The turn ended");
     });
     const cannot = await raise({ question: "Which?" });
     expect([
@@ -719,6 +720,25 @@ describe("raise_hand", () => {
         "Not done (no_questions): This turn cannot ask the room questions.",
       ],
     ]);
+  });
+
+  it("says the question never reached the room when the card could not be raised", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {
+      // The failure is logged for the runner's operator; the test checks what the model reads.
+    });
+    try {
+      const result = await raise({ question: "Which?" }, async () => {
+        await Promise.resolve();
+        throw new Error("connection lost");
+      });
+      expect([result.isError, text(result)]).toStrictEqual([
+        true,
+        "Not done (not_raised): The question could not be put to the room. Try again, or ask in your reply.",
+      ]);
+      expect(logged).toHaveBeenCalledOnce();
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it("rejects an empty question or option without raising a card", async () => {

@@ -840,6 +840,23 @@ describe(createTurns, () => {
     await turn;
   });
 
+  it("a raise_hand whose caller hung up before its card was raised withdraws the card at once", async () => {
+    const s = setup();
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    const ask = s.roomTools.issued[0]?.ask;
+    assert(run && ask);
+    const answer = ask(card, AbortSignal.abort());
+    await expect(answer).rejects.toThrow(/stopped waiting/u);
+    await until(() => s.named("runner:handWithdrawn").length > 0);
+    expect(s.named("runner:handWithdrawn")).toStrictEqual([
+      { handId: "hand-1", secret: "s3cret" },
+    ]);
+    end(run, { text: "done", type: "final" });
+    await turn;
+  });
+
   it("a raise_hand whose caller stops waiting withdraws its card, and a later answer finds nothing waiting", async () => {
     const s = setup({
       "c-answer": {

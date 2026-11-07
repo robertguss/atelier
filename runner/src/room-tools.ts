@@ -43,6 +43,14 @@ export type AskRoom = (
   signal?: AbortSignal
 ) => Promise<QuestionAnswer>;
 
+/** Rejects a question that closed unanswered: its turn ended, or its caller stopped waiting. */
+export class QuestionClosedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "QuestionClosedError";
+  }
+}
+
 /** What a call knows beyond its arguments: its turn's question channel, and whether its caller is still waiting. */
 export interface CallContext {
   ask?: AskRoom;
@@ -421,11 +429,21 @@ const raiseHand = defineTool({
     };
     try {
       return renderAnswer(await ask(card, signal));
-    } catch {
+    } catch (error) {
+      if (error instanceof QuestionClosedError) {
+        return {
+          message: "No answer came before the question closed.",
+          ok: false,
+          reason: "turn_ended",
+        };
+      }
+      // The card was never raised, so nobody saw the question.
+      console.error("raise_hand could not raise its card:", error);
       return {
-        message: "No answer came before the question closed.",
+        message:
+          "The question could not be put to the room. Try again, or ask in your reply.",
         ok: false,
-        reason: "turn_ended",
+        reason: "not_raised",
       };
     }
   },

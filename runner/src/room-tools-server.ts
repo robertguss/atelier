@@ -149,6 +149,10 @@ export const createRoomToolsServer = ({
           call.abort();
         };
         hungUp.addEventListener("abort", stop, { once: true });
+        // The caller may have hung up while its request body was read.
+        if (hungUp.aborted) {
+          stop();
+        }
         if (id !== null) {
           entry.calls.set(id, call);
         }

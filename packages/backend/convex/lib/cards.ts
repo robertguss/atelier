@@ -17,7 +17,7 @@ import { agentName } from "./prompt";
 export type CardAnswer = Infer<typeof cardAnswer>;
 
 export const NO_DECISION_MESSAGE =
-  "No one answered this question within 2 hours, so no decision was made. Continue without an answer or ask again in plain text.";
+  "No one answered this question within 2 hours, so no decision was made. Continue without an answer, or ask again.";
 
 // Cards raised by a review turn or a follow-up to one are the owner's alone.
 export const ownerOnlyCard = async (ctx: QueryCtx, hand: Doc<"hands">) => {
