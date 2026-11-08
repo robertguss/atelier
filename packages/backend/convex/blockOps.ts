@@ -267,6 +267,8 @@ export const setKind = mutation({
       participant._id
     );
     const rev = await patchBlock(ctx, changeSetId, blockId, {
+      // Only a to-do has a tick.
+      checked: kind === "todo" ? block.checked : undefined,
       kind,
       text,
       ...humanEdit(block, participant._id, now),

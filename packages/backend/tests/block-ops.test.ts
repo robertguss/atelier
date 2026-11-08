@@ -411,6 +411,32 @@ describe("structural block edits", () => {
     ).toStrictEqual([["update", "paragraph", "code", "x = 1"]]);
   });
 
+  it("changing a ticked to-do into a paragraph drops the tick", async () => {
+    const s = await setup();
+    const blockId = await write(
+      s,
+      s.claude._id,
+      s.happened,
+      "Call Ana",
+      "todo"
+    );
+    await s.owner.mutation(api.blockOps.toggleChecked, {
+      baseRev: await revOf(s, blockId),
+      blockId,
+      checked: true,
+    });
+
+    await s.owner.mutation(api.blockOps.setKind, {
+      baseRev: await revOf(s, blockId),
+      blockId,
+      kind: "paragraph",
+      text: "Call Ana",
+    });
+
+    const block = await blockOf(s, blockId);
+    expect([block.kind, block.checked]).toStrictEqual(["paragraph", undefined]);
+  });
+
   it("ticking a model's to-do needs no lease, records an update and marks the block as edited by a person; a stale tick is refused with the block's checked state", async () => {
     const s = await setup();
     const blockId = await write(
