@@ -1,9 +1,11 @@
+import { numberedPositions } from "@atelier/shared";
+
 import { authorText, MARK_LABEL } from "~/lib/document";
 import type { BlockMark, VersionBlock } from "~/lib/document";
 import type { Names } from "~/lib/room";
 import { cn } from "~/lib/utils";
 
-import { BlockText } from "./BlockText";
+import { BlockEditor } from "./BlockEditor";
 
 const MARK_STYLE: Record<BlockMark, string> = {
   added: "bg-success/10 ring-success/40",
@@ -31,9 +33,10 @@ export const VersionView = ({
       </p>
     );
   }
+  const numbers = numberedPositions(blocks.map((b) => b.kind));
   return (
     <div className="space-y-1">
-      {blocks.map((block) => (
+      {blocks.map((block, i) => (
         <div
           key={block.blockId}
           data-version-block=""
@@ -43,8 +46,33 @@ export const VersionView = ({
             block.mark && cn("rounded-lg ring-1", MARK_STYLE[block.mark])
           )}
         >
-          <div data-block-body="">
-            <BlockText kind={block.kind} text={block.text} />
+          <div data-block-body="" className="flex items-baseline gap-2">
+            {block.kind === "todo" ? (
+              <input
+                type="checkbox"
+                checked={block.checked ?? false}
+                disabled
+                readOnly
+                aria-label={block.text || "To-do"}
+                className="accent-primary translate-y-0.5"
+              />
+            ) : null}
+            {block.kind === "listItem" ? (
+              <span className="text-muted-foreground">•</span>
+            ) : null}
+            {numbers[i] === undefined ? null : (
+              <span className="text-muted-foreground tabular-nums">
+                {numbers[i]}.
+              </span>
+            )}
+            <div className="min-w-0 flex-1">
+              <BlockEditor
+                blockId={block.blockId}
+                kind={block.kind}
+                text={block.text}
+                editable={false}
+              />
+            </div>
           </div>
           <p className="text-muted-foreground mt-0.5 flex items-baseline gap-1.5 text-xs">
             {block.mark ? (

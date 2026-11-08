@@ -1,11 +1,21 @@
 import {
   act,
   fireEvent,
+  render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Editor } from "@tiptap/core";
+import {
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import {
   backend,
@@ -15,6 +25,8 @@ import {
   resetBackend,
 } from "~/test/backend";
 import { renderAt } from "~/test/render";
+
+import { BlockEditor } from "./BlockEditor";
 
 vi.mock(import("convex/react"), async () => {
   const { convexMock } = await import("~/test/backend");
@@ -522,5 +534,77 @@ describe("saving the document as a template", () => {
     expect(
       screen.queryByRole("button", { name: "Save as template" })
     ).not.toBeInTheDocument();
+  });
+});
+
+// The editor instance that Tiptap leaves on the content element.
+const editorOf = (element: HTMLElement) => {
+  const editor: unknown = Reflect.get(element, "editor");
+  assert(editor instanceof Editor);
+  return editor;
+};
+
+describe("a block's editor", () => {
+  it("renders read-only text in place with the block id for comments, and writes nothing on mount or blur", () => {
+    const onChange = vi.fn<(text: string) => void>();
+    render(
+      <BlockEditor
+        blockId="b1"
+        kind="paragraph"
+        text="Charge **per seat**."
+        editable={false}
+        onChange={onChange}
+      />
+    );
+    const content = screen.getByRole("textbox");
+    expect(content).toHaveAttribute("data-block-text", "b1");
+    expect(content).toHaveAttribute("contenteditable", "false");
+    expect(content).toHaveTextContent("Charge per seat.");
+    expect(within(content).getByText("per seat").tagName).toBe("STRONG");
+    fireEvent.focus(content);
+    fireEvent.blur(content);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("reports the new text as markdown once the person changes it", () => {
+    const onChange = vi.fn<(text: string) => void>();
+    render(
+      <BlockEditor
+        blockId="b1"
+        kind="paragraph"
+        text="Charge **per seat**."
+        editable
+        onChange={onChange}
+      />
+    );
+    const content = screen.getByRole("textbox");
+    fireEvent.focus(content);
+    fireEvent.blur(content);
+    expect(onChange).not.toHaveBeenCalled();
+    act(() => {
+      editorOf(content).commands.insertContentAt(1, "We ");
+    });
+    expect(onChange).toHaveBeenLastCalledWith("We Charge **per seat**.");
+  });
+
+  it("takes a remote change to text and kind without remounting or writing back", () => {
+    const onChange = vi.fn<(text: string) => void>();
+    const props = { blockId: "b1", editable: true, onChange };
+    const { rerender } = render(
+      <BlockEditor {...props} kind="paragraph" text="Charge per seat." />
+    );
+    const content = screen.getByRole("textbox");
+    rerender(
+      <BlockEditor {...props} kind="paragraph" text="Charge per *team*." />
+    );
+    expect(content).toHaveTextContent("Charge per team.");
+    expect(within(content).getByText("team").tagName).toBe("EM");
+
+    rerender(
+      <BlockEditor {...props} kind="heading" text="Charge per *team*." />
+    );
+    expect(screen.getByRole("textbox")).toBe(content);
+    expect(content.querySelector("h3")).toHaveTextContent("Charge per team.");
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

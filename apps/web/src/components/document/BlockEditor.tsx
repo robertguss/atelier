@@ -1,170 +1,76 @@
-import { api } from "@atelier/backend/api";
-import { useMutation } from "convex/react";
-import { useEffect, useRef, useState } from "react";
-import type { FocusEvent, KeyboardEvent } from "react";
+import type { BlockKind } from "@atelier/shared";
+import { EditorContent, useEditor } from "@tiptap/react";
+import { useEffect } from "react";
 
-import { errorText } from "~/components/room/errors";
-import { Button } from "~/components/ui/button";
-import { Textarea } from "~/components/ui/textarea";
-import { KIND_LABEL, RENEW_EVERY_MS } from "~/lib/document";
-import type { DocBlock } from "~/lib/document";
-import { hasContent, logFailure } from "~/lib/utils";
+import { fromDoc, nodeName, toDoc } from "~/lib/editor/codec";
+import type { TextKind } from "~/lib/editor/codec";
+import { blockExtensions } from "~/lib/editor/extensions";
 
 interface BlockEditorProps {
-  block: DocBlock;
-  /** Someone else who now holds an unexpired lease on the block. */
-  otherHolder: string | null;
-  onDone: () => void;
+  blockId: string;
+  kind: BlockKind;
+  text: string;
+  editable: boolean;
+  /** The block's new text, after the person changed its content. */
+  onChange?: (text: string) => void;
 }
 
-/**
- * The block being edited, while the person holds its lease. Enter or leaving
- * the textarea saves and ends the edit; Shift+Enter adds a line. A refused
- * save keeps the draft here with the server's reason.
- */
-export const BlockEditor = ({
-  block,
-  otherHolder,
-  onDone,
-}: BlockEditorProps) => {
-  const blockId = block._id;
-  const save = useMutation(api.blocks.save);
-  const renew = useMutation(api.blocks.renew);
-  const stopEdit = useMutation(api.blocks.stopEdit);
-  const startEdit = useMutation(api.blocks.startEdit);
-  const [draft, setDraft] = useState(block.text);
-  const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const busy = useRef(false);
-  const lastRenewal = useRef(0);
-  const boxRef = useRef<HTMLDivElement>(null);
-  // The lease was taken just before this editor opened.
-  useEffect(() => {
-    lastRenewal.current = Date.now();
-  }, []);
+interface TextEditorProps extends BlockEditorProps {
+  kind: TextKind;
+}
 
-  const onChange = (value: string) => {
-    setDraft(value);
-    if (Date.now() - lastRenewal.current < RENEW_EVERY_MS) {
-      return;
-    }
-    lastRenewal.current = Date.now();
-    renew({ blockId }).catch((error_: unknown) => {
-      setError(errorText(error_));
-    });
-  };
-
-  const finish = async () => {
-    if (busy.current) {
-      return;
-    }
-    busy.current = true;
-    setError(null);
-    try {
-      if (draft !== block.text) {
-        await save({ blockId, text: draft });
-      }
-      await stopEdit({ blockId });
-      onDone();
-    } catch (error_) {
-      setError(errorText(error_));
-    }
-    busy.current = false;
-  };
-
-  const retake = async () => {
-    setError(null);
-    try {
-      await startEdit({ blockId });
-      lastRenewal.current = Date.now();
-      boxRef.current?.querySelector("textarea")?.focus();
-    } catch (error_) {
-      setError(errorText(error_));
-    }
-  };
-
-  // Gives up the draft. A lease still held is released; one that is not
-  // lapses on its own, so a failed release changes nothing.
-  const discard = () => {
-    stopEdit({ blockId }).catch(() => {
-      // The lease lapses on its own.
-    });
-    onDone();
-  };
-
-  const copyDraft = async () => {
-    await navigator.clipboard.writeText(draft);
-    setCopied(true);
-  };
-
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) {
-      return;
-    }
-    e.preventDefault();
-    finish().catch(logFailure);
-  };
-
-  const onBlur = (e: FocusEvent<HTMLTextAreaElement>) => {
-    // Moving to this editor's own buttons is not leaving it, and a refused
-    // save waits for the person to choose what to do.
-    if (
-      boxRef.current?.contains(e.relatedTarget) === true ||
-      hasContent(error)
-    ) {
-      return;
-    }
-    finish().catch(logFailure);
-  };
-
-  return (
-    <div ref={boxRef} className="space-y-1.5">
-      <Textarea
-        aria-label={`Edit ${KIND_LABEL[block.kind].toLowerCase()}`}
-        autoFocus
-        rows={block.kind === "paragraph" ? 3 : 1}
-        value={draft}
-        onChange={(e) => {
-          onChange(e.target.value);
-        }}
-        onKeyDown={onKeyDown}
-        onBlur={onBlur}
-      />
-      {hasContent(error) ? (
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <p role="alert" className="text-destructive-foreground mr-auto">
-            {error}
-          </p>
-          {hasContent(otherHolder) ? (
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => {
-                copyDraft().catch(logFailure);
-              }}
-            >
-              {copied ? "Copied" : "Copy my draft"}
-            </Button>
-          ) : (
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => {
-                retake().catch(logFailure);
-              }}
-            >
-              Retake the block
-            </Button>
-          )}
-          <Button size="xs" variant="ghost" onClick={discard}>
-            Discard my draft
-          </Button>
-        </div>
-      ) : (
-        <p className="text-muted-foreground text-xs">
-          Enter saves · Shift+Enter adds a line
-        </p>
-      )}
-    </div>
+const TextEditor = ({
+  blockId,
+  kind,
+  text,
+  editable,
+  onChange,
+}: TextEditorProps) => {
+  // Created once per block; later kind, text and editable changes are applied below.
+  const editor = useEditor(
+    {
+      content: toDoc(kind, text),
+      editable,
+      editorProps: {
+        // Comments map a selection in here back to the stored text.
+        attributes: { class: "block-editor", "data-block-text": blockId },
+      },
+      extensions: blockExtensions,
+      // Only transactions that change the document land here, so mounting,
+      // focusing and blurring never write.
+      onUpdate: ({ editor: changed }) => {
+        onChange?.(fromDoc(changed.getJSON()));
+      },
+    },
+    []
   );
+
+  useEffect(() => {
+    editor.setEditable(editable, false);
+  }, [editor, editable]);
+
+  // A change from elsewhere replaces the one node in place, kind included,
+  // without remounting. It is not the person's edit: it writes nothing back
+  // and undo cannot bring the old text back.
+  useEffect(() => {
+    const doc = editor.getJSON();
+    if (doc.content?.[0]?.type === nodeName(kind) && fromDoc(doc) === text) {
+      return;
+    }
+    editor
+      .chain()
+      .setMeta("addToHistory", false)
+      .setContent(toDoc(kind, text), { emitUpdate: false })
+      .run();
+  }, [editor, kind, text]);
+
+  return <EditorContent editor={editor} />;
 };
+
+/** A block in place: a rich-text editor over its kind and text, or a rule for a divider. */
+export const BlockEditor = ({ kind, ...props }: BlockEditorProps) =>
+  kind === "divider" ? (
+    <hr data-kind="divider" className="border-border my-3" />
+  ) : (
+    <TextEditor kind={kind} {...props} />
+  );

@@ -26,8 +26,8 @@ import type { BlockKind, DocBlock, Passage } from "~/lib/document";
 import type { Names, Participant } from "~/lib/room";
 import { cn, hasContent, logFailure } from "~/lib/utils";
 
-import { BlockEditor } from "./BlockEditor";
 import { BlockText } from "./BlockText";
+import { TextareaBlockEditor } from "./TextareaBlockEditor";
 import { NewComment } from "./ThreadCard";
 
 /** Where a new block goes: after a block, at the end of a heading's section, or at the end of the document. */
@@ -266,7 +266,7 @@ export const Block = ({
       className="group hover:bg-accent/30 focus-within:bg-accent/30 relative rounded-lg px-2 py-1.5"
     >
       {editing ? (
-        <BlockEditor
+        <TextareaBlockEditor
           block={block}
           otherHolder={otherHolder}
           onDone={() => {

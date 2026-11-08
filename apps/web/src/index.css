@@ -235,6 +235,57 @@
   white-space: pre-line;
 }
 
+/* A block's editor: one node of the block's kind. Checkboxes, numbers and
+   bullets sit outside it, so they add no text to the block. */
+.block-editor {
+  outline: none;
+  overflow-wrap: anywhere;
+}
+
+.block-editor [data-kind="heading"] {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.block-editor [data-kind="quote"] {
+  border-inline-start: 2px solid var(--contrast-border);
+  padding-inline-start: 0.75rem;
+  color: var(--contrast-muted-foreground);
+}
+
+.block-editor [data-kind="code"] {
+  border: 1px solid var(--contrast-border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+.block-editor strong {
+  font-weight: 600;
+}
+
+.block-editor a {
+  color: var(--info-foreground);
+}
+
+.block-editor :not(pre) > code {
+  border-radius: 0.25rem;
+  background: color-mix(in srgb, var(--contrast-foreground) 10%, transparent);
+  padding: 0.1em 0.35em;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+.block-editor .is-empty::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: var(--contrast-muted-foreground);
+}
+
 /* Chat markdown, trimmed from T3 Code's .chat-markdown rules. */
 .chat-markdown > :first-child {
   margin-top: 0;
