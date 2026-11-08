@@ -450,3 +450,25 @@ Findings from the browser pass are in
   run it outside the runner's permission checks. Keep the guard inside the
   hook command (those folders are protected from room edits), not in a script
   a room agent could rewrite.
+
+## Editor live sign-in (2026-11-08)
+
+- Password sign-in for the test accounts can require new-device email
+  verification. For the Clerk sign-in-token fallback, open the app root with
+  `?__clerk_status=sign_in&__clerk_ticket=<token>`. A ticket without the status
+  selects `SignUp` in `ClerkShell.tsx`; `/sign-in` is not the app's sign-in
+  route. Keep tokens inside the browser script and out of logs.
+- An empty static paragraph can have zero height after reload. A Playwright
+  hover timeout on that text surface is not an authentication failure;
+  inspect its bounds and distinguish it from a nonempty block activation.
+
+- For multi-agent browser tests, wait for each Send mutation to settle before
+  selecting the next target. The completion callback selects the agent that
+  just received the message; switching immediately can send the next prompt
+  to the previous agent. Confirm the delivered participant id in the room
+  evidence before counting a harness as tested.
+- Claude's installed context-mode plugin can truncate large `read_document`
+  results and require `ctx_search`, which the room denies. Moving a target
+  block to the top did not avoid it. Codex and Pi read the same document
+  directly. Distinguish fresh tool output from the turn's room snapshot when
+  validating Claude's reads; do not broaden permissions just to pass a test.
