@@ -390,6 +390,34 @@ Findings from the browser pass are in
   it ends, every Claude turn fails until `claude auth login` (or
   `claude setup-token`) is run in an interactive VM shell.
 
+## Block editor (2026-11-08)
+
+- Mounting one Tiptap editor per block took 1.1 to 1.2 s for 600 blocks
+  in a production build (headless Chromium on the VM). Blocks therefore
+  render static DOM from the schema (30 to 50 ms for 600) and an editable
+  block mounts its editor when the pointer enters it or focus reaches it.
+  Keep that in mind before adding per-block work at mount.
+- Browser-checking the editor without signing in: a throwaway Vite config
+  that aliases `convex/react` to an in-memory fake, rendering
+  `DocumentPane`, driven by `playwright-core` installed in a `/tmp` scratch
+  folder (not the repo) with `executablePath` set to the cached
+  `~/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome`. Two traps:
+  - The fake's `useMutation` must return the same function per mutation on
+    every render, as Convex does. `DocumentPane` memoizes its editing
+    session on those functions; a fresh function per render recreates the
+    session, which saves and releases after every keystroke.
+  - Keys sent back to back reach ProseMirror before Chrome delivers the
+    `selectionchange` for the previous caret move, so Enter acts on the old
+    caret. Leave about 60 ms between keys, as a person would.
+- `npx convex data blocks --limit 10000 --format jsonLines` reads a table
+  for a read-only data check without deploying a query.
+- `pkill -f <pattern>` run from Claude's Bash also kills that shell when
+  the pattern appears in its own command line. Kill by the port's pid
+  (`ss -ltnp`) instead.
+- `tests/anchor.test.ts`'s sub-second timing check fails under `pnpm
+  coverage` instrumentation (1.1 to 1.6 s), on `main` as well. Read
+  backend coverage with `--coverage.reportOnFailure`.
+
 ## Quality tooling (2026-11-06)
 
 - TypeScript stays on 6.0.3, the version Expo SDK 58 pins. TS 7 ships no
