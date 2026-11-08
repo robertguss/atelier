@@ -86,8 +86,10 @@ export const createSession = <K extends string>(
   // Temp key to real id, undefined until the split lands; and back.
   const realIds = new Map<K, K | undefined>();
   const keys = new Map<K, K>();
-  // shortcut: landed temps are never pruned, one small record per split; prune once the server's copy has shown them if pages stay open for days.
   let temps: readonly Temp<K>[] = [];
+  // Split blocks the server's copy has shown. From then on the server alone
+  // decides whether they exist, so a merge that removes one removes it here.
+  const shownByServer = new Set<K>();
   const listeners = new Set<() => void>();
   let queue: Promise<unknown> = Promise.resolve();
 
@@ -203,6 +205,10 @@ export const createSession = <K extends string>(
       const all = [...server];
       for (const temp of temps) {
         if (temp.id !== undefined && shown.has(temp.id)) {
+          shownByServer.add(temp.key);
+          continue;
+        }
+        if (shownByServer.has(temp.key)) {
           continue;
         }
         const at = all.findIndex(

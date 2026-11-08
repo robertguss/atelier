@@ -295,6 +295,20 @@ describe("the editing session", () => {
       expect(session.blocks(landed, tailRow)).toStrictEqual(landed);
     });
 
+    it("stops showing the new block once the server has shown it and later removed it, as a merge does", async () => {
+      api.split.mockResolvedValue({ rev: 6, tailId: "b9", tailRev: 6 });
+      const session = open();
+      const rows: Row[] = [{ _id: B1, text: "Charge per seat." }];
+      session.split(B1, 5, {
+        headText: "Charge",
+        tailKind: "paragraph",
+        tailText: " per seat.",
+      });
+      await settle();
+      session.blocks([...rows, { _id: "b9", text: " per seat." }], tailRow);
+      expect(session.blocks(rows, tailRow)).toStrictEqual(rows);
+    });
+
     it("holds typing in the new block until the split lands, then saves it under the real id on the lease the split gave", async () => {
       const split = deferred<{
         rev: number;
