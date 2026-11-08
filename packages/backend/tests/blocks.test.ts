@@ -2,7 +2,16 @@ import { register as registerWorkflow } from "@convex-dev/workflow/test";
 /// <reference types="vite/client" />
 import { convexTest } from "convex-test";
 import type { TestConvex } from "convex-test";
-import { beforeEach, afterEach, expect, vi, it, describe } from "vitest";
+import { ConvexError } from "convex/values";
+import {
+  beforeEach,
+  afterEach,
+  assert,
+  expect,
+  vi,
+  it,
+  describe,
+} from "vitest";
 
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
@@ -110,6 +119,9 @@ const claudeParagraph = async (
     });
   });
 
+const revOf = async (t: TestConvex<typeof schema>, blockId: Id<"blocks">) =>
+  defined(await t.run(async (ctx) => await ctx.db.get(blockId))).rev;
+
 const texts = async (owner: Caller, roomId: Id<"rooms">) => {
   const doc = defined(await owner.query(api.documents.get, { roomId }));
   return doc.blocks.map((b) => b.text);
@@ -173,6 +185,7 @@ describe("block editing", () => {
     await dana.mutation(api.blocks.startEdit, { blockId });
     const savedAt = Date.now();
     await dana.mutation(api.blocks.save, {
+      baseRev: await revOf(t, blockId),
       blockId,
       text: "The cache is warmed on boot, which is slow.",
     });
@@ -215,16 +228,18 @@ describe("block editing", () => {
   });
 
   it("editing your own block does not mark it human-edited", async () => {
-    const { dana, owner, roomId } = await setup();
-    const blockId = await dana.mutation(api.blocks.add, {
-      endOfSectionId: defined(
-        defined(await owner.query(api.documents.get, { roomId })).blocks[0]
-      )._id,
-      kind: "paragraph",
+    const { dana, owner, roomId, happened } = await setup();
+    const { blocks } = await dana.mutation(api.blockOps.insertMany, {
+      afterBlockId: happened._id,
+      blocks: [{ kind: "paragraph", text: "My note" }],
       roomId,
-      text: "My note",
     });
-    await dana.mutation(api.blocks.save, { blockId, text: "My note, revised" });
+    const { blockId, rev } = defined(blocks[0]);
+    await dana.mutation(api.blocks.save, {
+      baseRev: rev,
+      blockId,
+      text: "My note, revised",
+    });
     const block = defined(
       defined(
         await owner.query(api.documents.get, {
@@ -235,7 +250,7 @@ describe("block editing", () => {
     expect(block.humanEditedAt).toBeUndefined();
   });
 
-  it("while Robert edits a block, the teammate cannot start editing, save, move or remove it, and is told Robert is editing it", async () => {
+  it("while Robert edits a block, the teammate cannot start editing, save or remove it, and is told Robert is editing it", async () => {
     const { owner, dana, roomId, robert, ideas } = await setup();
     const startedAt = Date.now();
     const { expiresAt } = await owner.mutation(api.blocks.startEdit, {
@@ -261,18 +276,17 @@ describe("block editing", () => {
           await dana.mutation(api.blocks.startEdit, { blockId: ideas._id }),
         async () =>
           await dana.mutation(api.blocks.save, {
+            baseRev: ideas.rev,
             blockId: ideas._id,
             text: "Mine now",
           }),
         async () =>
-          await dana.mutation(api.blocks.move, {
+          await dana.mutation(api.blocks.remove, {
+            baseRev: ideas.rev,
             blockId: ideas._id,
-            direction: "up",
           }),
-        async () =>
-          await dana.mutation(api.blocks.remove, { blockId: ideas._id }),
       ])
-    ).resolves.toStrictEqual([editing, editing, editing, editing]);
+    ).resolves.toStrictEqual([editing, editing, editing]);
     await expect(texts(owner, roomId)).resolves.toStrictEqual([
       "What's happened",
       "Ideas & notes",
@@ -280,11 +294,11 @@ describe("block editing", () => {
     ]);
   });
 
-  it("a renewed lease holds past two minutes from its start, and lapses two minutes after the last renewal", async () => {
+  it("starting to edit a block you hold renews the lease past two minutes from its start, and it lapses two minutes after the last renewal", async () => {
     const { t, owner, dana, ideas } = await setup();
     await owner.mutation(api.blocks.startEdit, { blockId: ideas._id });
     vi.advanceTimersByTime(90_000);
-    await owner.mutation(api.blocks.renew, { blockId: ideas._id });
+    await owner.mutation(api.blocks.startEdit, { blockId: ideas._id });
     vi.advanceTimersByTime(90_000);
     // The cleanup scheduled when the lease was taken has run and left the renewed lease alone.
     await t.finishInProgressScheduledFunctions();
@@ -295,25 +309,35 @@ describe("block editing", () => {
     await dana.mutation(api.blocks.startEdit, { blockId: ideas._id });
   });
 
-  it("after two minutes without renewal, Robert's save is refused as lapsed, the teammate can take the block, and Robert's later save names her", async () => {
-    const { t, owner, dana, roomId, danaParticipant, ideas } = await setup();
+  it("after two minutes idle, Robert's save with the block's rev retakes the free lease and writes, but is refused naming the teammate once she has taken the block", async () => {
+    const { t, owner, dana, roomId, robert, ideas } = await setup();
     await owner.mutation(api.blocks.startEdit, { blockId: ideas._id });
     vi.advanceTimersByTime(2 * MINUTE + 1);
-    await expect(
-      owner.mutation(api.blocks.save, { blockId: ideas._id, text: "Late" })
-    ).rejects.toThrow("Your edit lock on this block has lapsed");
-    await expect(
-      owner.mutation(api.blocks.renew, { blockId: ideas._id })
-    ).rejects.toThrow("Your edit lock on this block has lapsed");
+    const savedAt = Date.now();
+    const { rev } = await owner.mutation(api.blocks.save, {
+      baseRev: ideas.rev,
+      blockId: ideas._id,
+      text: "Late",
+    });
+    const retaken = defined(
+      defined(await owner.query(api.documents.get, { roomId })).blocks.find(
+        (b) => b._id === ideas._id
+      )
+    );
+    expect([
+      retaken.text,
+      retaken.rev,
+      retaken.leaseHolderParticipantId,
+      retaken.leaseExpiresAt,
+    ]).toStrictEqual(["Late", rev, robert._id, about(savedAt + 2 * MINUTE)]);
 
+    vi.advanceTimersByTime(2 * MINUTE + 1);
     // The scheduled cleanup clears the lapsed lease.
     await t.finishInProgressScheduledFunctions();
     const cleared = defined(
-      defined(
-        await owner.query(api.documents.get, {
-          roomId,
-        })
-      ).blocks.find((b) => b._id === ideas._id)
+      defined(await owner.query(api.documents.get, { roomId })).blocks.find(
+        (b) => b._id === ideas._id
+      )
     );
     expect([
       cleared.leaseHolderParticipantId,
@@ -322,29 +346,85 @@ describe("block editing", () => {
 
     await dana.mutation(api.blocks.startEdit, { blockId: ideas._id });
     await expect(
-      owner.mutation(api.blocks.save, { blockId: ideas._id, text: "Late" })
+      owner.mutation(api.blocks.save, {
+        baseRev: rev,
+        blockId: ideas._id,
+        text: "Later",
+      })
     ).rejects.toThrow("Dana is editing this block");
-    await dana.mutation(api.blocks.save, { blockId: ideas._id, text: "Ideas" });
-    const block = defined(
-      defined(
-        await owner.query(api.documents.get, {
-          roomId,
-        })
-      ).blocks.find((b) => b._id === ideas._id)
-    );
-    expect([block.text, block.leaseHolderParticipantId]).toStrictEqual([
-      "Ideas",
-      danaParticipant._id,
+    await expect(texts(owner, roomId)).resolves.toStrictEqual([
+      "What's happened",
+      "Late",
+      "Open questions",
     ]);
+  });
+
+  it("a save based on an old rev is refused with the block's current text, checked state and rev, and changes nothing", async () => {
+    const { owner, dana, roomId, ideas } = await setup();
+    await dana.mutation(api.blocks.startEdit, { blockId: ideas._id });
+    const { rev } = await dana.mutation(api.blocks.save, {
+      baseRev: ideas.rev,
+      blockId: ideas._id,
+      text: "Dana's ideas",
+    });
+    await dana.mutation(api.blocks.stopEdit, { blockId: ideas._id });
+
+    // Robert's second browser still has the block as it was before Dana's save.
+    const refusal = await owner
+      .mutation(api.blocks.save, {
+        baseRev: ideas.rev,
+        blockId: ideas._id,
+        text: "Robert's ideas",
+      })
+      .catch((error: unknown) => error);
+    assert(refusal instanceof ConvexError, "the save was refused");
+    // An unticked block carries no checked state.
+    expect(refusal.data).toStrictEqual({
+      message: "This block changed since you last saw it",
+      rev,
+      text: "Dana's ideas",
+    });
+    const block = defined(
+      defined(await owner.query(api.documents.get, { roomId })).blocks.find(
+        (b) => b._id === ideas._id
+      )
+    );
+    expect([
+      block.text,
+      block.rev,
+      block.leaseHolderParticipantId,
+    ]).toStrictEqual(["Dana's ideas", rev, undefined]);
+  });
+
+  it("starting to edit a second block releases the person's lease on the first", async () => {
+    const { owner, dana, roomId, robert, ideas, questions } = await setup();
+    await owner.mutation(api.blocks.startEdit, { blockId: ideas._id });
+    await owner.mutation(api.blocks.startEdit, { blockId: questions._id });
+    const { blocks } = defined(
+      await owner.query(api.documents.get, { roomId })
+    );
+    expect(
+      blocks.map((b) => [b.text, b.leaseHolderParticipantId])
+    ).toStrictEqual([
+      ["What's happened", undefined],
+      ["Ideas & notes", undefined],
+      ["Open questions", robert._id],
+    ]);
+    await dana.mutation(api.blocks.startEdit, { blockId: ideas._id });
   });
 
   it("two saves by the same person within one lease form one change set, and the next lease starts another", async () => {
     const { owner, dana, roomId, ideas } = await setup();
     await dana.mutation(api.blocks.startEdit, { blockId: ideas._id });
-    await dana.mutation(api.blocks.save, { blockId: ideas._id, text: "Ideas" });
+    const first = await dana.mutation(api.blocks.save, {
+      baseRev: ideas.rev,
+      blockId: ideas._id,
+      text: "Ideas",
+    });
     vi.advanceTimersByTime(30_000);
-    await dana.mutation(api.blocks.renew, { blockId: ideas._id });
-    await dana.mutation(api.blocks.save, {
+    await dana.mutation(api.blocks.startEdit, { blockId: ideas._id });
+    const second = await dana.mutation(api.blocks.save, {
+      baseRev: first.rev,
       blockId: ideas._id,
       text: "Ideas and notes",
     });
@@ -354,8 +434,7 @@ describe("block editing", () => {
       paginationOpts: { cursor: null, numItems: 10 },
       roomId,
     });
-    const first = awaited6.page;
-    expect(first.map((c) => [c.kind, c.revisionCount])).toStrictEqual([
+    expect(awaited6.page.map((c) => [c.kind, c.revisionCount])).toStrictEqual([
       ["human_edit", 2],
       ["template_seed", 3],
     ]);
@@ -369,13 +448,16 @@ describe("block editing", () => {
     expect(block.leaseHolderParticipantId).toBeUndefined();
 
     await dana.mutation(api.blocks.startEdit, { blockId: ideas._id });
-    await dana.mutation(api.blocks.save, { blockId: ideas._id, text: "Notes" });
+    await dana.mutation(api.blocks.save, {
+      baseRev: second.rev,
+      blockId: ideas._id,
+      text: "Notes",
+    });
     const awaited5 = await owner.query(api.history.list, {
       paginationOpts: { cursor: null, numItems: 10 },
       roomId,
     });
-    const second = awaited5.page;
-    expect(second.map((c) => [c.kind, c.revisionCount])).toStrictEqual([
+    expect(awaited5.page.map((c) => [c.kind, c.revisionCount])).toStrictEqual([
       ["human_edit", 1],
       ["human_edit", 2],
       ["template_seed", 3],
@@ -403,6 +485,7 @@ describe("block editing", () => {
     ]).toStrictEqual([undefined, undefined]);
     await owner.mutation(api.blocks.startEdit, { blockId: ideas._id });
     await owner.mutation(api.blocks.save, {
+      baseRev: ideas.rev,
       blockId: ideas._id,
       text: "Ideas",
     });
@@ -426,28 +509,30 @@ describe("block editing", () => {
         async () =>
           await owner.mutation(api.blocks.startEdit, { blockId: ideas._id }),
         async () =>
-          await dana.mutation(api.blocks.renew, { blockId: happened._id }),
-        async () =>
           await dana.mutation(api.blocks.save, {
+            baseRev: happened.rev,
             blockId: happened._id,
             text: "Changed",
           }),
         async () =>
-          await owner.mutation(api.blocks.add, {
+          await owner.mutation(api.blockOps.insertMany, {
             afterBlockId: ideas._id,
-            kind: "paragraph",
+            blocks: [{ kind: "paragraph", text: "New" }],
             roomId,
-            text: "New",
           }),
         async () =>
-          await owner.mutation(api.blocks.move, {
+          await owner.mutation(api.blockOps.moveTo, {
+            afterBlockId: null,
+            baseRev: ideas.rev,
             blockId: ideas._id,
-            direction: "down",
           }),
         async () =>
-          await owner.mutation(api.blocks.remove, { blockId: ideas._id }),
+          await owner.mutation(api.blocks.remove, {
+            baseRev: ideas.rev,
+            blockId: ideas._id,
+          }),
       ])
-    ).resolves.toStrictEqual(Array.from({ length: 6 }, () => working));
+    ).resolves.toStrictEqual(Array.from({ length: 5 }, () => working));
     await expect(texts(owner, roomId)).resolves.toStrictEqual([
       "What's happened",
       "Ideas & notes",
@@ -458,181 +543,146 @@ describe("block editing", () => {
     await owner.mutation(api.blocks.startEdit, { blockId: ideas._id });
   });
 
-  it("a person adds a block after a block or at the end of a section, as its author, and the add and later saves form one change set", async () => {
-    const {
-      t,
-      owner,
-      dana,
+  it("a block a person inserts is theirs, and inserting it and typing in it form one change set", async () => {
+    const { owner, dana, roomId, danaParticipant, happened } = await setup();
+    const { blocks } = await dana.mutation(api.blockOps.insertMany, {
+      afterBlockId: happened._id,
+      blocks: [{ kind: "listItem", text: "" }],
       roomId,
-      robert,
-      danaParticipant,
-      claude,
-      documentId,
-      happened,
-      ideas,
-    } = await setup();
-    await claudeParagraph(
-      t,
-      documentId,
-      claude._id,
-      happened,
-      "Claude finding"
-    );
-
-    const endOfSection = await dana.mutation(api.blocks.add, {
-      endOfSectionId: happened._id,
-      kind: "listItem",
-      roomId,
-      text: "",
     });
+    const { blockId, rev } = defined(blocks[0]);
     await dana.mutation(api.blocks.save, {
-      blockId: endOfSection,
+      baseRev: rev,
+      blockId,
       text: "Dana item",
     });
-    const afterHeading = await owner.mutation(api.blocks.add, {
-      afterBlockId: ideas._id,
-      kind: "paragraph",
-      roomId,
-      text: "Robert idea",
-    });
-    const lastSection = await owner.mutation(api.blocks.add, {
-      endOfSectionId: defined(
-        defined(
-          await owner.query(api.documents.get, {
-            roomId,
-          })
-        ).blocks.at(-1)
-      )._id,
-      kind: "heading",
-      roomId,
-      text: "Decisions",
-    });
 
-    const { blocks } = defined(
-      await owner.query(api.documents.get, { roomId })
-    );
-    expect(blocks.map((b) => [b.kind, b.text])).toStrictEqual([
-      ["heading", "What's happened"],
-      ["paragraph", "Claude finding"],
-      ["listItem", "Dana item"],
-      ["heading", "Ideas & notes"],
-      ["paragraph", "Robert idea"],
-      ["heading", "Open questions"],
-      ["heading", "Decisions"],
+    const doc = defined(await owner.query(api.documents.get, { roomId }));
+    const inserted = defined(doc.blocks.find((b) => b._id === blockId));
+    expect([inserted.kind, inserted.text, inserted.author]).toStrictEqual([
+      "listItem",
+      "Dana item",
+      { kind: "participant", participantId: danaParticipant._id },
     ]);
-    const byId = new Map(blocks.map((b) => [b._id, b]));
-    expect(defined(byId.get(endOfSection)).author).toStrictEqual({
-      kind: "participant",
-      participantId: danaParticipant._id,
-    });
-    expect(defined(byId.get(afterHeading)).author).toStrictEqual({
-      kind: "participant",
-      participantId: robert._id,
-    });
-    // Adding a block starts editing it.
-    expect(defined(byId.get(lastSection)).leaseHolderParticipantId).toBe(
-      robert._id
-    );
-
-    const awaited4 = await owner.query(api.history.list, {
-      paginationOpts: { cursor: null, numItems: 3 },
+    const { page } = await owner.query(api.history.list, {
+      paginationOpts: { cursor: null, numItems: 1 },
       roomId,
     });
-    const history = awaited4.page;
     expect(
-      history.map((c) => [c.kind, c.actorParticipantId, c.revisionCount])
-    ).toStrictEqual([
-      ["human_edit", robert._id, 1],
-      ["human_edit", robert._id, 1],
-      ["human_edit", danaParticipant._id, 2],
-    ]);
+      page.map((c) => [c.kind, c.actorParticipantId, c.revisionCount])
+    ).toStrictEqual([["human_edit", danaParticipant._id, 2]]);
   });
 
-  it("a person moves a block up and down past its neighbours and removes it", async () => {
-    const { owner, dana, roomId, happened, questions } = await setup();
-    const seen: string[][] = [];
-    const move = async (blockId: Id<"blocks">, direction: "down" | "up") => {
-      await dana.mutation(api.blocks.move, { blockId, direction });
-      seen.push(await texts(owner, roomId));
-    };
-    await move(questions._id, "up");
-    await move(questions._id, "up");
-    // The first block cannot move further up.
-    await move(questions._id, "up");
-    await move(happened._id, "down");
-    await owner.mutation(api.blocks.remove, { blockId: happened._id });
-    seen.push(await texts(owner, roomId));
+  it("a removed block is recorded as a delete and can no longer be edited", async () => {
+    const { owner, roomId, happened } = await setup();
+    await owner.mutation(api.blocks.remove, {
+      baseRev: happened.rev,
+      blockId: happened._id,
+    });
+    await expect(texts(owner, roomId)).resolves.toStrictEqual([
+      "Ideas & notes",
+      "Open questions",
+    ]);
     await expect(
       owner.mutation(api.blocks.startEdit, { blockId: happened._id })
     ).rejects.toThrow("This block has been removed");
-
-    const awaited3 = await owner.query(api.history.list, {
-      paginationOpts: { cursor: null, numItems: 4 },
+    const { page } = await owner.query(api.history.list, {
+      paginationOpts: { cursor: null, numItems: 1 },
       roomId,
     });
-    const history = awaited3.page;
-    const ops = [];
-    for (const changeSet of history) {
-      // oxlint-disable-next-line eslint/no-await-in-loop -- each step depends on the one before it
-      const awaited2 = await owner.query(api.history.diff, {
-        changeSetId: changeSet._id,
-      });
-      ops.push(awaited2.map((r) => r.op));
-    }
-    expect({ ops, seen }).toStrictEqual({
-      ops: [["delete"], ["move"], ["move"], ["move"]],
-      seen: [
-        ["What's happened", "Open questions", "Ideas & notes"],
-        ["Open questions", "What's happened", "Ideas & notes"],
-        ["Open questions", "What's happened", "Ideas & notes"],
-        ["Open questions", "Ideas & notes", "What's happened"],
-        ["Open questions", "Ideas & notes"],
-      ],
+    const diff = await owner.query(api.history.diff, {
+      changeSetId: defined(page[0])._id,
     });
+    expect(diff.map((r) => r.op)).toStrictEqual(["delete"]);
   });
 
-  it("a person cannot save or add a block longer than a model may write, or add past the document's block limit", async () => {
+  it("a removal based on an old rev is refused with the block's current text and rev, and removes nothing", async () => {
+    const { owner, dana, roomId, ideas } = await setup();
+    const { rev } = await dana.mutation(api.blocks.save, {
+      baseRev: ideas.rev,
+      blockId: ideas._id,
+      text: "Dana's ideas",
+    });
+    await dana.mutation(api.blocks.stopEdit, { blockId: ideas._id });
+
+    // Robert still sees the block as it was before Dana's save.
+    const refusal = await owner
+      .mutation(api.blocks.remove, { baseRev: ideas.rev, blockId: ideas._id })
+      .catch((error: unknown) => error);
+    assert(refusal instanceof ConvexError, "the removal was refused");
+    expect(refusal.data).toStrictEqual({
+      message: "This block changed since you last saw it",
+      rev,
+      text: "Dana's ideas",
+    });
+    await expect(texts(owner, roomId)).resolves.toStrictEqual([
+      "What's happened",
+      "Dana's ideas",
+      "Open questions",
+    ]);
+  });
+
+  it("removing the last block leaves one empty paragraph of the person's, in the same change set", async () => {
+    const { owner, roomId, happened, ideas, questions, robert } = await setup();
+    await owner.mutation(api.blocks.remove, {
+      baseRev: happened.rev,
+      blockId: happened._id,
+    });
+    await owner.mutation(api.blocks.remove, {
+      baseRev: ideas.rev,
+      blockId: ideas._id,
+    });
+    await owner.mutation(api.blocks.remove, {
+      baseRev: questions.rev,
+      blockId: questions._id,
+    });
+
+    const doc = defined(await owner.query(api.documents.get, { roomId }));
+    expect(
+      doc.blocks.map(({ kind, text, author }) => ({ author, kind, text }))
+    ).toStrictEqual([
+      {
+        author: { kind: "participant", participantId: robert._id },
+        kind: "paragraph",
+        text: "",
+      },
+    ]);
+    const { page } = await owner.query(api.history.list, {
+      paginationOpts: { cursor: null, numItems: 1 },
+      roomId,
+    });
+    const last = await owner.query(api.history.diff, {
+      changeSetId: defined(page[0])._id,
+    });
+    expect(last.map((r) => r.op).toSorted()).toStrictEqual([
+      "delete",
+      "insert",
+    ]);
+  });
+
+  it("a person cannot save or insert a block longer than a model may write", async () => {
     const s = await setup();
     const long = "x".repeat(4001);
     await s.owner.mutation(api.blocks.startEdit, { blockId: s.ideas._id });
     await expect(
-      s.owner.mutation(api.blocks.save, { blockId: s.ideas._id, text: long })
+      s.owner.mutation(api.blocks.save, {
+        baseRev: s.ideas.rev,
+        blockId: s.ideas._id,
+        text: long,
+      })
     ).rejects.toThrow("at most 4000 characters");
     await s.owner.mutation(api.blocks.save, {
+      baseRev: s.ideas.rev,
       blockId: s.ideas._id,
       text: "x".repeat(4000),
     });
     await expect(
-      s.owner.mutation(api.blocks.add, {
-        kind: "paragraph",
+      s.owner.mutation(api.blockOps.insertMany, {
+        afterBlockId: null,
+        blocks: [{ kind: "paragraph", text: long }],
         roomId: s.roomId,
-        text: long,
       })
     ).rejects.toThrow("at most 4000 characters");
-
-    await s.t.run(async (ctx) => {
-      const awaited = await ctx.db.query("blocks").collect();
-      const live = awaited.length;
-      for (let i = live; i < 600; i += 1) {
-        // oxlint-disable-next-line eslint/no-await-in-loop -- rows are written one at a time, in order
-        await ctx.db.insert("blocks", {
-          author: { kind: "participant", participantId: s.robert._id },
-          documentId: s.documentId,
-          kind: "paragraph",
-          order: `b${String(i).padStart(4, "0")}`,
-          rev: 0,
-          roomId: s.roomId,
-          text: "filler",
-        });
-      }
-    });
-    await expect(
-      s.owner.mutation(api.blocks.add, {
-        kind: "paragraph",
-        roomId: s.roomId,
-        text: "one too many",
-      })
-    ).rejects.toThrow("at most 600 blocks");
   });
 
   it("someone outside the room cannot edit its blocks", async () => {

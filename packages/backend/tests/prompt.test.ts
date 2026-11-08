@@ -585,7 +585,11 @@ describe("room document in the prompt", () => {
     expect(digestOf(first.job.turn.prompt)).toContain('view="full"');
     await first.finish("session-1");
     await dana.mutation(api.blocks.startEdit, { blockId: defined(changed) });
+    const { rev } = defined(
+      await t.run(async (ctx) => await ctx.db.get(defined(changed)))
+    );
     await dana.mutation(api.blocks.save, {
+      baseRev: rev,
       blockId: defined(changed),
       text: "CHANGED-BY-DANA",
     });

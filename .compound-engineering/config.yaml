@@ -1,0 +1,4 @@
+plan_model: fable
+brainstorm_model: fable
+plan_skip_scoping_confirm: true
+auto_babysit: false

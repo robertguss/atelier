@@ -42,6 +42,18 @@ const isHandler = (
 const text = (result: { content: { text: string }[] }) =>
   result.content.map((c) => c.text).join("\n");
 
+// A block as read_document returns it, by Robert unless `extra` says otherwise.
+const block = (id: string, kind: string, body: string, extra = {}) => ({
+  author: "Robert",
+  humanEdited: false,
+  id,
+  kind,
+  rev: 1,
+  text: body,
+  yours: false,
+  ...extra,
+});
+
 describe(callRoomTool, () => {
   it("read_document lists blocks with their ids, authors and revs, and the threads on them", async () => {
     const convex = fakeConvex({
@@ -111,6 +123,91 @@ describe(callRoomTool, () => {
         '  "Postgres"',
       ].join("\n")
     );
+  });
+
+  it("read_document shows a to-do's tick, a numbered item's number, who is editing a block, and a divider without text", async () => {
+    const convex = fakeConvex({
+      "documentTools:readDocumentForTurn": () => ({
+        blocks: [
+          block("b-todo", "todo", "Book the venue", {
+            checked: true,
+            editingBy: "Ana",
+          }),
+          block("b-one", "numberedItem", "Draft", { number: 1 }),
+          block("b-two", "numberedItem", "Review", { number: 2 }),
+          block("b-rule", "divider", ""),
+        ],
+        ok: true,
+        rev: 4,
+        threads: [],
+        writable: true,
+      }),
+    });
+    const result = await callRoomTool(
+      convex.client,
+      "s3cret",
+      "t1",
+      "read_document",
+      {}
+    );
+    expect(text(result)).toContain(
+      [
+        "- block b-todo | todo (checked) | by Robert | rev 1 | being edited by Ana",
+        "  Book the venue",
+        "- block b-one | numberedItem #1 | by Robert | rev 1",
+        "  Draft",
+        "- block b-two | numberedItem #2 | by Robert | rev 1",
+        "  Review",
+        "- block b-rule | divider | by Robert | rev 1",
+        "",
+        "Comment threads:",
+      ].join("\n")
+    );
+  });
+
+  it("add_block takes a to-do with its tick, and update_block a tick without text; an unknown kind never reaches Convex", async () => {
+    const convex = fakeConvex({
+      "documentTools:addBlockForTurn": () => ({
+        blockId: "b-new",
+        ok: true,
+        rev: 7,
+      }),
+      "documentTools:updateBlockForTurn": () => ({ ok: true, rev: 8 }),
+    });
+    await callRoomTool(convex.client, "s3cret", "t1", "add_block", {
+      checked: true,
+      kind: "todo",
+      text: "Book the venue",
+    });
+    await callRoomTool(convex.client, "s3cret", "t1", "update_block", {
+      baseRev: 7,
+      blockId: "b-new",
+      checked: false,
+    });
+    const unknown = await callRoomTool(
+      convex.client,
+      "s3cret",
+      "t1",
+      "add_block",
+      { kind: "callout", text: "Note" }
+    );
+    expect(unknown.isError).toBeTruthy();
+    expect(convex.calls.map((c) => c.args)).toStrictEqual([
+      {
+        checked: true,
+        kind: "todo",
+        secret: "s3cret",
+        text: "Book the venue",
+        turnId: "t1",
+      },
+      {
+        baseRev: 7,
+        blockId: "b-new",
+        checked: false,
+        secret: "s3cret",
+        turnId: "t1",
+      },
+    ]);
   });
 
   it("read_thread shows the passage and every comment with its author", async () => {
@@ -230,7 +327,12 @@ describe(callRoomTool, () => {
   it("a refusal from Convex comes back as tool text with the current block, not as a throw", async () => {
     const convex = fakeConvex({
       "documentTools:updateBlockForTurn": () => ({
-        current: { changedBy: "Robert", rev: 5, text: "Ship Monday, after QA" },
+        current: {
+          changedBy: "Robert",
+          checked: true,
+          rev: 5,
+          text: "Ship Monday, after QA",
+        },
         message:
           "Robert changed this block after the version you sent (it is now rev 5).",
         ok: false,
@@ -251,6 +353,7 @@ describe(callRoomTool, () => {
         "",
         "Current text, rev 5, last changed by Robert:",
         "Ship Monday, after QA",
+        "The to-do is checked.",
       ].join("\n")
     );
   });
@@ -352,8 +455,17 @@ describe(callRoomTool, () => {
       schemaKey: update !== undefined && "$schema" in update.inputSchema,
       type: update?.inputSchema.type,
     }).toStrictEqual({
-      kind: ["heading", "paragraph", "listItem"],
-      required: ["baseRev", "blockId", "text"],
+      kind: [
+        "heading",
+        "paragraph",
+        "listItem",
+        "todo",
+        "numberedItem",
+        "quote",
+        "code",
+        "divider",
+      ],
+      required: ["baseRev", "blockId"],
       schemaKey: false,
       type: "object",
     });

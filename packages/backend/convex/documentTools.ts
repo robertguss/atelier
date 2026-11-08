@@ -1,3 +1,9 @@
+import {
+  BLOCK_CHARS,
+  DOCUMENT_BLOCKS,
+  numberedPositions,
+} from "@atelier/shared";
+import type { BlockKind } from "@atelier/shared";
 import { v } from "convex/values";
 import type { Infer } from "convex/values";
 
@@ -6,8 +12,6 @@ import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireRunnerSecret } from "./lib/auth";
 import {
-  BLOCK_CHARS,
-  DOCUMENT_BLOCKS,
   SCRIBE_WORKING,
   blockTextProblem,
   deleteBlock,
@@ -85,7 +89,7 @@ export interface Refusal {
   ok: false;
   reason: Reason;
   message: string;
-  current?: { text: string; rev: number; changedBy: string };
+  current?: { text: string; rev: number; changedBy: string; checked?: boolean };
 }
 
 const refuse = (
@@ -180,7 +184,15 @@ const loadForWrite = async (
   return loaded;
 };
 
-const checkText = (text: string) => {
+const ONLY_TODO = "Only a to-do can be checked.";
+
+// A divider has no text; every other block needs some.
+const checkText = (kind: BlockKind, text: string) => {
+  if (kind === "divider") {
+    return text === ""
+      ? null
+      : refuse("bad_request", "A divider has no text: send an empty string.");
+  }
   if (!text.trim()) {
     return refuse(
       "empty",
@@ -230,8 +242,8 @@ const ownBlock = async (
   return { block, ok: true };
 };
 
-// The block changed since the model read it: its current text, and who made
-// the latest change.
+// The block changed since the model read it: its current text and tick, and
+// who made the latest change.
 const stale = async (ctx: QueryCtx, block: Doc<"blocks">) => {
   const latest = await ctx.db
     .query("blockRevisions")
@@ -248,7 +260,12 @@ const stale = async (ctx: QueryCtx, block: Doc<"blocks">) => {
   return refuse(
     "stale",
     `${changedBy} changed this block after the version you sent (it is now rev ${block.rev}). Here is its current text: build on it rather than undo their change.`,
-    { changedBy, rev: block.rev, text: block.text }
+    {
+      changedBy,
+      rev: block.rev,
+      text: block.text,
+      ...(block.kind === "todo" ? { checked: block.checked === true } : {}),
+    }
   );
 };
 
@@ -296,16 +313,24 @@ export const readDocumentForTurn = query({
       })
     );
     const threads = byState.flat();
+    const numbers = numberedPositions(blocks.map((b) => b.kind));
+    const now = Date.now();
     return {
-      blocks: blocks.map((b) => ({
-        author: authorLabel(b.author, names),
-        humanEdited: b.humanEditedAt !== undefined,
-        id: b._id,
-        kind: b.kind,
-        rev: b.rev,
-        text: b.text,
-        yours: isOwnBlock(b, turn.participantId),
-      })),
+      blocks: blocks.map((b, i) => {
+        const holder = leaseHolder(b, now);
+        return {
+          author: authorLabel(b.author, names),
+          checked: b.checked,
+          editingBy: holder ? (names.get(holder) ?? "Someone") : undefined,
+          humanEdited: b.humanEditedAt !== undefined,
+          id: b._id,
+          kind: b.kind,
+          number: numbers[i],
+          rev: b.rev,
+          text: b.text,
+          yours: isOwnBlock(b, turn.participantId),
+        };
+      }),
       ok: true as const,
       rev: document.rev,
       scribe: documentMode(turn) === "scribe",
@@ -395,6 +420,7 @@ export const recentDecisionsForTurn = query({
 export const addBlockForTurn = mutation({
   args: {
     afterBlockId: v.optional(v.string()),
+    checked: v.optional(v.boolean()),
     endOfSectionId: v.optional(v.string()),
     kind: blockKind,
     secret: v.string(),
@@ -403,7 +429,7 @@ export const addBlockForTurn = mutation({
   },
   handler: async (
     ctx,
-    { secret, turnId, afterBlockId, endOfSectionId, kind, text }
+    { secret, turnId, afterBlockId, endOfSectionId, kind, text, checked }
   ) => {
     const loaded = await loadForWrite(ctx, secret, turnId);
     if (!loaded.ok) {
@@ -415,7 +441,10 @@ export const addBlockForTurn = mutation({
         "Give either afterBlockId or endOfSectionId, not both."
       );
     }
-    const badText = checkText(text);
+    if (checked !== undefined && kind !== "todo") {
+      return refuse("bad_request", ONLY_TODO);
+    }
+    const badText = checkText(kind, text);
     if (badText) {
       return badText;
     }
@@ -445,6 +474,7 @@ export const addBlockForTurn = mutation({
     const changeSetId = await turnChangeSet(ctx, loaded);
     const blockId = await insertBlock(ctx, changeSetId, {
       author: { kind: "participant", participantId: loaded.turn.participantId },
+      checked,
       kind,
       order,
       text,
@@ -457,37 +487,52 @@ export const addBlockForTurn = mutation({
   },
 });
 
-// Replaces the text of a block the model wrote, if it is still at `baseRev`.
+// Replaces the text of a block the model wrote, ticks or unticks its to-do,
+// or both, if it is still at `baseRev`.
 export const updateBlockForTurn = mutation({
   args: {
     baseRev: v.number(),
     blockId: v.string(),
+    checked: v.optional(v.boolean()),
     secret: v.string(),
-    text: v.string(),
+    text: v.optional(v.string()),
     turnId: v.id("turns"),
   },
-  handler: async (ctx, { secret, turnId, blockId, baseRev, text }) => {
+  handler: async (ctx, { secret, turnId, blockId, baseRev, text, checked }) => {
     const loaded = await loadForWrite(ctx, secret, turnId);
     if (!loaded.ok) {
       return loaded;
     }
-    const badText = checkText(text);
-    if (badText) {
-      return badText;
+    if (text === undefined && checked === undefined) {
+      return refuse(
+        "bad_request",
+        "Send the block's new text, checked, or both."
+      );
     }
     const own = await ownBlock(ctx, loaded.turn, blockId);
     if (!own.ok) {
       return own;
     }
     const { block } = own;
+    if (checked !== undefined && block.kind !== "todo") {
+      return refuse("bad_request", ONLY_TODO);
+    }
+    const badText = text === undefined ? null : checkText(block.kind, text);
+    if (badText) {
+      return badText;
+    }
     if (block.rev !== baseRev) {
       return await stale(ctx, block);
     }
-    if (text === block.text) {
+    if (
+      (text === undefined || text === block.text) &&
+      (checked === undefined || checked === (block.checked === true))
+    ) {
       return { ok: true as const, rev: block.rev };
     }
     await patchBlock(ctx, await turnChangeSet(ctx, loaded), block._id, {
-      text,
+      ...(text === undefined ? {} : { text }),
+      ...(checked === undefined ? {} : { checked }),
     });
     return {
       ok: true as const,
@@ -596,6 +641,7 @@ const draftOp = v.union(
   v.object({ blockId: v.string(), op: v.literal("keep") }),
   v.object({
     blockId: v.string(),
+    checked: v.optional(v.boolean()),
     kind: v.optional(blockKind),
     op: v.literal("replace"),
     sourceBlockIds: v.optional(v.array(v.string())),
@@ -603,6 +649,7 @@ const draftOp = v.union(
   }),
   v.object({
     afterBlockId: v.optional(v.string()),
+    checked: v.optional(v.boolean()),
     kind: blockKind,
     op: v.literal("add"),
     sourceBlockIds: v.array(v.string()),
@@ -664,7 +711,7 @@ type DraftInput = Infer<typeof draftOp>;
 // checked against the document and the draft so far.
 const draftRow = (lookup: DraftLookup, op: DraftInput, seq: number) => {
   if (op.op === "add") {
-    const badText = checkText(op.text);
+    const badText = checkText(op.kind, op.text);
     if (badText) {
       return badText;
     }
@@ -683,6 +730,7 @@ const draftRow = (lookup: DraftLookup, op: DraftInput, seq: number) => {
       sourceBlockIds: drawn,
       text: op.text,
       ...place,
+      checked: op.checked,
     };
     return row;
   }
@@ -701,7 +749,13 @@ const draftRow = (lookup: DraftLookup, op: DraftInput, seq: number) => {
     return row;
   }
   if (op.op === "replace") {
-    const badText = checkText(op.text);
+    const item = required(
+      lookup.plan.items.get(
+        named.blockId ?? draftId(required(named.targetSeq, "draft id"))
+      ),
+      "draft item"
+    );
+    const badText = checkText(op.kind ?? item.kind, op.text);
     if (badText) {
       return badText;
     }
@@ -718,6 +772,7 @@ const draftRow = (lookup: DraftLookup, op: DraftInput, seq: number) => {
       ...named,
       text: op.text,
       ...(op.kind ? { kind: op.kind } : {}),
+      checked: op.checked,
       ...(drawn ? { sourceBlockIds: drawn } : {}),
     };
     return row;

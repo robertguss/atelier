@@ -1245,6 +1245,7 @@ describe("review isolation in shared rooms", () => {
         blockId: defined(blocks[index])._id,
       });
       await dana.mutation(api.blocks.save, {
+        baseRev: defined(blocks[index]).rev,
         blockId: defined(blocks[index])._id,
         text,
       });

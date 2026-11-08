@@ -9,6 +9,7 @@
  */
 
 import type * as agent from "../agent.js";
+import type * as blockOps from "../blockOps.js";
 import type * as blocks from "../blocks.js";
 import type * as crons from "../crons.js";
 import type * as documentTools from "../documentTools.js";
@@ -22,6 +23,7 @@ import type * as lib_cards from "../lib/cards.js";
 import type * as lib_dispatch from "../lib/dispatch.js";
 import type * as lib_document from "../lib/document.js";
 import type * as lib_documentDigest from "../lib/documentDigest.js";
+import type * as lib_leases from "../lib/leases.js";
 import type * as lib_ledger from "../lib/ledger.js";
 import type * as lib_prompt from "../lib/prompt.js";
 import type * as lib_required from "../lib/required.js";
@@ -53,6 +55,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   agent: typeof agent;
+  blockOps: typeof blockOps;
   blocks: typeof blocks;
   crons: typeof crons;
   documentTools: typeof documentTools;
@@ -66,6 +69,7 @@ declare const fullApi: ApiFromModules<{
   "lib/dispatch": typeof lib_dispatch;
   "lib/document": typeof lib_document;
   "lib/documentDigest": typeof lib_documentDigest;
+  "lib/leases": typeof lib_leases;
   "lib/ledger": typeof lib_ledger;
   "lib/prompt": typeof lib_prompt;
   "lib/required": typeof lib_required;

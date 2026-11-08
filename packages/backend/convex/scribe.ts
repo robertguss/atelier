@@ -12,7 +12,7 @@ import {
 } from "./lib/dispatch";
 import {
   SCRIBE_WORKING,
-  anyLeaseHolder,
+  clearLease,
   ensureDocument,
   getDocument,
   liveBlocks,
@@ -20,6 +20,7 @@ import {
   scribeWorking,
   takeCheckpoint,
 } from "./lib/document";
+import { writingLeaseHolder } from "./lib/leases";
 import { record } from "./lib/ledger";
 import {
   agentName,
@@ -52,6 +53,9 @@ const scribeInstructions = (startedBy: string) =>
     "- Where people or models disagree, keep each view and say whose it is. Do not settle the disagreement yourself.",
     "- Do not drop open questions. Merge duplicates of a question into one, and keep it open.",
     "- Comment threads follow the passage they are on. Each draft tool reply says which threads will move and which will lose their passage; keep commented wording where you can.",
+    "- A block's kind carries its marker, so its text never starts with `- `, `1. `, `> ` or `[ ]` and is never wrapped in code fences. A divider's text is empty, and code text is kept exactly as written.",
+    "- A to-do keeps its tick when you rewrite it without checked. Never untick a to-do someone ticked.",
+    "- Numbered items are numbered by their place in a run of numbered items, so keep a list's items together and in order.",
     "When the draft is complete, end your turn with a short summary of what you changed.",
   ].join("\n");
 
@@ -75,8 +79,8 @@ const expireRun = async (ctx: MutationCtx, run: Doc<"scribeRuns">) => {
   await releaseScribe(ctx, run._id, "released", SCRIBE_OUT_OF_TIME);
 };
 
-// Refused while someone is editing a block, naming them; while the runner is
-// offline; and while a run is already working. Saves the document as it is,
+// Refused while someone has typed under a lease, naming them; while the runner
+// is offline; and while a run is already working. Saves the document as it is,
 // locks it for 35 minutes and queues the scribe's turn.
 export const begin = mutation({
   args: { participantId: v.id("participants"), roomId: v.id("rooms") },
@@ -100,7 +104,8 @@ export const begin = mutation({
         await expireRun(ctx, stale);
       }
     }
-    const holder = anyLeaseHolder(await liveBlocks(ctx, document._id), now);
+    const blocks = await liveBlocks(ctx, document._id);
+    const holder = writingLeaseHolder(blocks, now);
     if (holder !== undefined) {
       throw new Error(
         `${await participantName(ctx, holder)} is editing a block`
@@ -114,6 +119,14 @@ export const begin = mutation({
     }
     const room = await requireRunnerOnline(ctx, await ctx.db.get(roomId));
 
+    // Leases nobody has typed under are only carets; the run clears them.
+    await Promise.all(
+      blocks
+        .filter((block) => block.leaseHolderParticipantId !== undefined)
+        .map(async (block) => {
+          await clearLease(ctx, block._id);
+        })
+    );
     await takeCheckpoint(ctx, document._id, "before_scribe");
     const scribeRunId = await ctx.db.insert("scribeRuns", {
       documentId: document._id,

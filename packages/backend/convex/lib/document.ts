@@ -1,3 +1,4 @@
+import { BLOCK_CHARS } from "@atelier/shared";
 import type { Infer } from "convex/values";
 import { generateKeyBetween, generateNKeysBetween } from "fractional-indexing";
 
@@ -37,16 +38,20 @@ export const getDocument = async (ctx: QueryCtx, roomId: Id<"rooms">) =>
     .withIndex("by_room", (q) => q.eq("roomId", roomId))
     .unique();
 
-// Limits on one block and on the whole document, for people and models alike.
-// Passage matching, the scribe commit and the tools' reads are sized for them.
-export const BLOCK_CHARS = 4000;
-export const DOCUMENT_BLOCKS = 600;
-
 // A reason the text cannot be a block, or null.
 export const blockTextProblem = (text: string): string | null =>
   text.length > BLOCK_CHARS
     ? `A block holds at most ${BLOCK_CHARS} characters; this one has ${text.length}. Split it into several blocks.`
     : null;
+
+export const refuseBadText = (texts: string[]) => {
+  for (const text of texts) {
+    const problem = blockTextProblem(text);
+    if (problem !== null) {
+      throw new Error(problem);
+    }
+  }
+};
 
 // The document's blocks in order, without deleted ones.
 export const liveBlocks = async (ctx: QueryCtx, documentId: Id<"documents">) =>
@@ -110,6 +115,7 @@ export const openChangeSet = async (
 
 const stateOf = (block: Doc<"blocks">): BlockState => ({
   author: block.author,
+  checked: block.checked,
   kind: block.kind,
   order: block.order,
   text: block.text,
@@ -182,6 +188,7 @@ export const insertBlock = async (
   changeSetId: Id<"changeSets">,
   fields: BlockState & {
     fromTemplate?: boolean;
+    humanEditedAt?: number;
     sourceBlockIds?: Id<"blocks">[];
   }
 ) => {
@@ -192,9 +199,9 @@ export const insertBlock = async (
     roomId: document.roomId,
     ...fields,
   });
-  const { order, kind, text, author } = fields;
+  const { order, kind, text, author, checked } = fields;
   await recordRevision(ctx, {
-    after: { author, kind, order, text },
+    after: { author, checked, kind, order, text },
     blockId,
     changeSetId,
     documentId: document._id,
@@ -207,11 +214,18 @@ export const insertBlock = async (
 export type BlockPatch = Partial<
   Pick<
     Doc<"blocks">,
-    "order" | "kind" | "text" | "author" | "humanEditedAt" | "sourceBlockIds"
+    | "order"
+    | "kind"
+    | "text"
+    | "checked"
+    | "author"
+    | "humanEditedAt"
+    | "sourceBlockIds"
   >
 >;
 
-// Changing a block's text also clears its template-guidance mark.
+// Changing a block's text also clears its template-guidance mark. Returns the
+// block's new rev.
 export const patchBlock = async (
   ctx: MutationCtx,
   changeSetId: Id<"changeSets">,
@@ -223,7 +237,10 @@ export const patchBlock = async (
   const after = stateOf({ ...block, ...fields });
   const textChanged = after.text !== before.text;
   const op =
-    after.order !== before.order && !textChanged && after.kind === before.kind
+    after.order !== before.order &&
+    !textChanged &&
+    after.kind === before.kind &&
+    after.checked === before.checked
       ? "move"
       : "update";
   const { rev, document } = await nextRev(ctx, changeSetId);
@@ -244,6 +261,7 @@ export const patchBlock = async (
   if (textChanged) {
     await reanchorThreads(ctx, blockId, after.text, changeSetId);
   }
+  return rev;
 };
 
 export const deleteBlock = async (
@@ -320,8 +338,8 @@ export const versionAt = async (
       .query("checkpointBlocks")
       .withIndex("by_checkpoint", (q) => q.eq("checkpointId", checkpoint._id))
       .collect();
-    for (const { blockId, order, kind, text, author } of rows) {
-      blocks.set(blockId, { author, kind, order, text });
+    for (const { blockId, order, kind, text, author, checked } of rows) {
+      blocks.set(blockId, { author, checked, kind, order, text });
     }
   }
   const revisions = await ctx.db
@@ -370,14 +388,6 @@ export const participantName = async (
   return participant?.displayName ?? "Someone";
 };
 
-// Who holds an unexpired lease on any live block, if anyone.
-export const anyLeaseHolder = (blocks: Doc<"blocks">[], now: number) => {
-  const held = blocks
-    .filter((block) => block.deletedAt === undefined)
-    .map((block) => leaseHolder(block, now));
-  return held.find((holder) => holder !== undefined);
-};
-
 // The index of the last block in the section that holds block `index`: the
 // blocks after a heading, up to the next heading.
 export const sectionEnd = (blocks: Doc<"blocks">[], index: number) => {
@@ -396,11 +406,12 @@ export const clearLease = async (ctx: MutationCtx, blockId: Id<"blocks">) => {
   });
 };
 
-// Releases every lease a person holds in the room's document.
+// Releases every lease a person holds in the room's document, except on `keep`.
 export const releaseLeasesOf = async (
   ctx: MutationCtx,
   roomId: Id<"rooms">,
-  participantId: Id<"participants">
+  participantId: Id<"participants">,
+  keep?: Id<"blocks">
 ) => {
   const document = await getDocument(ctx, roomId);
   if (!document) {
@@ -412,7 +423,10 @@ export const releaseLeasesOf = async (
     .collect();
   await Promise.all(
     blocks
-      .filter((block) => block.leaseHolderParticipantId === participantId)
+      .filter(
+        (block) =>
+          block.leaseHolderParticipantId === participantId && block._id !== keep
+      )
       .map(async (block) => {
         await clearLease(ctx, block._id);
       })

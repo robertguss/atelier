@@ -74,6 +74,22 @@ const current = [
 
 let changeSets: ChangeSet[];
 
+// Pi's turn left one block of each kind that has a marker or a look of its own.
+const piVersion = [
+  { checked: true, kind: "todo", text: "Ship it" },
+  { kind: "todo", text: "Tell Dana" },
+  { kind: "numberedItem", text: "First" },
+  { kind: "numberedItem", text: "Second" },
+  { kind: "code", text: "  # keep **this**" },
+  { kind: "divider", text: "" },
+  { kind: "numberedItem", text: "Again" },
+].map((block, i) => ({
+  author: by(PI),
+  blockId: `k${i}`,
+  order: `a${i}`,
+  ...block,
+}));
+
 // The newest twenty-two versions: a restore, one scribe run of many block
 // changes, a model's turn, two edits, sixteen older edits and, oldest, the
 // template seeding, which is past the first page.
@@ -178,8 +194,11 @@ const openRoom = () => {
   backend.queries["history:list"] = paginate(() => changeSets);
   // Dana's edit: she rewrote one paragraph, added a list item and removed
   // another paragraph; the heading was untouched.
-  backend.queries["history:version"] = ({ changeSetId }) =>
-    changeSetId === "cs-dana"
+  backend.queries["history:version"] = ({ changeSetId }) => {
+    if (changeSetId === "cs-pi") {
+      return { blocks: piVersion, changeSetId, rev: 20 };
+    }
+    return changeSetId === "cs-dana"
       ? {
           blocks: [
             {
@@ -218,6 +237,7 @@ const openRoom = () => {
           changeSetId,
           rev: 30,
         };
+  };
   backend.queries["history:diff"] = ({ changeSetId }) =>
     changeSetId === "cs-dana"
       ? [
@@ -379,7 +399,7 @@ describe("a selected version", () => {
 
   it("shows that version read-only, and goes back to the list", async () => {
     const { panel, version } = await openDanaEdit();
-    expect(within(version).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(within(version).queryByRole("textbox")).toBeNull();
     expect(
       within(version).queryByRole("button", { name: /^Edit/u })
     ).not.toBeInTheDocument();
@@ -401,6 +421,27 @@ describe("a selected version", () => {
     expect(
       within(panel).queryByRole("button", { name: "Restore this version" })
     ).not.toBeInTheDocument();
+  });
+
+  it("shows every kind: a ticked to-do, a numbered run counted from 1, code as written and a divider", async () => {
+    const panel = await openHistory();
+    fireEvent.click(within(panel).getByRole("button", { name: /^Pi's turn/u }));
+    const version = await within(panel).findByRole("region", {
+      name: "Version: Pi's turn",
+    });
+    expect(
+      within(version).getByRole("checkbox", { name: "Ship it" })
+    ).toBeChecked();
+    expect(
+      within(version).getByRole("checkbox", { name: "Tell Dana" })
+    ).not.toBeChecked();
+    expect(
+      within(version)
+        .getAllByText(/^\d+\.$/u)
+        .map((n) => n.textContent)
+    ).toStrictEqual(["1.", "2.", "1."]);
+    expect(version.querySelector("pre")?.textContent).toBe("  # keep **this**");
+    expect(within(version).getByRole("separator")).toBeInTheDocument();
   });
 });
 

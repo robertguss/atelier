@@ -2,7 +2,6 @@ import { generateNKeysBetween } from "fractional-indexing";
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { matchQuote, selectorAt } from "./anchor";
 import type { Selector } from "./anchor";
 import {
   deleteBlock,
@@ -14,6 +13,7 @@ import {
   takeCheckpoint,
 } from "./document";
 import { required } from "./required";
+import { bestHome, rehomeThreads } from "./threads";
 
 // A scribe run rewrites the document as one draft. The scribe's turn records
 // small operations, one row each; nothing touches the document until the
@@ -49,6 +49,7 @@ export interface DraftItem {
   original?: Doc<"blocks">;
   kind: Doc<"blocks">["kind"];
   text: string;
+  checked?: boolean;
   // Set once the scribe writes the block: the blocks it draws from.
   sources?: Id<"blocks">[];
   removed: boolean;
@@ -79,6 +80,7 @@ export const buildDraft = (
   const order: string[] = [];
   for (const b of blocks) {
     items.set(b._id, {
+      checked: b.checked,
       key: b._id,
       kind: b.kind,
       mentioned: false,
@@ -100,9 +102,11 @@ export const buildDraft = (
   for (const op of ops) {
     if (op.op === "add") {
       const key = draftId(op.seq);
+      const kind = required(op.kind, "kind");
       items.set(key, {
+        checked: kind === "todo" ? (op.checked ?? false) : undefined,
         key,
-        kind: required(op.kind, "kind"),
+        kind,
         mentioned: true,
         removed: false,
         sources: op.sourceBlockIds ?? [],
@@ -120,6 +124,7 @@ export const buildDraft = (
     if (op.op === "keep") {
       const original = required(item.original, "block");
       Object.assign(item, {
+        checked: original.checked,
         kind: original.kind,
         removed: false,
         sources: undefined,
@@ -129,8 +134,11 @@ export const buildDraft = (
       const own = item.original ? [item.original._id] : [];
       const sources =
         op.sourceBlockIds ?? (item.original ? [] : (item.sources ?? []));
+      const kind = op.kind ?? item.kind;
+      // A rewrite keeps a to-do's tick unless it says otherwise.
       Object.assign(item, {
-        kind: op.kind ?? item.kind,
+        checked: kind === "todo" ? (op.checked ?? item.checked) : undefined,
+        kind,
         removed: false,
         sources: [...new Set([...own, ...sources])],
         text: required(op.text, "text"),
@@ -215,14 +223,10 @@ export type ThreadOutcome =
   | { key: string; selector: Selector }
   | null;
 
-// Where an attached thread ends up. A thread whose block the draft leaves
-// alone stays put. Otherwise its passage is looked for in the block's new
-// text, then in each block that lists its block as a source, in document
-// order. Null means the passage is gone and the thread detaches.
-export const resolveThread = (
-  thread: Doc<"threads">,
-  plan: DraftPlan
-): ThreadOutcome => {
+// Where an attached thread's passage may now be: the block's new text and
+// each block that lists its block as a source. A thread whose block the
+// draft leaves alone stays put.
+const threadHomes = (thread: Doc<"threads">, plan: DraftPlan) => {
   const item = plan.items.get(thread.blockId);
   if (!item || (!item.removed && item.sources === undefined)) {
     return "unchanged";
@@ -230,16 +234,21 @@ export const resolveThread = (
   const successors = finalItems(plan).filter(
     (i) => i !== item && i.sources?.includes(thread.blockId) === true
   );
-  for (const candidate of item.removed ? successors : [item, ...successors]) {
-    const match = matchQuote(candidate.text, thread);
-    if (match) {
-      return {
-        key: candidate.key,
-        selector: selectorAt(candidate.text, match.start, match.end),
-      };
-    }
+  return item.removed ? successors : [item, ...successors];
+};
+
+// Where an attached thread ends up: the home that holds its passage best.
+// Null means the passage is gone and the thread detaches.
+export const resolveThread = (
+  thread: Doc<"threads">,
+  plan: DraftPlan
+): ThreadOutcome => {
+  const homes = threadHomes(thread, plan);
+  if (homes === "unchanged") {
+    return "unchanged";
   }
-  return null;
+  const found = bestHome(thread, homes);
+  return found && { key: found.home.key, selector: found.selector };
 };
 
 export const draftOps = async (ctx: QueryCtx, scribeRunId: Id<"scribeRuns">) =>
@@ -399,6 +408,7 @@ const applyPlan = async (
       // oxlint-disable-next-line eslint/no-await-in-loop -- revisions are numbered in the order they are written
       const blockId = await insertBlock(ctx, changeSetId, {
         author: author(item.sources ?? []),
+        checked: item.checked,
         kind: item.kind,
         order: required(order, "order"),
         sourceBlockIds: item.sources,
@@ -409,6 +419,7 @@ const applyPlan = async (
       const written = item.sources
         ? {
             author: author(item.sources),
+            checked: item.checked,
             humanEditedAt: undefined,
             kind: item.kind,
             sourceBlockIds: item.sources,
@@ -479,25 +490,20 @@ export const commitScribe = async (ctx: MutationCtx, turn: Doc<"turns">) => {
   });
 
   // Threads open when the turn ended, including any started during the run.
-  const outcomes = threads.map((thread) => ({
-    outcome: resolveThread(thread, plan),
-    thread,
-  }));
   await Promise.all(
-    outcomes.map(async ({ outcome, thread }) => {
-      if (outcome === "unchanged") {
+    threads.map(async (thread) => {
+      const homes = threadHomes(thread, plan);
+      if (homes === "unchanged") {
         return;
       }
-      const blockId = outcome ? ids.get(outcome.key) : undefined;
-      await ctx.db.patch(
-        thread._id,
-        outcome && blockId
-          ? {
-              blockId,
-              ...outcome.selector,
-              detachedBeforeChangeSetId: undefined,
-            }
-          : { detachedBeforeChangeSetId: changeSetId }
+      await rehomeThreads(
+        ctx,
+        [thread],
+        homes.map((home) => ({
+          blockId: required(ids.get(home.key), "block id"),
+          text: home.text,
+        })),
+        changeSetId
       );
     })
   );

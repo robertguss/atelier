@@ -12,17 +12,16 @@ export type DocBlock = DocumentData["blocks"][number];
 
 export type BlockKind = DocBlock["kind"];
 
-export const BLOCK_KINDS: BlockKind[] = ["heading", "paragraph", "listItem"];
-
 export const KIND_LABEL: Record<BlockKind, string> = {
+  code: "Code",
+  divider: "Divider",
   heading: "Heading",
   listItem: "List item",
+  numberedItem: "Numbered item",
   paragraph: "Paragraph",
+  quote: "Quote",
+  todo: "To-do",
 };
-
-// The server lets a lease lapse two minutes after its last renewal; renewing
-// this often while the person types keeps it held with room to spare.
-export const RENEW_EVERY_MS = 30_000;
 
 /** A heading and the blocks under it. Blocks before the first heading form a section with no heading. */
 export interface Section {

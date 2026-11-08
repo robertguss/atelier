@@ -5,6 +5,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { Editor } from "@tiptap/core";
 import {
   afterEach,
   assert,
@@ -93,6 +94,25 @@ const blocks = [
     rev: 1,
     text: "Try a free tier",
   },
+  {
+    _id: "b3",
+    author: { kind: "participant", participantId: DANA },
+    checked: false,
+    kind: "todo",
+    openThreads: 0,
+    order: "a3",
+    rev: 1,
+    text: "Email **Dana**",
+  },
+  {
+    _id: "b4",
+    author: { kind: "participant", participantId: DANA },
+    kind: "numberedItem",
+    openThreads: 0,
+    order: "a4",
+    rev: 1,
+    text: "Ship v1",
+  },
 ];
 
 let threads: TestThread[];
@@ -130,7 +150,7 @@ const thread = (
   ...overrides,
 });
 
-const openRoom = async () => {
+const openRoom = async (doc: Record<string, unknown> = {}) => {
   backend.queries["rooms:access"] = () => "owner";
   backend.queries["members:notice"] = () => ({
     acceptedVersion: 1,
@@ -171,6 +191,7 @@ const openRoom = async () => {
     blocks,
     documentId: "d1",
     rev: 4,
+    ...doc,
   });
   backend.queries["threads:list"] = () => ({
     open: threads.filter((t) => t.state === "open"),
@@ -212,6 +233,24 @@ const selectInBlock = (
   return must(
     document.querySelector<HTMLElement>(`[data-block-id="${blockId}"]`)
   );
+};
+
+// The element comments read a block's text from, static or an editor.
+const blockText = (blockId: string) =>
+  must(document.querySelector<HTMLElement>(`[data-block-text="${blockId}"]`));
+
+// A stand-in for the CSS Custom Highlight API, which jsdom lacks.
+class TestHighlight {
+  ranges: Range[];
+  constructor(...ranges: Range[]) {
+    this.ranges = ranges;
+  }
+}
+const stubHighlights = () => {
+  const registry = new Map<string, TestHighlight>();
+  vi.stubGlobal("CSS", { highlights: registry });
+  vi.stubGlobal("Highlight", TestHighlight);
+  return registry;
 };
 
 const threadCard = (exact: string) =>
@@ -278,7 +317,7 @@ describe("starting a thread", () => {
 
   it("posts a comment without a mention as a plain body", async () => {
     await openRoom();
-    const item = must(document.querySelector('[data-block-text="b2"] li'));
+    const item = must(document.querySelector('[data-block-text="b2"] p'));
     const block = selectInBlock(
       "b2",
       [must(item.firstChild), 4],
@@ -304,6 +343,93 @@ describe("starting a thread", () => {
       screen.queryByRole("button", { name: "Comment" })
     ).not.toBeInTheDocument();
   });
+
+  it.each([
+    [
+      "a block Dana is editing",
+      {
+        blocks: blocks.map((b) =>
+          b._id === "b1"
+            ? {
+                ...b,
+                leaseExpiresAt: Date.now() + 60_000,
+                leaseHolderParticipantId: DANA,
+              }
+            : b
+        ),
+      },
+    ],
+    [
+      "a block during a scribe run",
+      { scribeLockExpiresAt: Date.now() + 60_000, scribeRunId: "run1" },
+    ],
+  ])(
+    "comments on %s at the offsets of the stored text, without taking the block",
+    async (_, doc) => {
+      await openRoom(doc);
+      const strong = must(
+        document.querySelector('[data-block-text="b1"] strong')?.firstChild
+      );
+      const block = selectInBlock("b1", [strong, 0], [strong, 8]);
+      fireEvent.click(within(block).getByRole("button", { name: "Comment" }));
+      const input = within(block).getByRole("textbox", { name: "Comment" });
+      fireEvent.change(input, { target: { value: "Per team?" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => {
+        expect(mutation("threads:create")).toHaveBeenCalledWith({
+          blockId: "b1",
+          body: "Per team?",
+          end: 17,
+          start: 9,
+        });
+      });
+      expect(mutation("blocks:startEdit")).not.toHaveBeenCalled();
+    }
+  );
+
+  it("offers no Comment button for a selection that spans two blocks", async () => {
+    await openRoom();
+    const first = must(
+      document.querySelector('[data-block-text="b1"] p')?.firstChild
+    );
+    const second = must(
+      document.querySelector('[data-block-text="b2"] p')?.firstChild
+    );
+    selectInBlock("b1", [first, 2], [second, 3]);
+    expect(
+      screen.queryByRole("button", { name: "Comment" })
+    ).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["to-do", "b3", 12],
+    ["numbered item", "b4", 7],
+  ])(
+    "anchors a comment on the whole of a %s to its stored text alone, without its box or number",
+    async (_, blockId, end) => {
+      await openRoom();
+      const text = must(
+        document.querySelector(`[data-block-text="${blockId}"]`)
+      );
+      const block = selectInBlock(
+        blockId,
+        [text, 0],
+        [text, text.childNodes.length]
+      );
+      fireEvent.click(within(block).getByRole("button", { name: "Comment" }));
+      const input = within(block).getByRole("textbox", { name: "Comment" });
+      fireEvent.change(input, { target: { value: "Whole item" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => {
+        expect(mutation("threads:create")).toHaveBeenCalledWith({
+          blockId,
+          body: "Whole item",
+          end,
+          start: 0,
+        });
+      });
+    }
+  );
 });
 
 describe("the margin", () => {
@@ -336,17 +462,7 @@ describe("the margin", () => {
   });
 
   it("highlights the passages of open threads where the browser supports it", async () => {
-    const registry = new Map<string, { ranges: Range[] }>();
-    vi.stubGlobal("CSS", { highlights: registry });
-    vi.stubGlobal(
-      "Highlight",
-      class {
-        ranges: Range[];
-        constructor(...ranges: Range[]) {
-          this.ranges = ranges;
-        }
-      }
-    );
+    const registry = stubHighlights();
     threads = [
       thread("t1", "b1", "per seat", 9, [
         comment("c1", ROBERT, "Or per team?"),
@@ -358,6 +474,39 @@ describe("the margin", () => {
         registry.get("atelier-comment")?.ranges.map((r) => r.toString())
       ).toStrictEqual(["per seat"]);
     });
+  });
+
+  it("keeps a highlight on its passage when an editor replaces the block's text and after a neighbouring block changes", async () => {
+    const registry = stubHighlights();
+    threads = [
+      thread("t1", "b1", "per seat", 9, [
+        comment("c1", ROBERT, "Or per team?"),
+      ]),
+    ];
+    await openRoom();
+    // Marked on text the page shows now, not on text an editor replaced.
+    const expectMarkedInB1 = async () => {
+      await waitFor(() => {
+        const ranges = registry.get("atelier-comment")?.ranges ?? [];
+        expect(ranges.map((r) => r.toString())).toStrictEqual(["per seat"]);
+        expect(
+          blockText("b1").contains(must(ranges[0]).startContainer)
+        ).toBeTruthy();
+      });
+    };
+    await expectMarkedInB1();
+
+    fireEvent.pointerEnter(blockText("b1"));
+    await expectMarkedInB1();
+
+    fireEvent.pointerEnter(blockText("b2"));
+    const neighbour: unknown = Reflect.get(blockText("b2"), "editor");
+    assert(neighbour instanceof Editor);
+    act(() => {
+      neighbour.commands.insertContentAt(1, "Then ");
+    });
+    expect(blockText("b2")).toHaveTextContent("Then Try a free tier");
+    await expectMarkedInB1();
   });
 
   it("replies in a thread", async () => {

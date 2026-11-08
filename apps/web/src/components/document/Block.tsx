@@ -1,40 +1,38 @@
-import { api } from "@atelier/backend/api";
 import type { Id } from "@atelier/backend/dataModel";
-import { useMutation } from "convex/react";
+import { BLOCK_CHARS } from "@atelier/shared";
 import {
-  ArrowDownIcon,
-  ArrowUpIcon,
   MessageSquareIcon,
   MessageSquarePlusIcon,
-  PencilIcon,
-  PlusIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 
-import { errorText } from "~/components/room/errors";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
-import {
-  BLOCK_KINDS,
-  KIND_LABEL,
-  authorText,
-  openThreadsText,
-} from "~/lib/document";
+import { KIND_LABEL, authorText, openThreadsText } from "~/lib/document";
 import type { BlockKind, DocBlock, Passage } from "~/lib/document";
+import { intentFor } from "~/lib/editor/keymap";
+import type { KeyContext } from "~/lib/editor/keymap";
+import type { Session } from "~/lib/editor/session";
 import type { Names, Participant } from "~/lib/room";
-import { cn, hasContent, logFailure } from "~/lib/utils";
+import { hasContent, logFailure } from "~/lib/utils";
 
-import { BlockEditor } from "./BlockEditor";
-import { BlockText } from "./BlockText";
+import { BlockEditor, KindMarker } from "./BlockEditor";
+import type { Caret } from "./BlockEditor";
+import { DragHandle } from "./DragHandle";
+import type { HandleFocus } from "./DragHandle";
 import { NewComment } from "./ThreadCard";
+import { useBlockActions } from "./useBlockActions";
 
-/** Where a new block goes: after a block, at the end of a heading's section, or at the end of the document. */
-export type AddPlace =
-  | { afterBlockId: Id<"blocks"> }
-  | { endOfSectionId: Id<"blocks"> }
-  | Record<string, never>;
+/** A request to put the caret in a block; each is a new object. */
+export interface CaretRequest {
+  key: Id<"blocks">;
+  at: Caret;
+  /** When it was made, from `Date.now()`. */
+  madeAt: number;
+}
+
 interface BlockProps {
   roomId: Id<"rooms">;
   block: DocBlock;
@@ -44,11 +42,27 @@ interface BlockProps {
   holderId: string | null;
   /** A scribe run holds the document: the block can be read and commented on, not changed. */
   locked: boolean;
-  isFirst: boolean;
-  isLast: boolean;
-  editing: boolean;
-  onEditing: (blockId: Id<"blocks">) => void;
-  onDoneEditing: (blockId: Id<"blocks">) => void;
+  /** The block's place among `count` blocks as shown, from 0. */
+  position: number;
+  count: number;
+  /** Moves the block so it lands at `to` among the others. */
+  onMove: (to: number) => Promise<void>;
+  /** A request to put focus on this block's handle after a move. */
+  handleFocus: HandleFocus | undefined;
+  /** The document holds as many blocks as it can. */
+  full: boolean;
+  /** The blocks around this one as shown, and whoever else is editing the one above. */
+  previous: DocBlock | null;
+  next: DocBlock | null;
+  previousHeldBy: string | null;
+  /** The block's place in its run of numbered items. */
+  number: number | undefined;
+  /** The person's editing session, and the key it knows this block by. */
+  session: Session<Id<"blocks">>;
+  sessionKey: Id<"blocks">;
+  /** A request to put the caret in this block. */
+  caret: CaretRequest | undefined;
+  onCaret: (key: Id<"blocks">, at: Caret) => void;
   /** The room's model participants, offered as mentions. */
   models: readonly Participant[];
   /** Whether the reader has selected text in this block that a comment can anchor to. */
@@ -62,13 +76,11 @@ interface BlockProps {
 const ToolButton = ({
   label,
   disabled,
-  pressed,
   onClick,
   children,
 }: {
   label: string;
   disabled?: boolean;
-  pressed?: boolean;
   onClick: () => void;
   children: ReactNode;
 }) => (
@@ -77,104 +89,20 @@ const ToolButton = ({
     variant="ghost-muted"
     aria-label={label}
     title={label}
-    aria-pressed={pressed}
     disabled={disabled}
     onClick={onClick}
   >
     {children}
   </Button>
 );
-/** Picks the kind of a new block and adds it at `place`. The new block opens for editing. */
-export const AddChoices = ({
-  roomId,
-  place,
-  label,
-  onClose,
-  onAdded,
-  className,
-}: {
-  roomId: Id<"rooms">;
-  place: AddPlace;
-  label: string;
-  onClose: () => void;
-  onAdded: (blockId: Id<"blocks">) => void;
-  className?: string;
-}) => {
-  const add = useMutation(api.blocks.add);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const choose = async (kind: BlockKind) => {
-    setBusy(true);
-    setError(null);
-    try {
-      const blockId = await add({ roomId, ...place, kind, text: "" });
-      onClose();
-      onAdded(blockId);
-    } catch (error_) {
-      setError(errorText(error_));
-    }
-    setBusy(false);
-  };
-
-  return (
-    <fieldset
-      aria-label={label}
-      className={cn(
-        "mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5",
-        className
-      )}
-    >
-      {BLOCK_KINDS.map((kind, index) => (
-        <Button
-          key={kind}
-          size="xs"
-          variant="outline"
-          disabled={busy}
-          autoFocus={index === 1}
-          onClick={() => {
-            choose(kind).catch(logFailure);
-          }}
-        >
-          {KIND_LABEL[kind]}
-        </Button>
-      ))}
-      <Button size="xs" variant="ghost" onClick={onClose}>
-        Cancel
-      </Button>
-      {hasContent(error) ? (
-        <p role="alert" className="text-destructive-foreground w-full text-xs">
-          {error}
-        </p>
-      ) : null}
-    </fieldset>
-  );
-};
-
 /** The row of actions on a block. */
 const BlockTools = ({
   kind,
-  editing,
   blocked,
-  locked,
-  adding,
-  isFirst,
-  isLast,
-  onEdit,
-  onToggleAdd,
-  onMove,
   onDelete,
 }: {
   kind: BlockKind;
-  editing: boolean;
   blocked: boolean;
-  locked: boolean;
-  adding: boolean;
-  isFirst: boolean;
-  isLast: boolean;
-  onEdit: () => void;
-  onToggleAdd: () => void;
-  onMove: (direction: "up" | "down") => void;
   onDelete: () => void;
 }) => (
   <div
@@ -182,40 +110,108 @@ const BlockTools = ({
     aria-label={`${KIND_LABEL[kind]} actions`}
     className="ml-auto flex items-center gap-0.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
   >
-    <ToolButton label="Edit" disabled={editing || blocked} onClick={onEdit}>
-      <PencilIcon />
-    </ToolButton>
-    <ToolButton
-      label="Add below"
-      disabled={locked}
-      pressed={adding && !locked}
-      onClick={onToggleAdd}
-    >
-      <PlusIcon />
-    </ToolButton>
-    <ToolButton
-      label="Move up"
-      disabled={isFirst || blocked}
-      onClick={() => {
-        onMove("up");
-      }}
-    >
-      <ArrowUpIcon />
-    </ToolButton>
-    <ToolButton
-      label="Move down"
-      disabled={isLast || blocked}
-      onClick={() => {
-        onMove("down");
-      }}
-    >
-      <ArrowDownIcon />
-    </ToolButton>
-    <ToolButton label="Delete" disabled={editing || blocked} onClick={onDelete}>
+    <ToolButton label="Delete" disabled={blocked} onClick={onDelete}>
       <Trash2Icon />
     </ToolButton>
   </div>
 );
+
+// "Robert Guss" -> "RG", "Dana" -> "D".
+const initials = (name: string) =>
+  name
+    .split(/\s+/u)
+    .map((word) => word.charAt(0))
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+
+/** What a refused write left behind: the reason, and the person's text to copy or set aside. */
+const DraftNotice = ({
+  draft,
+  onDiscard,
+}: {
+  draft: { text: string; message: string };
+  onDiscard: () => void;
+}) => {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    await navigator.clipboard.writeText(draft.text);
+    setCopied(true);
+  };
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+      <p role="alert" className="text-destructive-foreground mr-auto">
+        {draft.message}
+      </p>
+      <Button
+        size="xs"
+        variant="outline"
+        onClick={() => {
+          copy().catch(logFailure);
+        }}
+      >
+        {copied ? "Copied" : "Copy my draft"}
+      </Button>
+      <Button size="xs" variant="ghost" onClick={onDiscard}>
+        Discard my draft
+      </Button>
+    </div>
+  );
+};
+
+// A block's length shows once it nears the limit.
+const COUNT_FROM = 3800;
+const CharCount = ({ length }: { length: number }) =>
+  length < COUNT_FROM ? null : (
+    <p className="text-muted-foreground mt-1 text-xs tabular-nums">
+      {length.toLocaleString("en-US")} of {BLOCK_CHARS.toLocaleString("en-US")}{" "}
+      characters
+    </p>
+  );
+
+const DIVIDER_KEYS: readonly KeyContext["key"][] = [
+  "Enter",
+  "Shift-Enter",
+  "Backspace",
+  "Delete",
+  "ArrowUp",
+  "ArrowDown",
+];
+
+/** A divider the person can reach with the keyboard: Enter adds a paragraph below it, Backspace or Delete removes it. */
+const FocusableDivider = ({
+  caret,
+  onKey,
+}: {
+  caret: CaretRequest | undefined;
+  onKey: (key: KeyContext["key"]) => boolean;
+}) => {
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (caret) {
+      ref.current?.focus();
+    }
+  }, [caret]);
+  const onKeyDown = (e: KeyboardEvent) => {
+    const name = e.key === "Enter" && e.shiftKey ? "Shift-Enter" : e.key;
+    const key = DIVIDER_KEYS.find((k) => k === name);
+    if (key !== undefined && onKey(key)) {
+      e.preventDefault();
+    }
+  };
+  return (
+    <button
+      ref={ref}
+      type="button"
+      data-kind="divider"
+      aria-label="Divider"
+      onKeyDown={onKeyDown}
+      className="focus-visible:ring-ring block w-full rounded-sm py-3 outline-none focus-visible:ring-2"
+    >
+      <span className="border-border block border-t" />
+    </button>
+  );
+};
 
 export const Block = ({
   roomId,
@@ -224,11 +220,19 @@ export const Block = ({
   meId,
   holderId,
   locked,
-  isFirst,
-  isLast,
-  editing,
-  onEditing,
-  onDoneEditing,
+  position,
+  count,
+  onMove,
+  handleFocus,
+  full,
+  previous,
+  next,
+  previousHeldBy,
+  number,
+  session,
+  sessionKey,
+  caret,
+  onCaret,
   models,
   commentable,
   onComment,
@@ -236,63 +240,133 @@ export const Block = ({
   onCommentDone,
 }: BlockProps) => {
   const blockId = block._id;
-  const startEdit = useMutation(api.blocks.startEdit);
-  const move = useMutation(api.blocks.move);
-  const remove = useMutation(api.blocks.remove);
+  const local = useSyncExternalStore(session.subscribe, () =>
+    session.local(sessionKey)
+  );
   const [error, setError] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const otherHolder = holderId !== null && holderId !== meId ? holderId : null;
   const blocked = locked || otherHolder !== null;
-
-  const run = async (action: () => Promise<unknown>) => {
-    setError(null);
-    try {
-      await action();
-    } catch (error_) {
-      setError(errorText(error_));
-    }
+  // The block as the person sees it, before their writes land.
+  const shown: DocBlock = {
+    ...block,
+    checked: local.checked ?? block.checked,
+    kind: local.kind ?? block.kind,
+    text: local.text ?? block.text,
   };
-  const edit = async () => {
-    await run(async () => {
-      await startEdit({ blockId });
-      onEditing(blockId);
-    });
-  };
+  const actions = useBlockActions({
+    block: shown,
+    full,
+    next,
+    onCaret,
+    onError: setError,
+    previous,
+    previousHeldBy,
+    roomId,
+    session,
+    sessionKey,
+  });
 
   return (
     <div
       data-block-id={block._id}
       className="group hover:bg-accent/30 focus-within:bg-accent/30 relative rounded-lg px-2 py-1.5"
     >
-      {editing ? (
-        <BlockEditor
-          block={block}
-          otherHolder={otherHolder}
-          onDone={() => {
-            onDoneEditing(blockId);
+      <div
+        className="flex items-baseline gap-2"
+        onFocus={() => {
+          session.focus(sessionKey);
+        }}
+        onBlur={() => {
+          session.blur(sessionKey);
+        }}
+      >
+        <DragHandle
+          holder={otherHolder === null ? null : names(otherHolder)}
+          disabled={blocked}
+          position={position}
+          count={count}
+          onMove={(to) => {
+            onMove(to).catch(actions.fail);
+          }}
+          focus={handleFocus}
+        />
+        <KindMarker
+          kind={shown.kind}
+          checked={shown.checked ?? false}
+          number={number}
+          label={shown.text}
+          onToggle={blocked ? undefined : actions.handleToggle}
+        />
+        <div className="min-w-0 flex-1">
+          {shown.kind === "divider" && !blocked ? (
+            <FocusableDivider
+              caret={caret}
+              onKey={(key) => {
+                const { intent } = intentFor({
+                  ...actions.keys.neighbours(),
+                  atEnd: true,
+                  atStart: true,
+                  empty: true,
+                  firstLine: true,
+                  key,
+                  kind: "divider",
+                  lastLine: true,
+                });
+                actions.intent(intent, null);
+                return intent !== "none";
+              }}
+            />
+          ) : (
+            <BlockEditor
+              blockId={blockId}
+              kind={shown.kind}
+              text={shown.text}
+              editable={!blocked}
+              caret={caret}
+              onChange={actions.handleChange}
+              onKind={actions.handleKind}
+              onDivider={actions.handleDivider}
+              onPaste={actions.handlePaste}
+              keys={actions.keys}
+            />
+          )}
+        </div>
+      </div>
+      <CharCount length={shown.text.length} />
+      {local.draft ? (
+        <DraftNotice
+          draft={local.draft}
+          onDiscard={() => {
+            session.discard(sessionKey);
           }}
         />
-      ) : (
-        // Comments start from a selection here; the document maps it to the stored text.
-        <div data-block-text={block.text.trim() ? block._id : undefined}>
-          <BlockText kind={block.kind} text={block.text} />
-        </div>
-      )}
+      ) : null}
       <div className="text-muted-foreground mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
         <span className="text-foreground/80 font-medium">
           {authorText(block.author, names)}
         </span>
-        {otherHolder === null ? null : (
-          <Badge variant="warning">{names(otherHolder)} is editing</Badge>
-        )}
+        {/* Present before anyone holds the block, so a new holder is announced. */}
+        <span aria-live="polite" className="contents">
+          {otherHolder === null ? null : (
+            <Badge variant="warning">
+              <span
+                aria-hidden
+                className="bg-background/60 inline-flex size-4 items-center justify-center rounded-full text-[0.6rem] font-semibold"
+              >
+                {initials(names(otherHolder))}
+              </span>
+              {names(otherHolder)} is editing
+            </Badge>
+          )}
+        </span>
         {block.openThreads > 0 ? (
           <Badge variant="outline">
             <MessageSquareIcon />
             {openThreadsText(block.openThreads)}
           </Badge>
         ) : null}
-        {commentable && !editing ? (
+        {commentable ? (
           <Button
             size="xs"
             variant="outline"
@@ -308,23 +382,7 @@ export const Block = ({
         ) : null}
         <BlockTools
           kind={block.kind}
-          editing={editing}
           blocked={blocked}
-          locked={locked}
-          adding={adding}
-          isFirst={isFirst}
-          isLast={isLast}
-          onEdit={() => {
-            edit().catch(logFailure);
-          }}
-          onToggleAdd={() => {
-            setAdding((a) => !a);
-          }}
-          onMove={(direction) => {
-            run(async () => await move({ blockId, direction })).catch(
-              logFailure
-            );
-          }}
           onDelete={() => {
             setConfirmingDelete(true);
           }}
@@ -349,7 +407,7 @@ export const Block = ({
             autoFocus
             onClick={() => {
               setConfirmingDelete(false);
-              run(async () => await remove({ blockId })).catch(logFailure);
+              actions.remove();
             }}
           >
             Delete this block
@@ -365,23 +423,12 @@ export const Block = ({
           </Button>
         </fieldset>
       ) : null}
-      {commentDraft && !editing ? (
+      {commentDraft ? (
         <NewComment
           passage={commentDraft}
           exact={block.text.slice(commentDraft.start, commentDraft.end)}
           models={models}
           onDone={onCommentDone}
-        />
-      ) : null}
-      {adding && !locked ? (
-        <AddChoices
-          roomId={roomId}
-          place={{ afterBlockId: blockId }}
-          label="Add below this block"
-          onClose={() => {
-            setAdding(false);
-          }}
-          onAdded={onEditing}
         />
       ) : null}
     </div>

@@ -1,17 +1,15 @@
 // Comments are anchored to offsets in a block's stored text, which is
 // markdown, while the reader selects rendered text. The two are matched on
 // the characters a reader sees: whitespace and markdown syntax characters are
-// left out of both sides, link targets and list markers out of the source,
-// and the selected characters are looked for in the source near where the
-// selection sits in the rendered block.
+// left out of both sides, link targets out of the source, and the selected
+// characters are looked for in the source near where the selection sits in
+// the rendered block. Blocks render inline markdown only, so a list marker
+// written in the text shows as text and stays on both sides.
 
 // Characters left out on both sides. Some of them can be visible text too,
 // such as the underscore in user_id; dropping them everywhere keeps such text
 // matching all the same.
 const IGNORED = /[\s*_~`#>|<[\]\\-]/u;
-
-// A list marker at the start of a line, which the browser draws without text.
-const LIST_MARKER = /[ \t]*(?:\d{1,9}[.)]|[-+*])[ \t]+/uy;
 
 /** The characters a reader sees, each with its index in the text it came from. */
 interface Projection {
@@ -54,15 +52,6 @@ const projectMarkdown = (source: string): Projection => {
   let chars = "";
   const at: number[] = [];
   for (let i = 0; i < source.length; i += 1) {
-    if (i === 0 || source[i - 1] === "\n") {
-      LIST_MARKER.lastIndex = i;
-      if (LIST_MARKER.test(source)) {
-        i = LIST_MARKER.lastIndex;
-      }
-      if (i >= source.length) {
-        break;
-      }
-    }
     if (source[i] === "]" && source[i + 1] === "(") {
       i = linkTargetEnd(source, i + 1);
       continue;

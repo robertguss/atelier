@@ -6,8 +6,9 @@ findings, ideas, changes of direction and open questions. Robert and a
 teammate edit it in the web app. The agents read it at the start of their
 turns and add to it on their own.
 
-The document is made of blocks. A block is one heading, paragraph or list item.
-A heading and the blocks under it form a section.
+The document is made of blocks. A block is one heading, paragraph, list item,
+to-do, numbered item, quote, code block or divider. A heading and the blocks
+under it form a section.
 
 Rooms made before the document existed get one from the default template the
 first time someone opens them.
@@ -38,51 +39,125 @@ template**.
 
 ## Writing in the document
 
-People can edit any block, whoever wrote it.
+People can edit any block, whoever wrote it. There is no Edit button: click a
+block and type. Your text saves itself a second after you stop typing, when you
+click away and when you switch tabs. Each block shows its author underneath.
+Editing someone else's block does not change its author. Click the space below
+the last block to add an empty paragraph there.
 
-- **Edit** opens a block for editing. Enter saves, Shift+Enter adds a line
-  break that shows in the block, and clicking away also saves.
-- **Add below** adds a block after this one. **Add to** _section name_ at the
-  end of each section adds one there. Pick **Heading**, **Paragraph** or
-  **List item**; the new block opens for editing and you are its author.
-- **Move up** and **Move down** move a block one place.
-- **Delete** asks "Delete this block? History keeps a copy." Select **Delete
-  this block** to go ahead, or **Keep it**.
+Bold, italic, strikethrough, inline code and links show as formatted text and
+are kept as markdown in the block. Undo (Ctrl+Z or Cmd+Z) works within one
+block; it cannot undo a split or merge.
 
-The buttons appear when you point at or focus a block. Each block shows its
-author underneath. Editing someone else's block does not change its author.
+### Keys
+
+| Key                                              | What it does                                                                                                                 |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| Enter                                            | Splits the block at the caret into two of the same kind. At the end of a heading or paragraph, the new block is a paragraph. |
+| Enter at the start                               | Adds an empty block of the same kind above.                                                                                  |
+| Enter in an empty item                           | Turns an empty list item, to-do, numbered item or quote into a paragraph.                                                    |
+| Shift+Enter                                      | Adds a line break inside the block.                                                                                          |
+| Backspace at the start                           | Turns a list item, to-do, numbered item, quote or code block into a paragraph with the same text.                            |
+| Backspace at the start of a paragraph or heading | Joins it to the end of the block above. A heading at the top becomes a paragraph.                                            |
+| Arrow Up and Down                                | On a block's first or last line, move to the block above or below.                                                           |
+| In a code block                                  | Enter adds a new line; Ctrl+Enter or Cmd+Enter adds a paragraph below.                                                       |
+
+Backspace at the start of a block right after a divider removes the divider. A
+join is refused, with a note naming them, when someone else is editing the
+block above ("_name_ is editing the block above"), and when the joined text
+would pass 4,000 characters.
+
+### Kinds of block
+
+Type a marker at the start of a block to change its kind: `# ` for a heading,
+`- ` for a list item, `1. ` for a numbered item, `[] ` for a to-do, `> ` for a
+quote and three backticks for a code block. Or type `/` and pick a kind from
+the menu, filtering by name as you type. The block keeps its text, author and
+comments. Undo right after the change turns it back.
+
+- **To-do**: select its checkbox to tick or untick it. Ticking takes no lock
+  and is one entry in history, but it is refused while someone else is
+  editing the block. Changing a ticked to-do into another kind drops the tick.
+- **Numbered item**: shows its place in the run of numbered items next to it.
+  The number is never stored, so moving blocks renumbers them.
+- **Code block**: text is kept exactly as typed, with no formatting.
+- **Divider**: a line between blocks. `---` or **Divider** in the menu turns
+  an empty block into a divider. On a block with text, the divider goes below
+  it and the block stays as it is. Select a divider and press Enter to add a
+  paragraph below it, or Backspace or Delete to remove it.
+
+### Moving, pasting and deleting
+
+Each block has a handle, **Reorder block**, at its left. Drag it to move the
+block; a line marks where it will land. Or focus the handle and press
+Alt+Shift+Up or Alt+Shift+Down to move the block one place. A screen reader
+hears "Moved to position 3 of 8", and focus stays on the handle.
+
+Pasting text that makes more than one block, such as paragraphs separated by
+blank lines, adds them as blocks after the block you paste into. That block
+keeps the text before the caret, and the last pasted block ends with the text
+after it. A part that starts with a marker, such as `- ` or `1. `, makes that
+kind of block, and a fenced code block stays one code block. Pasting into a
+code block keeps the text in it. A paste that would take the document past 600
+blocks is refused whole, for example "This would add 5 blocks to a document of
+598, and a document holds at most 600 blocks."
+
+**Delete** asks "Delete this block? History keeps a copy." Select **Delete
+this block** to go ahead, or **Keep it**. Deleting the last block leaves one
+empty paragraph.
+
+The handle and **Delete** appear when you point at or focus a block.
 
 ### Edit locks
 
-Opening a block for editing takes a lock on it. While you hold it, others see
-"_name_ is editing" on the block and cannot edit, move or delete it. The
-browser renews the lock while you type. It lapses about two minutes after your
-last renewal, so a block left open and idle frees itself.
+Only one person types in a block at a time. Your first keystroke in a block
+takes a lock on it; clicking, moving the caret and selecting text do not.
+While you hold it, others see your initials and "_name_ is editing" on the
+block, and cannot type in it, tick it, move it, join into it or delete it.
+Screen readers announce the change. You hold one lock per document: typing in
+another block releases the first.
 
-If your lock lapsed before you saved, the save is refused with "Your edit lock
-on this block has lapsed" and your draft stays in the box. **Retake the block**
-takes the lock again so you can save. If someone else has taken the block in
-the meantime, **Copy my draft** copies your text instead. **Discard my draft**
-gives it up.
+The browser renews the lock while you type. It lets go about three seconds
+after you leave the block and when you switch tabs, once your text is saved.
+A lock that is not renewed lapses after about two minutes, and your next save
+takes it back if nobody else has.
+
+Your typing does not wait for the lock. If someone else got the block first,
+or the block changed since your browser last saw it, the block goes back to
+its current text and a notice says why, for example "Dana is editing this
+block" or "This block changed since you last saw it". **Copy my draft** copies
+what you typed; **Discard my draft** gives it up.
 
 ### What the models do
 
 The models are told to keep the document current without being asked:
 whenever something in the session is worth keeping, they add a short block in
-the section it belongs to. They can update and delete only blocks they wrote
-themselves. To respond to anyone else's block, a model comments on it.
+the section it belongs to. They can write every kind of block, and are told to
+leave a kind's marker out of the text: a to-do's text never starts with
+`[ ]`. They can update and delete only blocks they wrote themselves, and tick
+or untick only their own to-dos. To respond to anyone else's block, a model
+comments on it. Models cannot move blocks.
+
+When a model reads the document, each block shows its kind, whether a to-do is
+ticked, and a numbered item's number, as in "todo (checked)" or
+"numberedItem #2". Code is shown exactly as written; a divider has no text. A
+block someone is typing in reads "being edited by _name_".
 
 A model never takes a lock, and a model write is refused while a person is
 editing that block. A model's update must name the version of the block it
-read. If anyone changed the block since then, nothing is written; the model
-gets the current text and is told to build on it rather than undo the change.
-A model cannot delete one of its own blocks once a person has edited it.
+read. If anyone changed the block since then, ticks included, nothing is
+written; the model gets the current text and tick and is told to build on it
+rather than undo the change. A model cannot delete one of its own blocks once
+a person has edited it. Ticking a model's to-do counts as a person's edit.
 
 ## Comments
 
 1. Select a passage of text in a block.
 2. Select **Comment** beside the block's author.
 3. Write your comment and select **Post comment** (or press Enter).
+
+Selecting text takes no lock, so you can comment on a block someone else is
+editing. A selection that spans two blocks offers no **Comment**.
 
 Threads appear beside the document, in the order of their blocks. A block with
 open threads shows "1 open thread" (or more). In browsers that support it, the
@@ -134,18 +209,23 @@ Either person in the room can call it in.
 1. Select **Call in the scribe** in the document header.
 2. Choose which model acts as scribe.
 
-It is refused, with the reason, while someone is editing a block ("_name_ is
-editing a block"), while that model is still answering a message, while the
-runner is offline, and while a scribe is already working.
+It is refused, with the reason, while someone has typed in a block they still
+hold ("_name_ is editing a block"), while that model is still answering a
+message, while the runner is offline, and while a scribe is already working.
+A lock nobody has typed under, such as a caret left in a block, does not stop
+it: the run clears that lock, and that person's next keystroke is refused with
+"The scribe is working on the document" and kept as a draft.
 
 While the scribe works, a banner reads "The scribe is working", with the model,
 who started it and how long it has run. The document is read-only for everyone:
-nobody can edit, add, move or delete blocks or restore a version, and the
-models' own writes are refused. Comments keep working, for people and models.
+nobody can edit, add, move, tick or delete blocks or restore a version, and the
+models' own writes are refused. Selecting text and commenting keep working, for
+people and models.
 The scribe never edits files in the room's folder.
 
 Its changes reach the document all at once when its turn ends, as one entry in
-history. Blocks it did not touch stay exactly as they were. Comment threads
+history. Blocks it did not touch stay exactly as they were, and a rewrite never
+unticks a to-do. Comment threads
 follow their passages into the rewritten blocks; a thread whose passage is gone
 is marked "Passage removed".
 
@@ -178,21 +258,23 @@ models comment on it like anyone else's. People can edit it as usual.
 
 - "Template seeding by _name_": the room's starting sections;
 - "Edit by _name_": everything one person wrote in one block under one edit
-  lock, or one move or delete;
+  lock, or one split, join, change of kind, tick, move, paste or delete;
 - "_model_'s turn": everything a model wrote in one turn;
 - "Scribe run by _model_, started by _name_";
 - "Restore by _name_".
 
 **Load older versions** reaches further back. Select an entry to see the
-document as it stood after it, read-only, with the blocks that change touched
-marked **Added**, **Changed**, **Moved** or **Removed**.
+document as it stood after it, read-only, with every kind, tick and number as
+it was, and the blocks that change touched marked **Added**, **Changed**,
+**Moved** or **Removed**. A tick or untick shows as **Changed**.
 
-**Restore this version** returns every block to its text, kind, place and
-author in that version. Blocks deleted since come back; blocks added since are
+**Restore this version** returns every block to its text, kind, tick, place
+and author in that version. Blocks deleted since come back; blocks added since are
 removed. The current document is saved in history first, so nothing is lost,
 and the whole restore is one new entry. Comment threads stay and follow the
-restored text. Either person can restore. A restore is refused while someone is
-editing a block or the scribe is working.
+restored text. Either person can restore. A restore is refused while someone
+has typed in a block they still hold ("_name_ is editing a block") or the
+scribe is working; a caret left in a block does not stop it.
 
 ## Templates
 
@@ -257,6 +339,10 @@ Everyone, people and models alike, works within the size of the document:
 - at most 4,000 characters in a block (models also in a comment);
 - no new blocks once the document has 600.
 
-The scribe's changes must also leave the document at 600 blocks or fewer. A
-write past a cap is refused, and the model or person is told why. A comment's
+In the web app, typing stops at 4,000 characters, and a count such as "3,850 of
+4,000 characters" appears once a block passes 3,800. At 600 blocks, Enter,
+paste and the space below the last block add nothing, and a note says "A
+document holds at most 600 blocks. Merge or remove some first." The scribe's
+changes must also leave the document at 600 blocks or fewer. A write past a
+cap is refused, and the model or person is told why. A comment's
 quote must appear once in its block, so it lands where the model meant.

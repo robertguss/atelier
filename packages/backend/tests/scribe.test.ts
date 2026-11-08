@@ -714,9 +714,14 @@ describe("scribe", () => {
     });
   });
 
-  it("calling in the scribe while the teammate edits a block is refused, naming her", async () => {
+  it("calling in the scribe while the teammate has typed in a block is refused, naming her", async () => {
     const s = await setup();
     await s.dana.mutation(api.blocks.startEdit, { blockId: s.ideas._id });
+    await s.dana.mutation(api.blocks.save, {
+      baseRev: s.ideas.rev,
+      blockId: s.ideas._id,
+      text: "Ideas",
+    });
     await expect(
       s.owner.mutation(api.scribe.begin, {
         participantId: s.claude._id,
@@ -728,6 +733,26 @@ describe("scribe", () => {
     await expect(
       s.t.run(async (ctx) => await ctx.db.query("scribeRuns").collect())
     ).resolves.toStrictEqual([]);
+  });
+
+  it("calling in the scribe while the teammate only holds a block she has not typed in starts the run, clears her lease, and refuses her next save", async () => {
+    const s = await setup();
+    await s.dana.mutation(api.blocks.startEdit, { blockId: s.ideas._id });
+    await beginScribe(s.t, s.owner, s.roomId, s.claude._id);
+    const ideas = defined(
+      await s.t.run(async (ctx) => await ctx.db.get(s.ideas._id))
+    );
+    expect([
+      ideas.leaseHolderParticipantId,
+      ideas.leaseExpiresAt,
+    ]).toStrictEqual([undefined, undefined]);
+    await expect(
+      s.dana.mutation(api.blocks.save, {
+        baseRev: s.ideas.rev,
+        blockId: s.ideas._id,
+        text: "Ideas",
+      })
+    ).rejects.toThrow("The scribe is working on the document");
   });
 
   it("calling in the scribe is refused while that model is answering, and allowed once its turn ends", async () => {
@@ -1097,6 +1122,75 @@ describe("scribe", () => {
       },
       sourceBlockIds: [a],
     });
+  });
+
+  it("a draft_replace without checked leaves a ticked to-do ticked, a change of kind drops the tick, and a drafted to-do starts unticked", async () => {
+    const s = await setup();
+    const [ticked, converted, divider] = await s.t.run(async (ctx) => {
+      const blocks = await liveBlocks(ctx, s.documentId);
+      const changeSetId = await openChangeSet(ctx, s.documentId, {
+        actorParticipantId: s.codex._id,
+        kind: "model_turn",
+      });
+      let order = blocks.at(-1)?.order ?? null;
+      const ids = [];
+      for (const [kind, body] of [
+        ["todo", "Book the venue"],
+        ["todo", "Send the invites"],
+        ["divider", ""],
+      ] as const) {
+        order = orderBetween(order, null);
+        ids.push(
+          // oxlint-disable-next-line eslint/no-await-in-loop -- revisions are numbered in the order they are written
+          await insertBlock(ctx, changeSetId, {
+            author: { kind: "participant", participantId: s.codex._id },
+            checked: kind === "todo" ? true : undefined,
+            kind,
+            order,
+            text: body,
+          })
+        );
+      }
+      return ids;
+    });
+    const run = await beginScribe(s.t, s.owner, s.roomId, s.claude._id);
+    await draft(s.t, run.turnId, {
+      blockId: defined(ticked),
+      op: "replace",
+      text: "Book the venue for Friday",
+    });
+    await draft(s.t, run.turnId, {
+      blockId: defined(converted),
+      kind: "paragraph",
+      op: "replace",
+      text: "The invites went out.",
+    });
+    await draft(s.t, run.turnId, {
+      kind: "todo",
+      op: "add",
+      sourceBlockIds: [],
+      text: "Confirm the caterer",
+    });
+    await expect(
+      draft(s.t, run.turnId, {
+        blockId: defined(divider),
+        op: "replace",
+        text: "x",
+      })
+    ).resolves.toMatchObject({ ok: false, reason: "bad_request" });
+    await finish(s.t, run.turnId, run.commandId);
+
+    const blocks = await s.t.run(
+      async (ctx) => await liveBlocks(ctx, s.documentId)
+    );
+    expect(
+      blocks.slice(-4).map((b) => ({ checked: b.checked, text: b.text }))
+    ).toStrictEqual([
+      { checked: true, text: "Book the venue for Friday" },
+      { checked: undefined, text: "The invites went out." },
+      { checked: undefined, text: "" },
+      { checked: false, text: "Confirm the caterer" },
+    ]);
   });
 
   it("the scribe turn never saves a session id on the participant", async () => {

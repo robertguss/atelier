@@ -1,6 +1,8 @@
+import { kindLabel, numberedPositions } from "@atelier/shared";
+
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
-import { liveBlocks, scribeWorking } from "./document";
+import { leaseHolder, liveBlocks, scribeWorking } from "./document";
 import { agentName, firstCodePoints, neutralize } from "./prompt";
 import type { DocumentMode } from "./visibility";
 
@@ -27,6 +29,7 @@ interface View {
   blocks: Doc<"blocks">[];
   threads: Map<Id<"blocks">, Thread[]>;
   names: Map<Id<"participants">, string>;
+  numbers: Map<Id<"blocks">, number | undefined>;
   participantId: Id<"participants">;
 }
 
@@ -91,10 +94,13 @@ const loadView = async (
       entry,
     ]);
   }
+  const blocks = await liveBlocks(ctx, document._id);
+  const numbers = numberedPositions(blocks.map((b) => b.kind));
   return {
-    blocks: await liveBlocks(ctx, document._id),
+    blocks,
     document,
     names: await participantNames(ctx, document.roomId),
+    numbers: new Map(blocks.map((b, i) => [b._id, numbers[i]])),
     participantId,
     threads,
   };
@@ -115,8 +121,13 @@ const indented = (text: string, spaces: number) => {
 
 const header = (view: View, block: Doc<"blocks">) => {
   const own = isOwnBlock(block, view.participantId);
+  const kind = kindLabel(
+    block.kind,
+    block.checked,
+    view.numbers.get(block._id)
+  );
   const parts = [
-    `[${block._id}] ${block.kind} by ${neutralize(authorLabel(block.author, view.names))}`,
+    `[${block._id}] ${kind} by ${neutralize(authorLabel(block.author, view.names))}`,
   ];
   if (own) {
     parts.push(`yours, rev ${block.rev}`);
@@ -124,12 +135,22 @@ const header = (view: View, block: Doc<"blocks">) => {
   if (own && block.humanEditedAt !== undefined) {
     parts.push("a person has edited it since you wrote it; keep their change");
   }
+  const holder = leaseHolder(block, Date.now());
+  if (holder) {
+    parts.push(
+      `being edited by ${neutralize(view.names.get(holder) ?? "Someone")}`
+    );
+  }
   return parts.join(", ");
 };
 
-// One block in full: its header, its text, and its threads with every comment.
+// One block in full: its header, its text, and its threads with every
+// comment. A divider is its header alone.
 const fullBlock = (view: View, block: Doc<"blocks">) => {
-  const lines = [header(view, block), ...indented(block.text, 2)];
+  const lines = [
+    header(view, block),
+    ...(block.kind === "divider" ? [] : indented(block.text, 2)),
+  ];
   for (const { thread, comments } of view.threads.get(block._id) ?? []) {
     const detached = thread.detachedBeforeChangeSetId
       ? ", passage since removed"
