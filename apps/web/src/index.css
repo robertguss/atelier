@@ -238,6 +238,7 @@
 /* A block's editor: one node of the block's kind. Checkboxes, numbers and
    bullets sit outside it, so they add no text to the block. */
 .block-editor {
+  min-height: 1lh;
   outline: none;
   overflow-wrap: anywhere;
 }

@@ -6,6 +6,26 @@ Tester and Editor live check (`kh72qzwtxkzj7vpmjzm8c12std8ht8a8`) were used.
 The resumed pass covers the verification contract below. Failures and harness
 limitations remain for review; no application fixes were made.
 
+## Fix verification
+
+Both findings have fixes on `fix/editor-live-findings`:
+
+- F1: the shared block writing surface has a one-line minimum height. On the
+  deployed test-room page, applying the changed CSS grew the same empty
+  surface from 0 to 24 px; hover, click, typing and persistence then worked.
+  This browser check injected the new CSS; it does not claim Vercel has
+  deployed the fix.
+- F2: Claude turns with Atelier room tools disable `context-mode@context-mode`
+  through per-turn SDK settings. Other plugins and the existing permission
+  policy remain in place; global user settings are not modified. Regression
+  tests cover ordinary, resumed and scribe turns. A real installed Claude
+  adapter probe read a 600-line synthetic tool result and identified the
+  fresh random marker and Ben Tester at its end, on fresh and resumed
+  sessions. This probe used a loopback fixture in the throwaway room folder;
+  the running production runner has not been restarted onto this branch.
+
+The findings below preserve the original reproduction evidence.
+
 ## Medium
 
 ### F1. An empty paragraph has no pointer target after reload
