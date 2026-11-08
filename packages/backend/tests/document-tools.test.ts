@@ -20,7 +20,6 @@ import {
   insertBlock,
   openChangeSet,
   orderBetween,
-  patchBlock,
 } from "../convex/lib/document";
 import schema from "../convex/schema";
 import { defined, stringContaining, stringMatching } from "./support";
@@ -867,22 +866,15 @@ describe("document tools for models", () => {
   });
 
   it("after a person ticks a model's to-do, the model's update with its old rev is stale with the tick, and another model cannot tick it", async () => {
-    const { t, owner, roomId, documentId, claude, codex, danaP } =
-      await setup();
+    const { t, owner, roomId, claude, codex, dana } = await setup();
     const { turnId } = await runningTurn(t, owner, roomId, claude._id);
     const added = addedBlock(
       await tools(t, turnId).addAs({ kind: "todo", text: "Book the venue" })
     );
-    // Dana ticks it, as the to-do checkbox would.
-    await t.run(async (ctx) => {
-      const changeSetId = await openChangeSet(ctx, documentId, {
-        actorParticipantId: danaP._id,
-        kind: "human_edit",
-      });
-      await patchBlock(ctx, changeSetId, added.blockId, {
-        checked: true,
-        humanEditedAt: Date.now(),
-      });
+    await dana.mutation(api.blockOps.toggleChecked, {
+      baseRev: added.rev,
+      blockId: added.blockId,
+      checked: true,
     });
 
     await expect(
