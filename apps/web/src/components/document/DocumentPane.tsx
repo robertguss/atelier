@@ -1,7 +1,8 @@
 import { api } from "@atelier/backend/api";
 import type { Id } from "@atelier/backend/dataModel";
+import { numberedPositions } from "@atelier/shared";
 import { useMutation, useQuery } from "convex/react";
-import { FileTextIcon, PlusIcon } from "lucide-react";
+import { FileTextIcon } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -23,8 +24,8 @@ import type { Names, Participant } from "~/lib/room";
 import { renderedRange, selectionIn, sourceRange } from "~/lib/selection";
 import { hasContent, logFailure } from "~/lib/utils";
 
-import { AddChoices, Block } from "./Block";
-import type { AddPlace } from "./Block";
+import { Block } from "./Block";
+import type { CaretRequest } from "./Block";
 import { HistoryControl } from "./HistoryPanel";
 import type { HistoryView } from "./HistoryPanel";
 import {
@@ -149,50 +150,6 @@ const useCommentHighlights = (
 
 const sectionBlocks = (section: Section) =>
   section.heading ? [section.heading, ...section.blocks] : section.blocks;
-const SectionAdd = ({
-  roomId,
-  label,
-  place,
-  locked,
-  onAdded,
-}: {
-  roomId: Id<"rooms">;
-  label: string;
-  place: AddPlace;
-  locked: boolean;
-  onAdded: (blockId: Id<"blocks">) => void;
-}) => {
-  const [open, setOpen] = useState(false);
-  if (open && !locked) {
-    return (
-      <AddChoices
-        roomId={roomId}
-        place={place}
-        label={label}
-        onClose={() => {
-          setOpen(false);
-        }}
-        onAdded={onAdded}
-        className="px-2"
-      />
-    );
-  }
-  return (
-    <Button
-      size="xs"
-      variant="ghost-muted"
-      className="ml-1"
-      disabled={locked}
-      onClick={() => {
-        setOpen(true);
-      }}
-    >
-      <PlusIcon />
-      {label}
-    </Button>
-  );
-};
-
 /** Saves the document's headings, and any template guidance under them, as a new template. */
 const SaveAsTemplate = ({ roomId }: { roomId: Id<"rooms"> }) => {
   const save = useMutation(api.templates.saveFromRoom);
@@ -295,6 +252,7 @@ export const DocumentPane = ({
   const stopEdit = useMutation(api.blocks.stopEdit);
   const save = useMutation(api.blocks.save);
   const split = useMutation(api.blockOps.split);
+  const insertMany = useMutation(api.blockOps.insertMany);
   // Convex hands back the same mutation functions on every render, so the
   // session lives as long as the pane.
   const session = useMemo(
@@ -308,8 +266,8 @@ export const DocumentPane = ({
   );
   // Split blocks the server has not returned yet.
   useSyncExternalStore(session.subscribe, session.temps);
-  // The block an Add just created, to put the caret in.
-  const [addedId, setAddedId] = useState<Id<"blocks"> | null>(null);
+  const [caret, setCaret] = useState<CaretRequest | undefined>();
+  const [appendError, setAppendError] = useState<string | null>(null);
   // Leases lapse on the clock; re-check who holds a block now and then.
   const now = useNow(10_000);
   const blocks = doc?.blocks;
@@ -349,10 +307,26 @@ export const DocumentPane = ({
     };
   }, [session]);
 
-  // Adding a block leases it to the person, who starts typing in it.
-  const added = (blockId: Id<"blocks">) => {
-    session.leased(blockId);
-    setAddedId(blockId);
+  // A click below the last block adds an empty paragraph there, leased to
+  // the person, who starts typing in it.
+  const append = async (last: DocBlock | undefined) => {
+    setAppendError(null);
+    const after = last && session.keyOf(last._id);
+    await session.run(
+      last && after ? [[after, last.rev]] : [],
+      async (find) => {
+        const inserted = await insertMany({
+          afterBlockId: after === undefined ? null : find(after).id,
+          blocks: [{ kind: "paragraph", text: "" }],
+          roomId,
+        });
+        for (const { blockId } of inserted.blocks) {
+          session.leased(blockId);
+          setCaret({ at: "start", key: blockId });
+        }
+        return [];
+      }
+    );
   };
 
   let body;
@@ -368,76 +342,87 @@ export const DocumentPane = ({
       </p>
     );
   } else {
-    const sections = sectionsOf(
-      session.blocks(doc.blocks, (temp, head) => ({
-        ...head,
-        _id: temp.key,
-        checked: temp.checked,
-        kind: temp.kind,
-        openThreads: 0,
-        rev: 0,
-        text: temp.text,
-      }))
-    );
-    const onlyLoose = sections.every((s) => s.heading === null);
+    const shown = session.blocks(doc.blocks, (temp, head) => ({
+      ...head,
+      _id: temp.key,
+      checked: temp.checked,
+      kind: temp.kind,
+      openThreads: 0,
+      rev: 0,
+      text: temp.text,
+    }));
+    const numbers = numberedPositions(shown.map((b) => b.kind));
+    const indexOf = new Map(shown.map((b, i) => [b._id, i]));
+    const heldByOther = (other: DocBlock | undefined) => {
+      const holder = other ? leaseHolder(other, now) : null;
+      return holder === null || holder === meId ? null : names(holder);
+    };
     body = (
       <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-5 @4xl:flex-row @4xl:items-start">
         <div
           ref={textRef}
           className="w-full max-w-3xl min-w-0 flex-1 space-y-4"
         >
-          {sections.map((section, index) => (
+          {sectionsOf(shown).map((section, index) => (
             <div
               key={section.heading?._id ?? `loose-${index}`}
               className="space-y-0.5"
             >
-              {sectionBlocks(section).map((block) => (
-                <Block
-                  key={session.keyOf(block._id)}
-                  roomId={roomId}
-                  block={block}
-                  names={names}
-                  meId={meId}
-                  holderId={leaseHolder(block, now)}
-                  locked={locked}
-                  isFirst={block._id === doc.blocks[0]?._id}
-                  isLast={block._id === doc.blocks.at(-1)?._id}
-                  session={session}
-                  sessionKey={session.keyOf(block._id)}
-                  autoFocus={addedId === block._id}
-                  onAdded={added}
-                  models={models}
-                  commentable={selected?.blockId === block._id}
-                  onComment={() => {
-                    setCommentDraft(selected);
-                  }}
-                  commentDraft={
-                    commentDraft?.blockId === block._id ? commentDraft : null
-                  }
-                  onCommentDone={() => {
-                    setCommentDraft(null);
-                  }}
-                />
-              ))}
-              {section.heading ? (
-                <SectionAdd
-                  roomId={roomId}
-                  label={`Add to ${section.heading.text || "this section"}`}
-                  place={{ endOfSectionId: section.heading._id }}
-                  locked={locked}
-                  onAdded={added}
-                />
-              ) : null}
+              {sectionBlocks(section).map((block) => {
+                const at = indexOf.get(block._id) ?? 0;
+                const key = session.keyOf(block._id);
+                return (
+                  <Block
+                    key={key}
+                    roomId={roomId}
+                    block={block}
+                    names={names}
+                    meId={meId}
+                    holderId={leaseHolder(block, now)}
+                    locked={locked}
+                    isFirst={block._id === doc.blocks[0]?._id}
+                    isLast={block._id === doc.blocks.at(-1)?._id}
+                    previous={shown[at - 1] ?? null}
+                    next={shown[at + 1] ?? null}
+                    previousHeldBy={heldByOther(shown[at - 1])}
+                    number={numbers[at]}
+                    session={session}
+                    sessionKey={key}
+                    caret={caret?.key === key ? caret : undefined}
+                    onCaret={(target, caretAt) => {
+                      setCaret({ at: caretAt, key: target });
+                    }}
+                    models={models}
+                    commentable={selected?.blockId === block._id}
+                    onComment={() => {
+                      setCommentDraft(selected);
+                    }}
+                    commentDraft={
+                      commentDraft?.blockId === block._id ? commentDraft : null
+                    }
+                    onCommentDone={() => {
+                      setCommentDraft(null);
+                    }}
+                  />
+                );
+              })}
             </div>
           ))}
-          {onlyLoose ? (
-            <SectionAdd
-              roomId={roomId}
-              label="Add to the document"
-              place={{}}
-              locked={locked}
-              onAdded={added}
-            />
+          <button
+            type="button"
+            aria-label="Add a paragraph at the end"
+            disabled={locked}
+            className="block min-h-24 w-full cursor-text"
+            onClick={() => {
+              append(shown.at(-1)).catch((error_: unknown) => {
+                setAppendError(errorText(error_));
+              });
+            }}
+          />
+          {hasContent(appendError) ? (
+            <p role="alert" className="text-destructive-foreground text-xs">
+              {appendError}
+            </p>
           ) : null}
         </div>
         {threads ? (

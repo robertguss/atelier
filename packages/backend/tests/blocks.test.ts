@@ -664,6 +664,35 @@ describe("block editing", () => {
     });
   });
 
+  it("removing the last block leaves one empty paragraph of the person's, in the same change set", async () => {
+    const { owner, roomId, happened, ideas, questions, robert } = await setup();
+    await owner.mutation(api.blocks.remove, { blockId: happened._id });
+    await owner.mutation(api.blocks.remove, { blockId: ideas._id });
+    await owner.mutation(api.blocks.remove, { blockId: questions._id });
+
+    const doc = defined(await owner.query(api.documents.get, { roomId }));
+    expect(
+      doc.blocks.map(({ kind, text, author }) => ({ author, kind, text }))
+    ).toStrictEqual([
+      {
+        author: { kind: "participant", participantId: robert._id },
+        kind: "paragraph",
+        text: "",
+      },
+    ]);
+    const { page } = await owner.query(api.history.list, {
+      paginationOpts: { cursor: null, numItems: 1 },
+      roomId,
+    });
+    const last = await owner.query(api.history.diff, {
+      changeSetId: defined(page[0])._id,
+    });
+    expect(last.map((r) => r.op).toSorted()).toStrictEqual([
+      "delete",
+      "insert",
+    ]);
+  });
+
   it("a person cannot save or add a block longer than a model may write, or add past the document's block limit", async () => {
     const s = await setup();
     const long = "x".repeat(4001);

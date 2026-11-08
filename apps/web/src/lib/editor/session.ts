@@ -35,10 +35,16 @@ export interface SessionApi<K extends string> {
   ) => Promise<{ rev: number; tailId: K; tailRev: number }>;
 }
 
-/** What the session holds for a block over the server's copy. */
-interface Local {
+/** What a write shows on its block, over the server's copy, until it lands. */
+interface Shown {
+  kind?: BlockKind;
   /** Typed text not yet acked; the block shows it instead of the server's. */
   text?: string;
+  checked?: boolean;
+}
+
+/** What the session holds for a block over the server's copy. */
+interface Local extends Shown {
   /** Text a refused write left behind, with the server's reason. */
   draft?: { text: string; message: string };
 }
@@ -64,6 +70,9 @@ interface Entry {
 
 const NOTHING: Local = {};
 
+// A split's new block whose split was refused has no id to write under.
+const NOT_SAVED = "The block this came from was not saved";
+
 /**
  * Blocks are addressed by key: a block's id, or for a split's new block the
  * temp key `tempKey` makes, which stays its key after the real id arrives.
@@ -80,7 +89,7 @@ export const createSession = <K extends string>(
   // shortcut: landed temps are never pruned, one small record per split; prune once the server's copy has shown them if pages stay open for days.
   let temps: readonly Temp<K>[] = [];
   const listeners = new Set<() => void>();
-  let queue = Promise.resolve();
+  let queue: Promise<unknown> = Promise.resolve();
 
   const notify = () => {
     for (const listener of listeners) {
@@ -159,6 +168,14 @@ export const createSession = <K extends string>(
         setLocal(key, { ...local(key), text: undefined });
       }
     });
+  };
+
+  // The block is gone; nothing it held is left to save or release.
+  const forget = (key: K) => {
+    const state = entries.get(key);
+    clearTimeout(state?.saveTimer);
+    clearTimeout(state?.releaseTimer);
+    entries.delete(key);
   };
 
   const release = (key: K) => {
@@ -262,6 +279,74 @@ export const createSession = <K extends string>(
     local,
 
     /**
+     * Sends a write to whole blocks, given as key and rev as shown, after
+     * their pending saves. `call` looks up each block's real id and the rev
+     * its last write returned, and returns the new revs as key and rev: null
+     * for a block the write removed. `shown` stays on the first block until
+     * the write lands; when it holds text, the write carries that text in
+     * place of the block's pending save. A refusal keeps the first block's
+     * unsaved text as a draft, and the promise rejects with it.
+     */
+    run: async (
+      blocks: readonly (readonly [K, number])[],
+      call: (
+        block: (key: K) => { id: K; rev: number }
+      ) => Promise<readonly (readonly [K, number | null])[]>,
+      shown: Shown = {}
+    ) => {
+      const first = blocks[0]?.[0];
+      for (const [key, rev] of blocks) {
+        const state = startFrom(key, rev);
+        if (key === first && shown.text !== undefined) {
+          clearTimeout(state.saveTimer);
+        } else {
+          flush(key);
+        }
+      }
+      if (first !== undefined) {
+        setLocal(first, { ...local(first), ...shown });
+      }
+      const block = (key: K) => {
+        const id = idOf(key);
+        if (id === undefined) {
+          throw new Error(NOT_SAVED);
+        }
+        return { id, rev: entry(key).baseRev };
+      };
+      const write = async () => {
+        try {
+          for (const [key, rev] of await call(block)) {
+            if (rev === null) {
+              forget(key);
+            } else {
+              entry(key).baseRev = rev;
+            }
+          }
+        } catch (error) {
+          if (first !== undefined) {
+            refuse(first, error);
+          }
+          throw error;
+        }
+        if (first !== undefined) {
+          const now = local(first);
+          const landed = <F extends keyof Shown>(field: F) =>
+            now[field] === shown[field] ? undefined : now[field];
+          setLocal(first, {
+            ...now,
+            checked: landed("checked"),
+            kind: landed("kind"),
+            text: landed("text"),
+          });
+        }
+      };
+      const done = queue.then(write);
+      // The caller hears of a refusal; the queue goes on.
+      queue = done.catch(() => null);
+      await done;
+    },
+
+    /**
      * Splits the block, keeping `headText` in it and putting the rest in a new
      * block after it. Returns the new block's key, which renders and takes
      * typing at once; its writes wait for the split.
@@ -291,7 +376,7 @@ export const createSession = <K extends string>(
         const blockId = idOf(key);
         try {
           if (blockId === undefined) {
-            throw new Error("The block this came from was not saved");
+            throw new Error(NOT_SAVED);
           }
           const result = await api.split({
             ...args,

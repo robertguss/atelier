@@ -5,7 +5,7 @@ import type { BlockMark, VersionBlock } from "~/lib/document";
 import type { Names } from "~/lib/room";
 import { cn } from "~/lib/utils";
 
-import { BlockEditor } from "./BlockEditor";
+import { BlockEditor, KindMarker } from "./BlockEditor";
 
 const MARK_STYLE: Record<BlockMark, string> = {
   added: "bg-success/10 ring-success/40",
@@ -47,24 +47,12 @@ export const VersionView = ({
           )}
         >
           <div data-block-body="" className="flex items-baseline gap-2">
-            {block.kind === "todo" ? (
-              <input
-                type="checkbox"
-                checked={block.checked ?? false}
-                disabled
-                readOnly
-                aria-label={block.text || "To-do"}
-                className="accent-primary translate-y-0.5"
-              />
-            ) : null}
-            {block.kind === "listItem" ? (
-              <span className="text-muted-foreground">•</span>
-            ) : null}
-            {numbers[i] === undefined ? null : (
-              <span className="text-muted-foreground tabular-nums">
-                {numbers[i]}.
-              </span>
-            )}
+            <KindMarker
+              kind={block.kind}
+              checked={block.checked ?? false}
+              number={numbers[i]}
+              label={block.text}
+            />
             <div className="min-w-0 flex-1">
               <BlockEditor
                 blockId={block.blockId}

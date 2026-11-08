@@ -210,8 +210,19 @@ export const remove = mutation({
     const { block, participant, now } = await loadForEdit(ctx, blockId);
     await refuseIfHeldByOther(ctx, block, participant._id, now);
     const changeSetId = await personChangeSet(ctx, block, participant._id, now);
+    const live = await liveBlocks(ctx, block.documentId);
+    const last = live.length === 1;
     await deleteBlock(ctx, changeSetId, blockId);
     await clearLease(ctx, blockId);
+    // A document always keeps a block to type in.
+    if (last) {
+      await insertBlock(ctx, changeSetId, {
+        author: { kind: "participant", participantId: participant._id },
+        kind: "paragraph",
+        order: block.order,
+        text: "",
+      });
+    }
   },
 });
 

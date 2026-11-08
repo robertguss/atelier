@@ -1,3 +1,4 @@
+import { BLOCK_KINDS } from "@atelier/shared";
 import type { BlockKind } from "@atelier/shared";
 import type { JSONContent } from "@tiptap/core";
 import { Lexer } from "marked";
@@ -9,6 +10,12 @@ export type TextKind = Exclude<BlockKind, "divider">;
 // The code kind's node cannot be called "code": inline code is the mark of that name.
 export const nodeName = (kind: TextKind) =>
   kind === "code" ? "codeBlock" : kind;
+
+export const TEXT_KINDS = BLOCK_KINDS.filter((kind) => kind !== "divider");
+
+/** The kind whose node has this name. */
+export const kindOf = (name: string): TextKind =>
+  TEXT_KINDS.find((kind) => nodeName(kind) === name) ?? "paragraph";
 
 // A stretch of text with the same formatting. Marks are keys in a fixed
 // order (outermost first), a link as `link:<href>`; a hard break is "\n".
@@ -234,4 +241,28 @@ export const fromDoc = (doc: JSONContent): string => {
   const plain = serialize(runs, (text) => text);
   const readsBack = JSON.stringify(parseRuns(plain)) === JSON.stringify(runs);
   return readsBack ? plain : serialize(runs, escapeMarkup);
+};
+
+/** The part of a block's document between two caret positions, 1 being the start of its text. */
+export const sliceDoc = (
+  doc: JSONContent,
+  from: number,
+  to = Number.POSITIVE_INFINITY
+): JSONContent => {
+  const node = doc.content?.[0];
+  let at = 1;
+  const content = (node?.content ?? []).flatMap((child) => {
+    const start = at;
+    // Text takes a position per character, a line break one.
+    at += child.type === "text" ? (child.text ?? "").length : 1;
+    const lo = Math.max(from, start) - start;
+    const hi = Math.min(to, at) - start;
+    if (hi <= lo) {
+      return [];
+    }
+    return child.type === "text"
+      ? [{ ...child, text: (child.text ?? "").slice(lo, hi) }]
+      : [child];
+  });
+  return { ...doc, content: [{ ...node, content }] };
 };

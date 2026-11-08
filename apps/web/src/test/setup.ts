@@ -35,3 +35,9 @@ globalThis.ResizeObserver ??= class {
   observe = doNothing;
   unobserve = doNothing;
 };
+
+// jsdom does no layout; ProseMirror measures text ranges to scroll the caret into view.
+Object.assign(Range.prototype, {
+  getBoundingClientRect: () => new DOMRect(),
+  getClientRects: () => document.body.getClientRects(),
+});

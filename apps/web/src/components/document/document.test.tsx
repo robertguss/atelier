@@ -1,3 +1,4 @@
+import type { BlockKind } from "@atelier/shared";
 import {
   act,
   fireEvent,
@@ -75,7 +76,7 @@ const CLAUDE = "p-claude";
 interface TestBlock {
   _id: string;
   order: string;
-  kind: "heading" | "paragraph" | "listItem";
+  kind: BlockKind;
   text: string;
   author:
     | { kind: "participant"; participantId: string }
@@ -319,37 +320,30 @@ describe("adding, deleting and moving blocks", () => {
   beforeEach(setUp);
   afterEach(tearDown);
 
-  it("adds a paragraph after a block and puts the caret in it", async () => {
+  it("adds an empty paragraph after the last block when the space below it is clicked, and puts the caret in it", async () => {
     mutationEffect(
-      "blocks:add",
+      "blockOps:insertMany",
       () => {
-        blocks.splice(
-          2,
-          0,
-          block("b-new", "a1V", "paragraph", "", ROBERT, {
+        blocks.push(
+          block("b-new", "a4", "paragraph", "", ROBERT, {
             leaseExpiresAt: Date.now() + 120_000,
             leaseHolderParticipantId: ROBERT,
           })
         );
         pushBackend();
       },
-      "b-new"
+      { blocks: [{ blockId: "b-new", rev: 5 }] }
     );
     await openRoom();
-    const paragraph = blockWith("Charge per seat.");
     fireEvent.click(
-      within(paragraph).getByRole("button", { name: "Add below" })
-    );
-    fireEvent.click(
-      within(paragraph).getByRole("button", { name: "Paragraph" })
+      screen.getByRole("button", { name: "Add a paragraph at the end" })
     );
 
     await waitFor(() => {
-      expect(mutation("blocks:add")).toHaveBeenCalledWith({
-        afterBlockId: "b1",
-        kind: "paragraph",
+      expect(mutation("blockOps:insertMany")).toHaveBeenCalledWith({
+        afterBlockId: "h2",
+        blocks: [{ kind: "paragraph", text: "" }],
         roomId: ROOM,
-        text: "",
       });
     });
     await waitFor(() => {
@@ -358,22 +352,6 @@ describe("adding, deleting and moving blocks", () => {
           must(document.querySelector('[data-block-id="b-new"]'))
         ).getByRole("textbox")
       ).toHaveFocus();
-    });
-  });
-
-  it("adds a list item at the end of a section", async () => {
-    await openRoom();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Add to Ideas & notes" })
-    );
-    fireEvent.click(screen.getByRole("button", { name: "List item" }));
-    await waitFor(() => {
-      expect(mutation("blocks:add")).toHaveBeenCalledWith({
-        endOfSectionId: "h1",
-        kind: "listItem",
-        roomId: ROOM,
-        text: "",
-      });
     });
   });
 
@@ -525,5 +503,216 @@ describe("a block's editor", () => {
     expect(screen.getByRole("textbox")).toBe(content);
     expect(content.querySelector("h3")).toHaveTextContent("Charge per team.");
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("a block's editor after a split", () => {
+  it("keeps comments pointed at the new block once its real id replaces the temporary one", () => {
+    const props = {
+      editable: true,
+      kind: "paragraph",
+      text: "per seat.",
+    } as const;
+    const { rerender } = render(<BlockEditor {...props} blockId="temp-0" />);
+    const content = startEditing("temp-0");
+    rerender(<BlockEditor {...props} blockId="b9" />);
+    expect(content.dataset.blockText).toBe("b9");
+  });
+});
+
+describe("shaping blocks with the keyboard", () => {
+  beforeEach(setUp);
+  afterEach(tearDown);
+
+  it("splits a paragraph at the caret on Enter, the new block taking the rest and the caret, and undo in the first part cannot bring the rest back", async () => {
+    mutationEffect(
+      "blockOps:split",
+      () => {
+        patchBlock(1, { rev: 2, text: "Charge" });
+        blocks.splice(
+          2,
+          0,
+          block("b9", "a1V", "paragraph", " per seat. Yearly.", ROBERT, {
+            rev: 3,
+          })
+        );
+        pushBackend();
+      },
+      { rev: 2, tailId: "b9", tailRev: 3 }
+    );
+    await openRoom();
+    const head = startEditingIn("b1");
+    const editor = editorOf(head);
+    act(() => {
+      editor.commands.insertContentAt(17, " Yearly.");
+      editor.commands.setTextSelection(7);
+    });
+    fireEvent.keyDown(head, { key: "Enter" });
+
+    expect(head).toHaveTextContent(/^Charge$/u);
+    await waitFor(() => {
+      expect(mutation("blockOps:split")).toHaveBeenCalledExactlyOnceWith({
+        baseRev: 1,
+        blockId: "b1",
+        headText: "Charge",
+        tailKind: "paragraph",
+        tailText: " per seat. Yearly.",
+      });
+    });
+    await waitFor(() => {
+      expect(blockText("b9")).toHaveFocus();
+    });
+    expect(blockText("b9")).toHaveTextContent("per seat. Yearly.");
+
+    act(() => {
+      editor.commands.undo();
+    });
+    expect(head).toHaveTextContent(/^Charge$/u);
+  });
+
+  it("turns a paragraph into an unchecked to-do when [] and a space are typed at its start", async () => {
+    mutationEffect(
+      "blockOps:setKind",
+      () => {
+        patchBlock(1, { kind: "todo", rev: 2 });
+        pushBackend();
+      },
+      { rev: 2 }
+    );
+    await openRoom();
+    const paragraph = blockWith("Charge per seat.");
+    const content = startEditingIn("b1");
+    act(() => {
+      editorOf(content).commands.insertContentAt(1, "[]");
+      editorOf(content).commands.insertContentAt(3, " ", {
+        applyInputRules: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(mutation("blockOps:setKind")).toHaveBeenCalledExactlyOnceWith({
+        baseRev: 1,
+        blockId: "b1",
+        kind: "todo",
+        text: "Charge per seat.",
+      });
+    });
+    expect(
+      within(paragraph).getByRole("checkbox", { name: "Charge per seat." })
+    ).not.toBeChecked();
+    expect(mutation("blocks:save")).not.toHaveBeenCalled();
+  });
+
+  it("opens a menu of all eight kinds on /, and choosing one turns the block into it", async () => {
+    await openRoom();
+    const content = startEditingIn("b1");
+    act(() => {
+      editorOf(content).commands.insertContentAt(17, " /");
+    });
+
+    const menu = await screen.findByRole("listbox", { name: "Block kinds" });
+    expect(
+      within(menu)
+        .getAllByRole("option")
+        .map((option) => option.firstChild?.textContent)
+    ).toStrictEqual([
+      "Heading",
+      "Paragraph",
+      "List item",
+      "To-do",
+      "Numbered item",
+      "Quote",
+      "Code",
+      "Divider",
+    ]);
+    expect(content).toHaveAttribute(
+      "aria-activedescendant",
+      within(menu).getAllByRole("option")[0]?.id
+    );
+
+    fireEvent.click(within(menu).getByRole("option", { name: /^Quote/u }));
+    await waitFor(() => {
+      expect(mutation("blockOps:setKind")).toHaveBeenCalledWith(
+        expect.objectContaining({ blockId: "b1", kind: "quote" })
+      );
+    });
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("moves through the slash menu with the arrows, and Enter on Divider puts a divider below a block that has text", async () => {
+    await openRoom();
+    const content = startEditingIn("b1");
+    act(() => {
+      editorOf(content).commands.insertContentAt(17, " /");
+    });
+    await screen.findByRole("listbox", { name: "Block kinds" });
+    fireEvent.keyDown(content, { key: "ArrowUp" });
+    expect(screen.getByRole("option", { name: /^Divider/u })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+
+    fireEvent.keyDown(content, { key: "Enter" });
+    await waitFor(() => {
+      expect(mutation("blockOps:split")).toHaveBeenCalledExactlyOnceWith({
+        baseRev: 1,
+        blockId: "b1",
+        headText: "Charge per seat. ",
+        tailKind: "divider",
+        tailText: "",
+      });
+    });
+    expect(mutation("blockOps:setKind")).not.toHaveBeenCalled();
+  });
+
+  it("turns a to-do into a paragraph on the first Backspace at its start, and merges it into the block above on the second", async () => {
+    patchBlock(2, { kind: "todo" });
+    mutationEffect(
+      "blockOps:setKind",
+      () => {
+        patchBlock(2, { kind: "paragraph", rev: 2 });
+        pushBackend();
+      },
+      { rev: 2 }
+    );
+    await openRoom();
+    const content = startEditingIn("b2");
+    act(() => {
+      editorOf(content).commands.setTextSelection(1);
+    });
+    fireEvent.keyDown(content, { key: "Backspace" });
+    await waitFor(() => {
+      expect(mutation("blockOps:setKind")).toHaveBeenCalledExactlyOnceWith({
+        baseRev: 1,
+        blockId: "b2",
+        kind: "paragraph",
+        text: "Try a free tier",
+      });
+    });
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(content, { key: "Backspace" });
+    await waitFor(() => {
+      expect(mutation("blockOps:merge")).toHaveBeenCalledExactlyOnceWith({
+        baseRev: 2,
+        blockId: "b2",
+        previousBaseRev: 1,
+      });
+    });
+  });
+
+  it("ticks a to-do at once and records the tick", async () => {
+    patchBlock(2, { kind: "todo" });
+    await openRoom();
+    const box = screen.getByRole("checkbox", { name: "Try a free tier" });
+    fireEvent.click(box);
+    expect(box).toBeChecked();
+    await waitFor(() => {
+      expect(mutation("blockOps:toggleChecked")).toHaveBeenCalledWith({
+        baseRev: 1,
+        blockId: "b2",
+        checked: true,
+      });
+    });
   });
 });

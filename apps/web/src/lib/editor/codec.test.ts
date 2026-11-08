@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { fromDoc, toDoc } from "./codec";
+import { fromDoc, sliceDoc, toDoc } from "./codec";
 
 const roundTrip = (kind: Parameters<typeof toDoc>[0], text: string) =>
   fromDoc(toDoc(kind, text));
@@ -105,5 +105,13 @@ describe("the block codec", () => {
         type: "doc",
       })
     ).toBe(String.raw`\*not\* \[a\] link`);
+  });
+
+  it("cuts a block where the caret stands, each side keeping its formatting and line breaks", () => {
+    const doc = toDoc("paragraph", "Charge **per seat**.\nYearly");
+    // Position 1 is the start of the text; "Charge per" ends at 11.
+    expect(fromDoc(sliceDoc(doc, 0, 11))).toBe("Charge **per**");
+    expect(fromDoc(sliceDoc(doc, 11))).toBe(" **seat**.\nYearly");
+    expect(fromDoc(sliceDoc(toDoc("code", "a *b*"), 3))).toBe("*b*");
   });
 });

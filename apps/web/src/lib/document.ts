@@ -12,8 +12,6 @@ export type DocBlock = DocumentData["blocks"][number];
 
 export type BlockKind = DocBlock["kind"];
 
-export const BLOCK_KINDS: BlockKind[] = ["heading", "paragraph", "listItem"];
-
 export const KIND_LABEL: Record<BlockKind, string> = {
   code: "Code",
   divider: "Divider",

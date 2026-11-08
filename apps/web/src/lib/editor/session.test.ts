@@ -351,6 +351,22 @@ describe("the editing session", () => {
       );
     });
 
+    it("runs a write on the new block under its real id once the split lands", async () => {
+      api.split.mockResolvedValue({ rev: 6, tailId: "b9", tailRev: 6 });
+      const session = open();
+      const tail = session.split(B1, 5, {
+        headText: "Charge",
+        tailKind: "todo",
+        tailText: " per seat.",
+      });
+      let seen;
+      await session.run([[tail, 0]], async (block) => {
+        seen = block(tail);
+        return await Promise.resolve([[tail, 7] as const]);
+      });
+      expect(seen).toStrictEqual({ id: "b9", rev: 6 });
+    });
+
     it("drops the tail and keeps the whole text as a draft when the split is refused", async () => {
       api.split.mockRejectedValue(
         new ConvexError({
@@ -376,6 +392,118 @@ describe("the editing session", () => {
         },
       });
       expect(api.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("other writes to whole blocks", () => {
+    it("runs after both blocks' pending saves land, on the revs they returned", async () => {
+      api.save.mockImplementation(
+        async ({ blockId }) =>
+          await Promise.resolve({ rev: blockId === B1 ? 6 : 9 })
+      );
+      const session = open();
+      session.change(B1, "Charge", 5);
+      session.change(B2, " per seat.", 8);
+      let seen;
+      await session.run(
+        [
+          [B2, 8],
+          [B1, 5],
+        ],
+        async (block) => {
+          seen = [block(B2), block(B1)];
+          return await Promise.resolve([
+            [B2, null],
+            [B1, 10],
+          ] as const);
+        }
+      );
+      expect(api.save).toHaveBeenCalledTimes(2);
+      expect(seen).toStrictEqual([
+        { id: B2, rev: 9 },
+        { id: B1, rev: 6 },
+      ]);
+
+      session.change(B1, "Charge per seat, yearly.", 6);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(api.save).toHaveBeenLastCalledWith({
+        baseRev: 10,
+        blockId: B1,
+        text: "Charge per seat, yearly.",
+      });
+    });
+
+    it("forgets a block the write removed, so leaving it releases nothing", async () => {
+      const session = open();
+      session.change(B2, " per seat.", 8);
+      await settle();
+      await session.run(
+        [[B2, 8]],
+        async () => await Promise.resolve([[B2, null] as const])
+      );
+      session.blur(B2);
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(api.stopEdit).not.toHaveBeenCalled();
+    });
+
+    it("shows a kind change at once and sends its text in place of the pending save", async () => {
+      const setKind = deferred<(readonly [string, number])[]>();
+      const call = vi.fn<(rev: number) => void>();
+      const session = open();
+      session.change(B1, "[]Ship it", 5);
+      const converted = session.run(
+        [[B1, 5]],
+        async (block) => {
+          call(block(B1).rev);
+          return await setKind.promise;
+        },
+        { kind: "todo", text: "Ship it" }
+      );
+      expect(session.local(B1)).toStrictEqual({
+        kind: "todo",
+        text: "Ship it",
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(api.save).not.toHaveBeenCalled();
+      expect(call).toHaveBeenCalledExactlyOnceWith(5);
+
+      setKind.resolve([[B1, 6]]);
+      await converted;
+      expect(session.local(B1).kind).toBeUndefined();
+      expect(session.local(B1).text).toBeUndefined();
+    });
+
+    it("hands the block back to the server's kind on refusal, keeps the text as a draft and rejects with the reason", async () => {
+      const session = open();
+      const converted = session.run(
+        [[B1, 5]],
+        async () =>
+          await Promise.reject(
+            refusal("This block changed since you last saw it")
+          ),
+        { kind: "quote", text: "Ship it" }
+      );
+      await expect(converted).rejects.toThrow(
+        "This block changed since you last saw it"
+      );
+      expect(session.local(B1)).toStrictEqual({
+        draft: {
+          message: "This block changed since you last saw it",
+          text: "Ship it",
+        },
+      });
+    });
+
+    it("shows a tick at once, until the write lands and the server's copy carries it", async () => {
+      const session = open();
+      const ticked = session.run(
+        [[B1, 5]],
+        async () => await Promise.resolve([[B1, 6] as const]),
+        { checked: true }
+      );
+      expect(session.local(B1).checked).toBeTruthy();
+      await ticked;
+      expect(session.local(B1).checked).toBeUndefined();
     });
   });
 });

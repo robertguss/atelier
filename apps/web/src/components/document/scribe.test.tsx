@@ -264,7 +264,7 @@ describe("while the scribe works", () => {
   beforeEach(setUp);
   afterEach(tearDown);
 
-  it("shows the banner with the model, who started it and the time so far, every block is read-only, and its add, move and delete are disabled", async () => {
+  it("shows the banner with the model, who started it and the time so far, every block is read-only, and adding, moving and deleting are disabled", async () => {
     working();
     await openRoom();
     const banner = screen.getByRole("region", {
@@ -280,12 +280,12 @@ describe("while the scribe works", () => {
     ]) {
       expect(editorOf(text)).toBeNull();
       const toolbar = toolbarOf(text);
-      for (const name of ["Add below", "Move up", "Move down", "Delete"]) {
+      for (const name of ["Move up", "Move down", "Delete"]) {
         expect(within(toolbar).getByRole("button", { name })).toBeDisabled();
       }
     }
     expect(
-      screen.getByRole("button", { name: "Add to Ideas & notes" })
+      screen.getByRole("button", { name: "Add a paragraph at the end" })
     ).toBeDisabled();
     expect(
       screen.getByRole("button", { name: "Call in the scribe" })
