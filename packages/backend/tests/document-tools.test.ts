@@ -2,6 +2,7 @@ import { register as registerWorkflow } from "@convex-dev/workflow/test";
 /// <reference types="vite/client" />
 import { convexTest } from "convex-test";
 import type { TestConvex } from "convex-test";
+import type { FunctionArgs } from "convex/server";
 import {
   assert,
   beforeEach,
@@ -19,6 +20,7 @@ import {
   insertBlock,
   openChangeSet,
   orderBetween,
+  patchBlock,
 } from "../convex/lib/document";
 import schema from "../convex/schema";
 import { defined, stringContaining, stringMatching } from "./support";
@@ -146,6 +148,12 @@ const tools = (t: T, turnId: Id<"turns">) => {
         kind: "paragraph",
         text,
       }),
+    addAs: async (
+      args: Omit<
+        FunctionArgs<typeof api.documentTools.addBlockForTurn>,
+        "secret" | "turnId"
+      >
+    ) => await t.mutation(api.documentTools.addBlockForTurn, { ...s, ...args }),
     comment: async (blockId: string, quote: string, body: string) =>
       await t.mutation(api.documentTools.commentForTurn, {
         ...s,
@@ -169,6 +177,13 @@ const tools = (t: T, turnId: Id<"turns">) => {
         blockId,
         text,
       }),
+    write: async (
+      args: Omit<
+        FunctionArgs<typeof api.documentTools.updateBlockForTurn>,
+        "secret" | "turnId"
+      >
+    ) =>
+      await t.mutation(api.documentTools.updateBlockForTurn, { ...s, ...args }),
   };
 };
 
@@ -491,6 +506,11 @@ describe("document tools for models", () => {
     await expect(
       tools(t, turnId).remove(added.blockId, added.rev)
     ).resolves.toMatchObject({ ok: false, reason: "being_edited" });
+    const read = await tools(t, turnId).read();
+    assert(read.ok, "the document was read");
+    expect(read.blocks.find((b) => b.id === added.blockId)).toMatchObject({
+      editingBy: "Dana",
+    });
 
     // Once her lease lapses, the model's write goes through.
     vi.advanceTimersByTime(3 * 60_000);
@@ -739,6 +759,149 @@ describe("document tools for models", () => {
       passage: "What",
       state: "settled",
     });
+  });
+
+  it("a model adds each new kind, and read_document and the next digest show its tick and number", async () => {
+    const { t, owner, roomId, claude, codex } = await setup();
+    const { turnId } = await runningTurn(t, owner, roomId, claude._id);
+    const tool = tools(t, turnId);
+    const add = async (
+      kind: "todo" | "numberedItem" | "quote" | "code" | "divider",
+      text: string,
+      checked?: boolean
+    ) =>
+      addedBlock(
+        await tool.addAs({
+          kind,
+          text,
+          ...(checked === undefined ? {} : { checked }),
+        })
+      ).blockId;
+    const todo = await add("todo", "Book the venue", true);
+    const first = await add("numberedItem", "Draft");
+    const second = await add("numberedItem", "Review");
+    const quote = await add("quote", "Ship small.");
+    const divider = await add("divider", "");
+    const code = await add("code", "const x = 1;\n  return x;");
+
+    const read = await tool.read();
+    assert(read.ok, "the document was read");
+    const shown = (id: Id<"blocks">) => {
+      const b = defined(read.blocks.find((row) => row.id === id));
+      return { checked: b.checked, kind: b.kind, number: b.number };
+    };
+    expect(
+      [todo, first, second, quote, divider, code].map(shown)
+    ).toStrictEqual([
+      { checked: true, kind: "todo", number: undefined },
+      { checked: undefined, kind: "numberedItem", number: 1 },
+      { checked: undefined, kind: "numberedItem", number: 2 },
+      { checked: undefined, kind: "quote", number: undefined },
+      { checked: undefined, kind: "divider", number: undefined },
+      { checked: undefined, kind: "code", number: undefined },
+    ]);
+
+    const { job } = await runningTurn(t, owner, roomId, codex._id);
+    const { prompt } = job.turn;
+    expect(prompt).toContain(
+      `[${todo}] todo (checked) by Claude\n  Book the venue`
+    );
+    expect(prompt).toContain(`[${first}] numberedItem #1 by Claude`);
+    expect(prompt).toContain(`[${second}] numberedItem #2 by Claude`);
+    expect(prompt).toContain(
+      `[${divider}] divider by Claude\n[${code}] code by Claude\n  const x = 1;\n    return x;`
+    );
+  });
+
+  it("a divider with text, a tick on a paragraph, empty code and an update with nothing to change are refused", async () => {
+    const { t, owner, roomId, claude } = await setup();
+    const { turnId } = await runningTurn(t, owner, roomId, claude._id);
+    const tool = tools(t, turnId);
+    const own = addedBlock(await tool.add("A note."));
+    expect([
+      await tool.addAs({ kind: "divider", text: "x" }),
+      await tool.addAs({ checked: true, kind: "paragraph", text: "A note." }),
+      await tool.addAs({ kind: "code", text: "" }),
+      await tool.write({ baseRev: own.rev, blockId: own.blockId }),
+      await tool.write({
+        baseRev: own.rev,
+        blockId: own.blockId,
+        checked: true,
+      }),
+    ]).toMatchObject([
+      { ok: false, reason: "bad_request" },
+      { ok: false, reason: "bad_request" },
+      { ok: false, reason: "empty" },
+      { ok: false, reason: "bad_request" },
+      { ok: false, reason: "bad_request" },
+    ]);
+  });
+
+  it("a model ticks its own to-do without sending text, and its old rev is then stale with the tick", async () => {
+    const { t, owner, roomId, claude } = await setup();
+    const { turnId } = await runningTurn(t, owner, roomId, claude._id);
+    const tool = tools(t, turnId);
+    const added = addedBlock(
+      await tool.addAs({ kind: "todo", text: "Write the brief" })
+    );
+    const ticked = await tool.write({
+      baseRev: added.rev,
+      blockId: added.blockId,
+      checked: true,
+    });
+    assert(ticked.ok, "the tick was written");
+    const written = await block(t, added.blockId);
+    expect({
+      checked: written.checked,
+      rev: ticked.rev > added.rev,
+      text: written.text,
+    }).toStrictEqual({ checked: true, rev: true, text: "Write the brief" });
+
+    await expect(
+      tool.write({ baseRev: added.rev, blockId: added.blockId, checked: false })
+    ).resolves.toMatchObject({
+      current: { checked: true, rev: ticked.rev },
+      ok: false,
+      reason: "stale",
+    });
+  });
+
+  it("after a person ticks a model's to-do, the model's update with its old rev is stale with the tick, and another model cannot tick it", async () => {
+    const { t, owner, roomId, documentId, claude, codex, danaP } =
+      await setup();
+    const { turnId } = await runningTurn(t, owner, roomId, claude._id);
+    const added = addedBlock(
+      await tools(t, turnId).addAs({ kind: "todo", text: "Book the venue" })
+    );
+    // Dana ticks it, as the to-do checkbox would.
+    await t.run(async (ctx) => {
+      const changeSetId = await openChangeSet(ctx, documentId, {
+        actorParticipantId: danaP._id,
+        kind: "human_edit",
+      });
+      await patchBlock(ctx, changeSetId, added.blockId, {
+        checked: true,
+        humanEditedAt: Date.now(),
+      });
+    });
+
+    await expect(
+      tools(t, turnId).update(added.blockId, added.rev, "Book the hall")
+    ).resolves.toMatchObject({
+      current: { changedBy: "Dana", checked: true, text: "Book the venue" },
+      ok: false,
+      reason: "stale",
+    });
+
+    const codexTurn = await runningTurn(t, owner, roomId, codex._id);
+    const current = await block(t, added.blockId);
+    await expect(
+      tools(t, codexTurn.turnId).write({
+        baseRev: current.rev,
+        blockId: added.blockId,
+        checked: false,
+      })
+    ).resolves.toMatchObject({ ok: false, reason: "not_your_block" });
   });
 
   it("a phrase from team chat never reaches a digest, a tool result or a claim payload", async () => {

@@ -24,3 +24,16 @@ export const numberedPositions = (
     return run === 0 ? undefined : run;
   });
 };
+
+// How a block's kind reads to a model, the same in the prompt digest and in
+// read_document: a to-do with its tick, a numbered item with its number.
+export const kindLabel = (
+  kind: BlockKind,
+  checked: boolean | undefined,
+  number: number | undefined
+) => {
+  if (kind === "todo") {
+    return `todo (${checked === true ? "checked" : "unchecked"})`;
+  }
+  return number === undefined ? kind : `${kind} #${number}`;
+};

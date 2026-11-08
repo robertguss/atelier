@@ -482,6 +482,7 @@ export default defineSchema({
     afterSeq: v.optional(v.number()),
     atStart: v.optional(v.boolean()),
     blockId: v.optional(v.id("blocks")),
+    checked: v.optional(v.boolean()),
     kind: v.optional(blockKind),
     op: v.union(
       v.literal("keep"),

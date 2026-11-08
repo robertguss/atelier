@@ -12,7 +12,8 @@ import { randomUUID } from "node:crypto";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { api } from "@atelier/backend/api";
 import type { Id } from "@atelier/backend/dataModel";
-import type { QuestionAnswer, QuestionCard } from "@atelier/shared";
+import { BLOCK_KINDS, kindLabel } from "@atelier/shared";
+import type { BlockKind, QuestionAnswer, QuestionCard } from "@atelier/shared";
 import type { ConvexClient } from "convex/browser";
 import type { FunctionReturnType } from "convex/server";
 import { z } from "zod";
@@ -31,7 +32,7 @@ interface Refusal {
   ok: false;
   reason: string;
   message: string;
-  current?: { text: string; rev: number; changedBy: string };
+  current?: { text: string; rev: number; changedBy: string; checked?: boolean };
 }
 
 /**
@@ -88,6 +89,16 @@ const baseRev = z
   .int()
   .describe("The rev of the block when you last read it.");
 
+const BLOCK_TEXT_RULE =
+  "One block is one paragraph or item, with no block-level markdown inside it. Its kind carries its marker, so its text never starts with `- `, `1. `, `> ` or `[ ]` and is never wrapped in code fences. Code text is kept exactly as written, a divider's text is empty, and a line break is \\n.";
+const blockKind = z.enum(BLOCK_KINDS);
+const blockText = z
+  .string()
+  .describe("The text of this one block, without its kind's marker.");
+const checked = z
+  .boolean()
+  .describe("Whether the to-do is ticked. Only a to-do has it.");
+
 const DOCUMENT_PURPOSE =
   "The room document is the shared, current record of this session that the people in the room and every model keep together: what has happened, findings, ideas, changes of direction and open questions.";
 
@@ -100,6 +111,9 @@ const renderRefusal = (refusal: Refusal) => {
   let text = `Not done (${refusal.reason}): ${refusal.message}`;
   if (refusal.current) {
     text += `\n\nCurrent text, rev ${refusal.current.rev}, last changed by ${refusal.current.changedBy}:\n${refusal.current.text}`;
+    if (refusal.current.checked !== undefined) {
+      text += `\nThe to-do is ${refusal.current.checked ? "checked" : "unchecked"}.`;
+    }
   }
   return text;
 };
@@ -144,7 +158,7 @@ const renderDocument = (doc: DocumentView) => {
   for (const b of doc.blocks) {
     const notes = [
       `block ${b.id}`,
-      b.kind,
+      kindLabel(b.kind, b.checked, b.number),
       b.yours ? "by you" : `by ${b.author}`,
       `rev ${b.rev}`,
     ];
@@ -155,7 +169,13 @@ const renderDocument = (doc: DocumentView) => {
           : "edited by a person"
       );
     }
-    lines.push(`- ${notes.join(" | ")}`, indent(b.text));
+    if (b.editingBy !== undefined) {
+      notes.push(`being edited by ${b.editingBy}`);
+    }
+    lines.push(`- ${notes.join(" | ")}`);
+    if (b.kind !== "divider") {
+      lines.push(indent(b.text));
+    }
   }
   lines.push("", "Comment threads:");
   if (!doc.threads.length) {
@@ -258,7 +278,7 @@ export const documentTools: RoomToolSet = [
   defineTool({
     description:
       `${DOCUMENT_PURPOSE} Keep it current without being asked: whenever something in the session is worth keeping, add it as a short block in the section it belongs to. ` +
-      "A block is one heading, paragraph or list item. Put it at the end of a section with endOfSectionId (the section heading's id), right after a block with afterBlockId, or at the end of the document with neither. Returns the new block's id and rev.",
+      `${BLOCK_TEXT_RULE} Put it at the end of a section with endOfSectionId (the section heading's id), right after a block with afterBlockId, or at the end of the document with neither. Returns the new block's id and rev.`,
     name: "add_block",
     async run({ convex, secret, turnId }, args) {
       const added = await convex.mutation(api.documentTools.addBlockForTurn, {
@@ -275,18 +295,20 @@ export const documentTools: RoomToolSet = [
         .string()
         .optional()
         .describe("Put the block right after this block."),
+      checked: checked.optional(),
       endOfSectionId: z
         .string()
         .optional()
         .describe("Put the block at the end of this heading's section."),
-      kind: z.enum(["heading", "paragraph", "listItem"]),
-      text: z.string().describe("Markdown text of this one block."),
+      kind: blockKind,
+      text: blockText,
     },
   }),
   defineTool({
     description:
-      "Replace the text of a block you wrote, to keep your contribution current. You can only change your own blocks: to respond to anyone else's, use comment. " +
-      "Pass the rev you read as baseRev. If someone changed the block since then, nothing is written and you get its current text. Build on that text, and never undo a person's edit: if you disagree, comment.",
+      "Replace the text of a block you wrote, to keep your contribution current, or tick or untick your own to-do with checked. Send text, checked or both. You can only change your own blocks: to respond to anyone else's, use comment. " +
+      "Pass the rev you read as baseRev. If someone changed the block since then, nothing is written and you get its current text. Build on that text, and never undo a person's edit: if you disagree, comment. " +
+      `If a person is editing the block, try again later in your turn or comment instead. ${BLOCK_TEXT_RULE}`,
     name: "update_block",
     async run({ convex, secret, turnId }, args) {
       const updated = await convex.mutation(
@@ -300,7 +322,8 @@ export const documentTools: RoomToolSet = [
     shape: {
       baseRev,
       blockId: blockIdShape,
-      text: z.string().describe("The full new text of the block."),
+      checked: checked.optional(),
+      text: z.string().optional().describe("The full new text of the block."),
     },
   }),
   defineTool({
@@ -487,12 +510,14 @@ type DraftOp =
       op: "replace";
       blockId: string;
       text: string;
-      kind?: "heading" | "paragraph" | "listItem";
+      kind?: BlockKind;
+      checked?: boolean;
       sourceBlockIds?: string[];
     }
   | {
       op: "add";
-      kind: "heading" | "paragraph" | "listItem";
+      kind: BlockKind;
+      checked?: boolean;
       text: string;
       sourceBlockIds: string[];
       afterBlockId?: string;
@@ -564,12 +589,14 @@ export const scribeTools: RoomToolSet = [
         .describe(
           "A block id from read_document, or a draft id (new-N) from draft_add."
         ),
-      kind: z
-        .enum(["heading", "paragraph", "listItem"])
+      checked: checked
+        .optional()
+        .describe("Tick or untick the to-do; leave it out to keep its tick."),
+      kind: blockKind
         .optional()
         .describe("Change the kind of block; leave it out to keep it."),
       sourceBlockIds: sourceBlockIds.optional(),
-      text: z.string().describe("The full new text of the block."),
+      text: blockText,
     },
   }),
   defineTool({
@@ -586,9 +613,10 @@ export const scribeTools: RoomToolSet = [
     },
     shape: {
       afterBlockId: placeAfter,
-      kind: z.enum(["heading", "paragraph", "listItem"]),
+      checked: checked.optional(),
+      kind: blockKind,
       sourceBlockIds,
-      text: z.string().describe("Markdown text of this one block."),
+      text: blockText,
     },
   }),
   defineTool({

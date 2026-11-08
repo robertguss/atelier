@@ -49,6 +49,7 @@ export interface DraftItem {
   original?: Doc<"blocks">;
   kind: Doc<"blocks">["kind"];
   text: string;
+  checked?: boolean;
   // Set once the scribe writes the block: the blocks it draws from.
   sources?: Id<"blocks">[];
   removed: boolean;
@@ -79,6 +80,7 @@ export const buildDraft = (
   const order: string[] = [];
   for (const b of blocks) {
     items.set(b._id, {
+      checked: b.checked,
       key: b._id,
       kind: b.kind,
       mentioned: false,
@@ -100,9 +102,11 @@ export const buildDraft = (
   for (const op of ops) {
     if (op.op === "add") {
       const key = draftId(op.seq);
+      const kind = required(op.kind, "kind");
       items.set(key, {
+        checked: kind === "todo" ? (op.checked ?? false) : undefined,
         key,
-        kind: required(op.kind, "kind"),
+        kind,
         mentioned: true,
         removed: false,
         sources: op.sourceBlockIds ?? [],
@@ -120,6 +124,7 @@ export const buildDraft = (
     if (op.op === "keep") {
       const original = required(item.original, "block");
       Object.assign(item, {
+        checked: original.checked,
         kind: original.kind,
         removed: false,
         sources: undefined,
@@ -129,8 +134,11 @@ export const buildDraft = (
       const own = item.original ? [item.original._id] : [];
       const sources =
         op.sourceBlockIds ?? (item.original ? [] : (item.sources ?? []));
+      const kind = op.kind ?? item.kind;
+      // A rewrite keeps a to-do's tick unless it says otherwise.
       Object.assign(item, {
-        kind: op.kind ?? item.kind,
+        checked: kind === "todo" ? (op.checked ?? item.checked) : undefined,
+        kind,
         removed: false,
         sources: [...new Set([...own, ...sources])],
         text: required(op.text, "text"),
@@ -400,6 +408,7 @@ const applyPlan = async (
       // oxlint-disable-next-line eslint/no-await-in-loop -- revisions are numbered in the order they are written
       const blockId = await insertBlock(ctx, changeSetId, {
         author: author(item.sources ?? []),
+        checked: item.checked,
         kind: item.kind,
         order: required(order, "order"),
         sourceBlockIds: item.sources,
@@ -410,6 +419,7 @@ const applyPlan = async (
       const written = item.sources
         ? {
             author: author(item.sources),
+            checked: item.checked,
             humanEditedAt: undefined,
             kind: item.kind,
             sourceBlockIds: item.sources,
