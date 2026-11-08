@@ -28,6 +28,18 @@ import { renderAt } from "~/test/render";
 
 import { BlockEditor } from "./BlockEditor";
 
+// The element comments read a block's text from.
+const blockText = (blockId: string) =>
+  screen.getByText(
+    (_, el) => el instanceof HTMLElement && el.dataset.blockText === blockId
+  );
+
+// A block shows static text until the pointer reaches it, then its editor.
+const startEditing = (blockId: string) => {
+  fireEvent.pointerEnter(blockText(blockId));
+  return screen.getByRole("textbox");
+};
+
 vi.mock(import("convex/react"), async () => {
   const { convexMock } = await import("~/test/backend");
   return convexMock;
@@ -556,14 +568,27 @@ describe("a block's editor", () => {
         onChange={onChange}
       />
     );
-    const content = screen.getByRole("textbox");
-    expect(content).toHaveAttribute("data-block-text", "b1");
-    expect(content).toHaveAttribute("contenteditable", "false");
+    const content = blockText("b1");
     expect(content).toHaveTextContent("Charge per seat.");
     expect(within(content).getByText("per seat").tagName).toBe("STRONG");
+    fireEvent.pointerEnter(content);
     fireEvent.focus(content);
     fireEvent.blur(content);
+    expect(screen.queryByRole("textbox")).toBeNull();
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("never renders a model's script link as a live link", () => {
+    render(
+      <BlockEditor
+        blockId="b1"
+        kind="paragraph"
+        // oxlint-disable-next-line eslint/no-script-url -- the script link is what this test feeds in
+        text="[click](javascript:alert(1))"
+        editable={false}
+      />
+    );
+    expect(document.body.innerHTML).not.toContain("javascript");
   });
 
   it("reports the new text as markdown once the person changes it", () => {
@@ -577,7 +602,7 @@ describe("a block's editor", () => {
         onChange={onChange}
       />
     );
-    const content = screen.getByRole("textbox");
+    const content = startEditing("b1");
     fireEvent.focus(content);
     fireEvent.blur(content);
     expect(onChange).not.toHaveBeenCalled();
@@ -593,7 +618,7 @@ describe("a block's editor", () => {
     const { rerender } = render(
       <BlockEditor {...props} kind="paragraph" text="Charge per seat." />
     );
-    const content = screen.getByRole("textbox");
+    const content = startEditing("b1");
     rerender(
       <BlockEditor {...props} kind="paragraph" text="Charge per *team*." />
     );

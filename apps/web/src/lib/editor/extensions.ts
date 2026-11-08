@@ -1,12 +1,13 @@
 import { BLOCK_KINDS } from "@atelier/shared";
-import { mergeAttributes, Node } from "@tiptap/core";
+import { getSchema, mergeAttributes, Node } from "@tiptap/core";
 import type { AnyExtension } from "@tiptap/core";
 import { Placeholder } from "@tiptap/extensions";
+import { DOMSerializer, Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { StarterKit } from "@tiptap/starter-kit";
 
 import { KIND_LABEL } from "~/lib/document";
 
-import { nodeName } from "./codec";
+import { nodeName, toDoc } from "./codec";
 import type { TextKind } from "./codec";
 
 // A block's editor holds exactly one node, whose type is the block's kind.
@@ -71,3 +72,12 @@ export const blockExtensions: AnyExtension[] = [
     placeholder: ({ node }) => LABEL.get(node.type.name) ?? "",
   }),
 ];
+
+const schema = getSchema(blockExtensions);
+const serializer = DOMSerializer.fromSchema(schema);
+
+/** The block as its editor would render it, without the cost of an editor. */
+export const staticContent = (kind: TextKind, text: string) =>
+  serializer.serializeFragment(
+    ProseMirrorNode.fromJSON(schema, toDoc(kind, text)).content
+  );

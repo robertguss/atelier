@@ -399,9 +399,7 @@ describe("a selected version", () => {
 
   it("shows that version read-only, and goes back to the list", async () => {
     const { panel, version } = await openDanaEdit();
-    for (const text of within(version).getAllByRole("textbox")) {
-      expect(text).toHaveAttribute("contenteditable", "false");
-    }
+    expect(within(version).queryByRole("textbox")).toBeNull();
     expect(
       within(version).queryByRole("button", { name: /^Edit/u })
     ).not.toBeInTheDocument();
