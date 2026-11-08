@@ -14,7 +14,7 @@ execution: code
 - **Objective:** People in a room write the shared document the way they write in Notion: click anywhere and type, press Enter for the next block, shape blocks with slash commands and markdown shortcuts, tick to-dos, drag blocks into place, and never meet an Edit button. Two people still cannot type in the same block at once, and everyone, models included, can see who is editing which block.
 - **Means:** One Tiptap editor per block row over the existing blocks table, with silent per-block leases (KTD2, KTD5). `@convex-dev/prosemirror-sync` is not adopted (KD1).
 - **Authority:** Product Contract R-IDs own behavior; Planning Contract KTDs own mechanism; a unit overrides neither. Where docs and code disagree, code is truth (project rule). `docs/plans/2026-11-06-1730-feat-room-document-plan.md` remains the record for everything this plan does not change.
-- **Stop conditions:** Stop and report rather than improvise if (a) the browser spike in U5 shows per-block editors cannot deliver arrow-through, Enter split and Backspace merge at acceptable latency, (b) no `@tiptap/*` 3.32+ release installs under pnpm's minimum release age, or (c) the production data check in U5 finds block-level markdown inside blocks is common enough to need a migration (Assumption A5).
+- **Stop conditions:** Stop and report rather than improvise if (a) the browser spike in U5 shows per-block editors cannot deliver arrow-through, Enter split and Backspace merge at acceptable latency, or (b) no `@tiptap/*` 3.32+ release installs under pnpm's minimum release age.
 - **Execution profile:** One PR, Deep plan, ten dependency-ordered units. No project rule requires a split, and nothing must reach production before the rest.
 - **Who finishes:** The implementing agent lands the PR through the pre-push gates and the real-browser checks in the Verification Contract and commits per unit; Robert reviews and merges.
 
@@ -122,9 +122,8 @@ Robert asked to consider `@convex-dev/prosemirror-sync` to make multiplayer docu
 #### Deferred to Follow-Up Work
 
 - Block-selection mode: drag across blocks to select whole blocks, then move or delete them together.
-- Undo and redo of split and merge across blocks (Assumption A4).
-- A one-off migration splitting legacy block-level markdown into rows, if the production data check in U5 says it is needed (Assumption A5).
-- `kind` on `update_block` and models ticking to-dos written by others (Assumption A3).
+- Undo and redo of split and merge across blocks (Assumption A3).
+- `kind` on `update_block` and models ticking to-dos written by others (Assumption A2).
 - Viewer presence.
 
 ---
@@ -146,10 +145,9 @@ Robert asked to consider `@convex-dev/prosemirror-sync` to make multiplayer docu
 - KTD11. **Custom drag handle plus keyboard reorder, calling `moveTo`.** A React handle using native pointer events, with Alt+Shift+Up/Down as the keyboard path and aria-live announcements. `@tiptap/extension-drag-handle-react` is not used: its peers pull in yjs and collaboration (+44 KB gzip) and it targets nodes inside one document. A block held by someone else cannot be dragged. Governs R5.
 - KTD12. **The lease is the presence signal.** `documents.get` already carries `leaseHolderParticipantId`; the block gutter shows the holder's avatar or initials and "Name is editing", announced via aria-live; `read_document` prints "being edited by Name". No viewer presence. Governs R15.
 - KTD13. **Comments keep the rendered-text to markdown-source projection.** Every block content element, editable or read-only, carries `data-block-text=<id>`; `apps/web/src/lib/selection.ts` (`sourceRange`, `selectionIn`, `renderedRange`) stays the mapping, not ProseMirror positions. Highlights are recomputed on editor transactions and on thread changes instead of on React render. The to-do checkbox and numbered counter contribute no text to the container. Governs R24.
-- KTD14. **History grouping per person session (Assumption A1).** `changeSets` gains `lastAt` and an index by actor and document; `personChangeSet` reuses the actor's open `human_edit` change set while its `lastAt` is within 2 minutes, across blocks and structural ops, and otherwise opens a new one. `leaseChangeSetId` stays as the "has written" marker for KTD5. The history label becomes "Edits by Name" with a block count.
-- KTD15. **Agent surface: no new tools, widen three, add one field.** `add_block` accepts the new kinds and optional `checked` (to-do only); `update_block` gains optional `checked` with `text` optional when `checked` is given, at least one required; `checkText` is kind-aware (divider requires empty text); `stale` returns `checked`; `patchBlock` classifies a checked change as an update; draft ops carry `checked` and `buildDraft` preserves it on replace. Models never get `move`. Governs R25, R26, R27.
-- KTD16. **Tests at three seams.** Pure modules (codec, keymap, session, numbering) under vitest; backend mutations under convex-test with fake timers; a few editor-instance tests under jsdom for mount, read-only and `data-block-text`; typing, selection and drag proven in a real browser, because jsdom cannot type into contenteditable.
-- KTD17. **A kind change swaps the editor's node type in place.** The editor applies a kind change as a transaction that replaces its one top-level node with the new type and the codec's content, whether the change comes from local input (applied optimistically, then `setKind`) or from `documents.get` (another person, restore, scribe), so the editor is never remounted and a kind change with identical text still reaches it. Remote kind changes follow the same not-dirty rule as remote text. Undoing a conversion is Mod+Z immediately after it, which reverts the node locally and sends `setKind` back to the previous kind; any structural mutation (split, merge, conversion) clears the affected editors' undo history, so Mod+Z can never re-insert text that now lives in another block. Governs R4.
+- KTD14. **Agent surface: no new tools, widen three, add one field.** `add_block` accepts the new kinds and optional `checked` (to-do only); `update_block` gains optional `checked` with `text` optional when `checked` is given, at least one required; `checkText` is kind-aware (divider requires empty text); `stale` returns `checked`; `patchBlock` classifies a checked change as an update; draft ops carry `checked` and `buildDraft` preserves it on replace. Models never get `move`. Governs R25, R26, R27.
+- KTD15. **Tests at three seams.** Pure modules (codec, keymap, session, numbering) under vitest; backend mutations under convex-test with fake timers; a few editor-instance tests under jsdom for mount, read-only and `data-block-text`; typing, selection and drag proven in a real browser, because jsdom cannot type into contenteditable.
+- KTD16. **A kind change swaps the editor's node type in place.** The editor applies a kind change as a transaction that replaces its one top-level node with the new type and the codec's content, whether the change comes from local input (applied optimistically, then `setKind`) or from `documents.get` (another person, restore, scribe), so the editor is never remounted and a kind change with identical text still reaches it. Remote kind changes follow the same not-dirty rule as remote text. Undoing a conversion is Mod+Z immediately after it, which reverts the node locally and sends `setKind` back to the previous kind; any structural mutation (split, merge, conversion) clears the affected editors' undo history, so Mod+Z can never re-insert text that now lives in another block. Governs R4.
 
 ### High-Level Technical Design
 
@@ -253,13 +251,12 @@ Rules that apply across kinds: Enter at the start of a non-empty block inserts a
 
 Product-visible bets the user has not confirmed. Each is built as stated unless Robert says otherwise.
 
-- A1. History groups a person's continuous editing into one entry: the open `human_edit` change set is reused while the last write was under 2 minutes ago, across blocks and structural ops, and the label changes from "Edit by Name" to "Edits by Name" with a block count (KTD14).
-- A2. Enter-created empty blocks persist as rows and count toward 600; deleting the last remaining block leaves one empty paragraph; clicking the space below the last block appends an empty paragraph.
-- A3. A model cannot tick a to-do written by someone else and comments instead; a person cannot tick a to-do another person is editing; a person's tick on a model's to-do sets `humanEditedAt`.
-- A4. Undo and redo are per block editor; undoing a split or merge across blocks is deferred.
-- A5. Legacy and model-written text containing block-level markdown (multiple paragraphs, nested lists, headings inside a paragraph, tables) renders as inline text with hard breaks. U5 checks production data first; a one-off split migration is planned only if such blocks are common.
-- A6. Viewer presence and block-selection mode are deferred.
-- A7. The blur and hidden-tab grace releases the lease after flushing; a parked caret with no typing never blocks the scribe.
+- A1. Enter-created empty blocks persist as rows and count toward 600; deleting the last remaining block leaves one empty paragraph; clicking the space below the last block appends an empty paragraph.
+- A2. A model cannot tick a to-do written by someone else and comments instead; a person cannot tick a to-do another person is editing; a person's tick on a model's to-do sets `humanEditedAt`.
+- A3. Undo and redo are per block editor; undoing a split or merge across blocks is deferred.
+- A4. Legacy and model-written text containing block-level markdown (multiple paragraphs, nested lists, headings inside a paragraph, tables) is split into rows by a one-off migration whenever the U5 production check finds any such block; model text written after U4 follows R10.
+- A5. Viewer presence and block-selection mode are deferred.
+- A6. The blur and hidden-tab grace releases the lease after flushing; a parked caret with no typing never blocks the scribe.
 
 ### Risks
 
@@ -269,7 +266,7 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 | Mounting 600 editors is slow                                                                                                         | KTD2 mount budget with a measured fallback in U5                                                                                                             |
 | Lease writes invalidate `documents.get` for every viewer                                                                             | Leases only on content change (KTD5), 30 s renewal throttle, 3 s blur grace; acceptable at room scale                                                        |
 | Debounced saves inflate `blockRevisions` and checkpoints                                                                             | 1 s idle debounce and flush at boundaries (KTD8); coalescing is a recorded non-goal                                                                          |
-| jsdom cannot drive contenteditable                                                                                                   | KTD16 seams; real-browser checks are part of done                                                                                                            |
+| jsdom cannot drive contenteditable                                                                                                   | KTD15 seams; real-browser checks are part of done                                                                                                            |
 | Convex bundling of a workspace package import from `convex/`                                                                         | `@atelier/shared` is plain TS with no runtime deps; U1 confirms `npx convex dev --once` bundles it before anything depends on it                             |
 | `@tiptap/*` release refused by pnpm's minimum release age                                                                            | KTD1 pins 3.32.2; never loosen the setting                                                                                                                   |
 | Human drag, tick and split bump the document rev that doubles as block rev, so models hit `stale` more often                         | Accepted; `stale` now carries `checked` and current text so the model recovers in one call                                                                   |
@@ -281,7 +278,7 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 | U-ID | Title                                     | Key files                                                                                                                 | Depends on |
 | ---- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------- |
 | U1   | Shared kinds, `checked`, numbering        | `packages/shared/src/blocks.ts`, `convex/schema.ts`, `convex/lib/document.ts`, `convex/documents.ts`, `convex/history.ts` | none       |
-| U2   | Leases, CAS and history grouping          | `convex/lib/leases.ts`, `convex/blocks.ts`, `convex/scribe.ts`, `convex/history.ts`                                       | U1         |
+| U2   | Leases and CAS                            | `convex/lib/leases.ts`, `convex/blocks.ts`, `convex/scribe.ts`, `convex/history.ts`                                       | U1         |
 | U3   | Structural mutations and thread re-homing | `convex/blockOps.ts`, `convex/lib/threads.ts`, `convex/lib/scribe.ts`                                                     | U2         |
 | U4   | Agent surface                             | `convex/documentTools.ts`, `convex/lib/documentDigest.ts`, `convex/lib/scribe.ts`, `runner/src/room-tools.ts`             | U1         |
 | U5   | Editor foundation and browser spike       | `apps/web/src/lib/editor/codec.ts`, `extensions.ts`, `components/document/BlockEditor.tsx`, `VersionView.tsx`             | U1         |
@@ -295,7 +292,7 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 
 **Goal:** Every layer agrees on the eight kinds and the `checked` field from one source, and history records a checked change.
 
-**Requirements:** R9, R11, R13; KTD3, KTD15 (the `patchBlock` classification).
+**Requirements:** R9, R11, R13; KTD3, KTD14 (the `patchBlock` classification).
 
 **Dependencies:** none.
 
@@ -325,11 +322,11 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 
 **Verification:** `pnpm typecheck` passes with no hand-copied kind union left in `packages/backend`; the restore test proves `checked` survives history.
 
-### U2. Leases, compare-and-set and history grouping
+### U2. Leases and compare-and-set
 
 **Goal:** Silent leases are safe: one lease per person, writes are compare-and-set, lapsed leases retake silently, and scribe and restore are blocked only by people who have written.
 
-**Requirements:** R17, R18, R19, R20; KTD5, KTD6, KTD14; Assumption A1.
+**Requirements:** R17, R18, R19, R20; KTD5, KTD6.
 
 **Dependencies:** U1.
 
@@ -338,23 +335,21 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 - `packages/backend/convex/lib/leases.ts` (new: moved `loadForEdit`, `refuseIfHeldByOther`, `grantLease`, `personChangeSet`, plus `writingLeaseHolder` and `releaseOtherLeases`)
 - `packages/backend/convex/blocks.ts` (`startEdit`, `stopEdit`, `save` with `baseRev`; `renew` stays until U10 removes its last caller)
 - `packages/backend/convex/lib/document.ts` (`anyLeaseHolder` becomes written-lease aware or is replaced by the `leases.ts` helper)
-- `packages/backend/convex/schema.ts` (`changeSets.lastAt`, index by actor and document)
-- `packages/backend/convex/scribe.ts` (`begin` uses the written-lease guard and clears caret-only leases), `packages/backend/convex/history.ts` (`restore` guard, `list` label data)
+- `packages/backend/convex/scribe.ts` (`begin` uses the written-lease guard and clears caret-only leases), `packages/backend/convex/history.ts` (`restore` guard)
 - `packages/backend/tests/blocks.test.ts`, `packages/backend/tests/scribe.test.ts`, `packages/backend/tests/history.test.ts`
 
 **Approach:**
 
 1. Move the lease helpers out of `blocks.ts` unchanged, then change them: every grant goes through the one helper that releases the caller's other leases (KTD7), and `startEdit` keeps `leaseChangeSetId` when re-granting (it already does), so it is also the renewal call.
 2. `save` takes `baseRev` (optional until U10 removes the Textarea caller, required after); it refuses with a conflict error carrying current `text`, `checked` and `rev` on mismatch, refuses when someone else holds the block, otherwise grants itself the lease and patches; it returns the new rev. Same-text saves still only renew.
-3. `personChangeSet` looks up the actor's latest `human_edit` change set for the document and reuses it when `lastAt` is within 2 minutes; `openChangeSet` and `recordRevision` maintain `lastAt`.
+3. `personChangeSet` keeps today's rule: saves under one lease share that lease's change set, and every structural mutation (U3) opens its own.
 4. Guards in `scribe.begin` and `history.restore` use `writingLeaseHolder` (lease unexpired and `leaseChangeSetId` set); `scribe.begin` clears every other live lease before locking.
-5. Update `blocks.test.ts` cases that assert per-lease change sets and the LAPSED refusal. `renew` and the lapsed-lease text are deleted in U10 together with their last web caller, so every commit typechecks.
+5. Update the `blocks.test.ts` cases that assert the LAPSED refusal. `renew` and the lapsed-lease text are deleted in U10 together with their last web caller, so every commit typechecks.
 
 **Patterns to follow:** `vi.useFakeTimers` lease tests in `blocks.test.ts`; `refuseIfHeldByOther` messages shown by `errorText`.
 
 **Test scenarios:**
 
-- Two saves on different blocks within 2 minutes by one person join one change set; a save after a 3 minute gap opens another.
 - A save with a stale `baseRev` is refused with the current text, and the block is unchanged.
 - After 2 minutes idle, the same person's save with the right `baseRev` succeeds and re-grants the lease; if the teammate took the block meanwhile, the save is refused naming her.
 - `startEdit` on block B while holding block A releases A.
@@ -368,7 +363,7 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 
 **Goal:** Split, merge, convert, tick, move and multi-insert are single atomic mutations that keep comments attached.
 
-**Requirements:** R12, R22, R23; KTD6, KTD7; Assumption A3 (`humanEditedAt` on a model's to-do).
+**Requirements:** R12, R22, R23; KTD6, KTD7; Assumption A2 (`humanEditedAt` on a model's to-do).
 
 **Dependencies:** U2.
 
@@ -381,8 +376,8 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 
 **Approach:**
 
-1. Each mutation loads through `lib/leases.ts`, checks `baseRev` on every touched block, takes one `personChangeSet`, and composes `insertBlock`, `patchBlock`, `deleteBlock`.
-2. `split`: patch head text, insert tail with the given kind and `checked`, re-home head's threads across head and tail (a thread whose passage straddles the split point stays on the head, re-anchored to the part of its quote the head keeps), grant the lease on the tail, return both revs and the tail id. `merge`: refuse if the previous block is held by someone else or the joined text passes `BLOCK_CHARS`; patch previous with appended text (newline join for code, space-free concatenation otherwise), delete current, re-home current's threads onto previous. `setKind`: patch kind and text together; set `humanEditedAt` when not the actor's block. `toggleChecked`: no lease; refused if held by another; records an update; sets `humanEditedAt` on a model's block. `moveTo(blockId, afterBlockId | null)`: `orderBetween` the neighbours. `insertMany(afterBlockId | null, blocks[])`: refuse whole when the count would pass `DOCUMENT_BLOCKS` or any text passes `BLOCK_CHARS`; grant the lease on the last inserted block.
+1. Each mutation loads through `lib/leases.ts`, checks `baseRev` on every touched block, opens one `human_edit` change set, and composes `insertBlock`, `patchBlock`, `deleteBlock`.
+2. `split`: patch head text, insert tail with the given kind and `checked`, re-home head's threads across head and tail (a thread whose passage straddles the split point stays on the head, re-anchored to the part of its quote the head keeps), grant the lease on the tail, return both revs and the tail id. `merge`: refuse if the previous block is held by someone else or the joined text passes `BLOCK_CHARS`; patch previous with appended text (newline join for code, space-free concatenation otherwise), delete current, re-home current's threads onto previous. `setKind`: patch kind and text together; set `humanEditedAt` when not the actor's block. `toggleChecked`: no lease; refused if held by another; records an update; sets `humanEditedAt` on a model's block. `moveTo(blockId, afterBlockId | null)`: `orderBetween` the neighbours. `insertMany(afterBlockId | null, blocks[], source?)`: `source` is `{ baseRev, headText, tailText }` for a paste inside block `afterBlockId`; in the same mutation it patches that block to `headText`, inserts the rows after it, appends `tailText` to the last row, and re-homes the block's threads across the block and the last row. Refuse whole when the resulting count would pass `DOCUMENT_BLOCKS` or any resulting text passes `BLOCK_CHARS`; grant the lease on the last inserted block.
 3. `rehomeThreads` generalizes the `sourceBlockIds` loop in `commitScribe`: for each open thread on a source block, `matchQuote` against each candidate block's text and attach to the best match or detach.
 
 **Patterns to follow:** `blocks.add` fractional ordering with `orderBetween`; `commitScribe` thread handling; `rejectionsOf` in `tests/support.ts`.
@@ -397,6 +392,7 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 - `toggleChecked` while another person holds the block is refused.
 - `moveTo` places a block at the top and after an arbitrary block; a block held by the teammate cannot be moved.
 - `insertMany` of three blocks at 598 blocks is refused whole with the count in the message; at 596 it inserts three with the lease on the last.
+- `insertMany` with a `source` keeps the head in the source block, puts the original tail at the end of the last pasted row, moves a thread anchored in the tail to that row, and records one change set; with a stale source `baseRev` nothing changes.
 - A stale `baseRev` on any of the six is refused with current text.
 
 **Verification:** `block-ops.test.ts` covers every mutation's happy path and refusals. `blocks.add` and `blocks.move` stay until U10 removes their last callers.
@@ -405,7 +401,7 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 
 **Goal:** Models and the scribe read and write the new kinds and `checked` correctly, and know which blocks people are editing.
 
-**Requirements:** R10, R25, R26, R27; KTD3, KTD15; Assumption A3.
+**Requirements:** R10, R25, R26, R27; KTD3, KTD14; Assumption A2.
 
 **Dependencies:** U1.
 
@@ -444,7 +440,7 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 
 **Goal:** A block renders and edits as a Tiptap editor whose document is exactly its kind and inline-markdown text, and untouched text survives mount and blur unchanged.
 
-**Requirements:** R1, R2, R8, R9, R10, R11, R13; KTD1, KTD2, KTD3, KTD4; Assumption A5.
+**Requirements:** R1, R2, R8, R9, R10, R11, R13; KTD1, KTD2, KTD3, KTD4; Assumption A4.
 
 **Dependencies:** U1.
 
@@ -461,10 +457,11 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 
 1. Codec: `toDoc(kind, text)` and `fromDoc(kind, doc)`; `code` maps raw text to a code node and back; inline-only parsing for the other kinds; `\n` inside a text kind maps to a hard break both ways.
 2. One extension per kind, no list wrapper nodes, so each row is one node. A numbered item renders the number the shared numbering helper computes for it (passed as a prop), the same helper history and digest use (R11); no CSS counters. Marks use StarterKit's default shortcuts and inline input rules (Mod+B, Mod+I, `**x**`, backticks); links come from autolink and pasting a URL over a selection, with no link editing popover in this version.
-3. `BlockEditor` creates the editor once per block id, never recreates it on prop changes, applies remote kind changes per KTD17 and remote text through a transaction only when the editor's serialized text differs and the block is not dirty (dirty tracking arrives in U6; here, `onChange` is a plain callback), and never calls `onChange` from mount or blur.
+3. `BlockEditor` creates the editor once per block id, never recreates it on prop changes, applies remote kind changes per KTD16 and remote text through a transaction only when the editor's serialized text differs and the block is not dirty (dirty tracking arrives in U6; here, `onChange` is a plain callback), and never calls `onChange` from mount or blur.
 4. `VersionView` renders every kind and `checked` through read-only `BlockEditor` instances or the codec's static render, whichever the spike picks; `BlockText` is deleted in U10.
+5. If the production check finds any block whose text holds block-level markdown, an internal one-off migration in `packages/backend/convex/migrations.ts` splits each such block into rows of the matching kinds with markers stripped per R10, one change set per document, re-homing threads through `lib/threads.ts`. It lands after U3 and before U6 puts the editor in front of people.
 
-**Execution note:** Start with the real-browser spike and record its numbers in the PR: mount a 600-block document and time first paint against the 500 ms budget (KTD2); confirm text selection and `selectionchange` work inside an `editable: false` editor; confirm a CSS highlight Range survives a transaction in a neighbouring editor; type then blur every kind and assert `rev` and `text` unchanged. Query production data for blocks whose text contains block-level markdown before choosing the A5 path, and stop if they are common.
+**Execution note:** Start with the real-browser spike and record its numbers in the PR: mount a 600-block document and time first paint against the 500 ms budget (KTD2); confirm text selection and `selectionchange` work inside an `editable: false` editor; confirm a CSS highlight Range survives a transaction in a neighbouring editor; type then blur every kind and assert `rev` and `text` unchanged. Query production data for blocks whose text contains block-level markdown (blank-line paragraphs, leading list, heading or quote markers, fences, tables); if the query finds any, step 5's migration is in scope.
 
 **Patterns to follow:** `renderAt` and `convexMock` in `apps/web/src/test`; `oxlint-disable-next-line ... -- reason` only where a fix would change behavior.
 
@@ -482,7 +479,7 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 
 **Goal:** Typing anywhere just works: leases are taken on the first keystroke, saves debounce and chain with the right rev, refusals revert to server text with a draft notice, and holders are visible.
 
-**Requirements:** R14, R15, R16, R17, R18, R19, R21; KTD5, KTD6, KTD8, KTD12; Assumption A7.
+**Requirements:** R14, R15, R16, R17, R18, R19, R21; KTD5, KTD6, KTD8, KTD12; Assumption A6.
 
 **Dependencies:** U2, U5.
 
@@ -521,7 +518,7 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 
 **Goal:** Enter, Backspace, arrows, markdown shortcuts and the slash menu behave per the KTD9 table and every kind looks and acts like its Notion counterpart.
 
-**Requirements:** R3, R4, R9, R12, R22, R23; KTD9, KTD10; Assumption A2.
+**Requirements:** R3, R4, R9, R12, R22, R23; KTD9, KTD10; Assumption A1.
 
 **Dependencies:** U3, U6.
 
@@ -539,7 +536,7 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 1. `keymap.ts` is a pure function from (kind, key, caret at start or end, block empty, previous block kind and holder, next block exists) to an intent; the table in KTD9 is its specification and its test.
 2. The editor extension maps key events to `keymap` and the component executes: `splitSame` and `splitParagraph` through `session.split` with head and tail from the codec; `mergeIntoPrevious` through `session.merge` when the previous block is free or mine, otherwise a hint naming the holder; `convertToParagraph` and slash or shortcut conversions through `session.setKind` with text re-serialized by the codec; `insertAbove`, `insertBelow` and divider insertion through `session.insertMany`; `focusPrevious` and `focusNext` move focus with the caret on the last or first line at the same horizontal offset where possible.
 3. Slash menu: `@tiptap/suggestion` with `char: '/'`, items from `BLOCK_KINDS` with labels and a short description, keyboard navigation, mousedown prevented on items; choosing a kind on a non-empty block converts in place, except divider, which inserts below. Text typed after `/` filters by label; no match shows "No results" and Enter inserts nothing; Escape closes the menu and leaves the typed text. The menu never opens in a code block or a read-only editor. The popup is a listbox with `aria-activedescendant` on the highlighted option.
-4. Conversions and their undo follow KTD17.
+4. Conversions and their undo follow KTD16.
 5. Caret-only movement never touches the session (R14).
 
 **Patterns to follow:** `components/ui` primitives with `@base-ui/react` and `cva`; `Switch` for the checkbox's accessible state or a native checkbox styled with Tailwind.
@@ -556,7 +553,7 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 - Component: after a split, Mod+Z in the head block does not bring the tail text back.
 - Component: typing `[] ` at the start of a paragraph converts it to an unchecked to-do through `setKind`, and `/` opens the menu listing eight kinds.
 
-**Verification:** `keymap.test.ts` covers the table; in the browser each kind is created by shortcut and by slash menu, Enter and Backspace follow the table, and History shows one entry per editing session.
+**Verification:** `keymap.test.ts` covers the table; in the browser each kind is created by shortcut and by slash menu, Enter and Backspace follow the table, and History shows one entry per block edited and one per structural edit.
 
 ### U8. Drag and keyboard reorder, multi-block paste, caps in the editor
 
@@ -576,7 +573,7 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 **Approach:**
 
 1. The handle is a `button` with `aria-label="Reorder block"`; pointer drag shows an indicator between blocks and calls `moveTo(afterBlockId | null)` on drop; Alt+Shift+Up/Down calls `moveTo` with the neighbour and announces "Moved to position N of M" through the existing aria-live region; the handle is disabled with the holder's name when another person holds the block. A pointer drag auto-scrolls near the viewport edges, Escape or a drop outside the list cancels with no mutation, and after any move focus stays on the moved block's handle so the keyboard move can repeat.
-2. Paste: a single-line paste is a normal edit; text with blank-line separators becomes a list of (kind, text) rows through `paste.ts`, which recognizes leading markers (`# `, `- `, `1. `, `[ ] `, `> `, fences, `---`) to pick kinds and strip markers per R10; the remainder of the current block becomes the last row; one `insertMany` call; a refusal keeps the pasted text in the draft notice.
+2. Paste: a single-line paste is a normal edit; text with blank-line separators becomes a list of (kind, text) rows through `paste.ts`, which recognizes leading markers (`# `, `- `, `1. `, `[ ] `, `> `, fences, `---`) to pick kinds and strip markers per R10; the paste sends the current block's `baseRev` with the head and tail around the caret from the codec as `insertMany`'s `source`, so trimming the block, inserting the rows and carrying the tail onto the last row are one mutation and one history entry; a refusal keeps the pasted text in the draft notice.
 3. Caps: the editor rejects input that would pass 4,000 characters and shows a counter from 3,800; insert affordances are disabled at 600 blocks.
 
 **Patterns to follow:** `Block.tsx` toolbar visibility on hover and focus; Tailwind utility classes for the indicator.
@@ -645,7 +642,7 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 **Approach:**
 
 1. Remove each replaced path and let `pnpm check` (Knip) list what became unused; delete it.
-2. Rewrite the docs sections from the code: click to type, shortcuts and slash menu, silent locks shown as avatars, Enter and Backspace, drag handle, to-do and divider, restore returns checked state, the scribe refusal wording for people with edits in progress, and the history label.
+2. Rewrite the docs sections from the code: click to type, shortcuts and slash menu, silent locks shown as avatars, Enter and Backspace, drag handle, to-do and divider, restore returns checked state, and the scribe refusal wording for people with edits in progress.
 3. Audit tests: delete cases that only exercised the Textarea flow or restate type checks; keep one test per behavior with a specific name; confirm coverage stays at or above 85% per workspace with `pnpm coverage`.
 
 **Patterns to follow:** docs written in the plain style of `docs/room-document.md`; code wins where they differ.
@@ -658,18 +655,18 @@ Product-visible bets the user has not confirmed. Each is built as stated unless 
 
 ## Verification Contract
 
-| Check                                      | Command or action                                              | Proves                                                                           |
-| ------------------------------------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Lint, format, unused code and dependencies | `pnpm check`                                                   | No vestigial code; new deps and exports used                                     |
-| Types across workspaces                    | `pnpm typecheck`                                               | Shared kinds flow to Convex, runner and web with no hand copies                  |
-| Unit tests                                 | `pnpm test`                                                    | Backend mutations (U1-U4), pure editor modules and component seams (U5-U9)       |
-| Coverage                                   | `pnpm coverage`                                                | At least 85% per workspace; no coverage-only tests added to reach it             |
-| Backend push                               | `npx convex dev --once` from `packages/backend`                | Schema with `checked` and `lastAt` deploys; the `@atelier/shared` import bundles |
-| Runner refresh                             | restart the runner per `LEARNINGS.md` (Web end-to-end testing) | Agents receive the widened tool schemas and descriptions                         |
+| Check                                      | Command or action                                              | Proves                                                                     |
+| ------------------------------------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Lint, format, unused code and dependencies | `pnpm check`                                                   | No vestigial code; new deps and exports used                               |
+| Types across workspaces                    | `pnpm typecheck`                                               | Shared kinds flow to Convex, runner and web with no hand copies            |
+| Unit tests                                 | `pnpm test`                                                    | Backend mutations (U1-U4), pure editor modules and component seams (U5-U9) |
+| Coverage                                   | `pnpm coverage`                                                | At least 85% per workspace; no coverage-only tests added to reach it       |
+| Backend push                               | `npx convex dev --once` from `packages/backend`                | Schema with `checked` deploys; the `@atelier/shared` import bundles        |
+| Runner refresh                             | restart the runner per `LEARNINGS.md` (Web end-to-end testing) | Agents receive the widened tool schemas and descriptions                   |
 
 Real-browser checks on the exe.dev deployment, two browsers as two people, recorded in the PR:
 
-1. Click into a paragraph and type: no Edit button, avatar appears for the other person within a second, no history entry until the first save, one entry for a multi-block editing session (A1).
+1. Click into a paragraph and type: no Edit button, avatar appears for the other person within a second, no history entry until the first save, one entry per block edited.
 2. AE1: both click the same block within 100 ms and type; the loser sees the draft notice.
 3. Each of the eight kinds created by markdown shortcut, by slash menu, and by Enter continuation; Backspace per the table; `/divider` on a non-empty block inserts below; code block exit with Mod+Enter.
 4. AE2 and merge: comments follow a split and a merge; History shows one entry each; restore brings back a ticked to-do.
@@ -686,38 +683,12 @@ Real-browser checks on the exe.dev deployment, two browsers as two people, recor
 
 ## Definition of Done
 
-- Every R1-R28 is observable in the browser checks above or proven by a named test; Assumptions A1-A7 are built as stated or changed by Robert's answer.
+- Every R1-R28 is observable in the browser checks above or proven by a named test; Assumptions A1-A6 are built as stated or changed by Robert's answer.
 - `pnpm check`, `pnpm typecheck`, `pnpm test` and `pnpm coverage` pass from the repo root with coverage at or above 85% in `packages/backend`, `packages/shared`, `apps/web` and `runner`; hooks were never bypassed.
 - The Textarea `BlockEditor`, `BlockText`, `AddChoices`, Move up and Move down, Edit, the read/edit toggle, the Retake path, `blocks.add`, `blocks.move`, `blocks.renew` and the LAPSED message are deleted, and Knip reports nothing unused.
 - Abandoned spike code, fallback branches that the measured spike did not select, and experimental extensions are removed from the diff; the spike's numbers live in the PR description, not the code.
 - All `@tiptap/*` packages are on one pinned version and the lockfile installs under pnpm's minimum release age without changing that setting.
-- `docs/room-document.md` describes the new surface, locks, kinds, history label and limits, and matches the code.
+- `docs/room-document.md` describes the new surface, locks, kinds and limits, and matches the code.
 - The runner on the VM was restarted so agents see the new tool schemas, and the Convex dev deployment carries the new schema.
 - Per unit: U1-U4 each have passing backend tests named for the behavior; U5 records spike results; U6-U9 each have their pure-module tests and one component seam test; U10 leaves the test suites smaller or equal in count with no test that exercises deleted code.
 - Each unit is committed as it lands, staging only the files it changed.
-
----
-
-## Deferred / Open Questions
-
-These are review items left for the author. They do not block implementation.
-
-### From 2026-11-07 review
-
-- **Pasting into the middle of a block can lose or duplicate the text after the caret** — U3 Structural mutations and U8 Multi-block paste (P1, whole-doc cross-model reviewer, confidence 75)
-
-  The paste flow keeps the current block's text after the caret as the last pasted row, but the multi-insert mutation only inserts rows after a block and cannot also trim the source block. Doing that trim as a separate save breaks the promise of one atomic mutation and one history entry per paste, and a failure between the two writes loses or duplicates text.
-
-  Change: let the multi-insert mutation take the source block's rev and split point, so in one mutation it keeps the head in the source block, inserts the pasted rows, and puts the original tail on the last row; count the result against the 600-block cap.
-
-- **The legacy-markdown migration trigger is a judgment call ("common enough")** — Assumption A5 and the U5 production data check (P2, adversarial cross-model reviewer, confidence 75)
-
-  The rule that stored text never contains a kind marker covers every block, but whether existing rows get migrated depends on an undefined threshold, so implementers can leave different sets of legacy rows unconverted while each believes the rule holds.
-
-  Change: run the split migration whenever the U5 production check finds any block whose text holds block-level markdown, instead of only when such blocks are "common".
-
-- **Cross-block history grouping adds stored state no requirement asks for** — KTD14 history grouping and Assumption A1 (P2, scope-guardian, confidence 50)
-
-  Atomic split and merge already fix the "Enter makes two history entries" problem. Grouping a person's edits across blocks for 2 minutes adds a new change-set field, a new index and a new history label, and changes what one restore point means. Without it, a page of writing shows one history entry per block edited, which people would notice right away in History and could ask to change.
-
-  Change: drop KTD14 and A1, keep one change set per lease plus one per structural mutation, and remove the change-set field, index and label work from U2.
