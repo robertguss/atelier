@@ -33,6 +33,7 @@ export const get = query({
       blocks: blocks.map((b) => ({
         _id: b._id,
         author: b.author,
+        checked: b.checked,
         humanEditedAt: b.humanEditedAt,
         kind: b.kind,
         leaseExpiresAt: b.leaseExpiresAt,

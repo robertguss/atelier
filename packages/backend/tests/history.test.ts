@@ -13,6 +13,8 @@ import {
   openChangeSet,
   orderBetween,
   patchBlock,
+  takeCheckpoint,
+  versionAt,
 } from "../convex/lib/document";
 import schema from "../convex/schema";
 import { closeTo, defined } from "./support";
@@ -453,6 +455,55 @@ describe("document history", () => {
       "First finding",
       { kind: "participant", participantId: claude._id },
       about(restoredAt),
+    ]);
+  });
+
+  it("ticking a to-do is recorded as an update, survives a checkpoint, and restoring the version before unticks it", async () => {
+    const { t, owner, roomId, claude, documentId, happened } = await setup();
+    const todoId = await t.run(async (ctx) => {
+      const changeSetId = await openChangeSet(ctx, documentId, {
+        actorParticipantId: claude._id,
+        kind: "model_turn",
+      });
+      return await insertBlock(ctx, changeSetId, {
+        author: { kind: "participant", participantId: claude._id },
+        kind: "todo",
+        order: orderBetween(happened.order, null),
+        text: "Ship it",
+      });
+    });
+    const beforeTick = await latestChangeSet(owner, roomId);
+    await t.run(async (ctx) => {
+      const changeSetId = await openChangeSet(ctx, documentId, {
+        actorParticipantId: claude._id,
+        kind: "model_turn",
+      });
+      await patchBlock(ctx, changeSetId, todoId, { checked: true });
+      await takeCheckpoint(ctx, documentId, "interval");
+    });
+    const tickId = await latestChangeSet(owner, roomId);
+
+    const diff = await owner.query(api.history.diff, { changeSetId: tickId });
+    expect(
+      diff.map((r) => [r.op, r.before?.checked, r.after?.checked])
+    ).toStrictEqual([["update", undefined, true]]);
+    // Rebuilt from the checkpoint taken after the tick.
+    const ticked = await t.run(async (ctx) => {
+      const document = defined(await ctx.db.get(documentId));
+      const blocks = await versionAt(ctx, documentId, document.rev);
+      return blocks.find((b) => b.blockId === todoId)?.checked;
+    });
+    expect(ticked).toBeTruthy();
+
+    await owner.mutation(api.history.restore, { changeSetId: beforeTick });
+    const restored = defined(
+      defined(await owner.query(api.documents.get, { roomId })).blocks.find(
+        (b) => b._id === todoId
+      )
+    );
+    expect([restored.kind, restored.checked]).toStrictEqual([
+      "todo",
+      undefined,
     ]);
   });
 

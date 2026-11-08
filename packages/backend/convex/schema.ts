@@ -1,3 +1,4 @@
+import { BLOCK_KINDS } from "@atelier/shared";
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
@@ -52,11 +53,12 @@ export const cardAnswer = v.object({
   questionId: v.string(),
 });
 
-// The room document. A block is one heading, paragraph or list item.
+// The room document. A block is one heading, paragraph, item, quote, code
+// block or divider.
+const [firstKind, ...otherKinds] = BLOCK_KINDS;
 export const blockKind = v.union(
-  v.literal("heading"),
-  v.literal("paragraph"),
-  v.literal("listItem")
+  v.literal(firstKind),
+  ...otherKinds.map((kind) => v.literal(kind))
 );
 
 // Who a block is attributed to: the participant who wrote it, or the scribe,
@@ -86,6 +88,8 @@ export const changeSetKind = v.union(
 // A block as history and checkpoints record it.
 export const blockState = v.object({
   author: blockAuthor,
+  // A to-do's tick. Unset means unticked, and is the only value other kinds have.
+  checked: v.optional(v.boolean()),
   kind: blockKind,
   order: v.string(),
   text: v.string(),
@@ -123,6 +127,7 @@ export default defineSchema({
   // array. Deleted blocks keep their row, with `deletedAt` set.
   blocks: defineTable({
     author: blockAuthor,
+    checked: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     documentId: v.id("documents"),
     // Guidance text a template seeded, cleared once the text is changed, so

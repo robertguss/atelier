@@ -15,9 +15,14 @@ export type BlockKind = DocBlock["kind"];
 export const BLOCK_KINDS: BlockKind[] = ["heading", "paragraph", "listItem"];
 
 export const KIND_LABEL: Record<BlockKind, string> = {
+  code: "Code",
+  divider: "Divider",
   heading: "Heading",
   listItem: "List item",
+  numberedItem: "Numbered item",
   paragraph: "Paragraph",
+  quote: "Quote",
+  todo: "To-do",
 };
 
 // The server lets a lease lapse two minutes after its last renewal; renewing

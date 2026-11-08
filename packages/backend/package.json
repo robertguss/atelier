@@ -14,6 +14,7 @@
     "coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@atelier/shared": "workspace:*",
     "@convex-dev/workflow": "^0.4.10",
     "convex": "^1.49.0",
     "fractional-indexing": "4.0.0"

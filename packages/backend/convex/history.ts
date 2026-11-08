@@ -155,8 +155,8 @@ const restoreRow = async (
     }
     return;
   }
-  const { order, kind, text, author } = wanted;
-  const state = { author, kind, order, text };
+  const { order, kind, text, author, checked } = wanted;
+  const state = { author, checked, kind, order, text };
   const ownBlock =
     author.kind === "participant" && author.participantId === participantId;
   const edited = ownBlock ? {} : { humanEditedAt: now };
@@ -166,6 +166,7 @@ const restoreRow = async (
     row.order !== order ||
     row.kind !== kind ||
     row.text !== text ||
+    row.checked !== checked ||
     !sameAuthor(row.author, author)
   ) {
     await patchBlock(ctx, restoreId, row._id, {

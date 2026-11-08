@@ -1,0 +1,26 @@
+// The kinds of block a room document holds. Convex validators, the runner's
+// tool schemas and the web editor all build from this one list.
+export const BLOCK_KINDS = [
+  "heading",
+  "paragraph",
+  "listItem",
+  "todo",
+  "numberedItem",
+  "quote",
+  "code",
+  "divider",
+] as const;
+
+export type BlockKind = (typeof BLOCK_KINDS)[number];
+
+// A numbered item's number is its place in the run of consecutive numbered
+// items it belongs to. Nothing stores it, so moves renumber for free.
+export const numberedPositions = (
+  kinds: readonly BlockKind[]
+): (number | undefined)[] => {
+  let run = 0;
+  return kinds.map((kind) => {
+    run = kind === "numberedItem" ? run + 1 : 0;
+    return run === 0 ? undefined : run;
+  });
+};

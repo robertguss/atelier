@@ -110,6 +110,7 @@ export const openChangeSet = async (
 
 const stateOf = (block: Doc<"blocks">): BlockState => ({
   author: block.author,
+  checked: block.checked,
   kind: block.kind,
   order: block.order,
   text: block.text,
@@ -192,9 +193,9 @@ export const insertBlock = async (
     roomId: document.roomId,
     ...fields,
   });
-  const { order, kind, text, author } = fields;
+  const { order, kind, text, author, checked } = fields;
   await recordRevision(ctx, {
-    after: { author, kind, order, text },
+    after: { author, checked, kind, order, text },
     blockId,
     changeSetId,
     documentId: document._id,
@@ -207,7 +208,13 @@ export const insertBlock = async (
 export type BlockPatch = Partial<
   Pick<
     Doc<"blocks">,
-    "order" | "kind" | "text" | "author" | "humanEditedAt" | "sourceBlockIds"
+    | "order"
+    | "kind"
+    | "text"
+    | "checked"
+    | "author"
+    | "humanEditedAt"
+    | "sourceBlockIds"
   >
 >;
 
@@ -223,7 +230,10 @@ export const patchBlock = async (
   const after = stateOf({ ...block, ...fields });
   const textChanged = after.text !== before.text;
   const op =
-    after.order !== before.order && !textChanged && after.kind === before.kind
+    after.order !== before.order &&
+    !textChanged &&
+    after.kind === before.kind &&
+    after.checked === before.checked
       ? "move"
       : "update";
   const { rev, document } = await nextRev(ctx, changeSetId);
@@ -320,8 +330,8 @@ export const versionAt = async (
       .query("checkpointBlocks")
       .withIndex("by_checkpoint", (q) => q.eq("checkpointId", checkpoint._id))
       .collect();
-    for (const { blockId, order, kind, text, author } of rows) {
-      blocks.set(blockId, { author, kind, order, text });
+    for (const { blockId, order, kind, text, author, checked } of rows) {
+      blocks.set(blockId, { author, checked, kind, order, text });
     }
   }
   const revisions = await ctx.db
