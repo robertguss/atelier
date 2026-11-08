@@ -22,6 +22,7 @@ import {
 } from "./lib/document";
 import {
   grantLease,
+  humanEdit,
   loadForEdit,
   personChangeSet,
   refuseIfHeldByOther,
@@ -122,12 +123,9 @@ export const save = mutation({
     }
     const changeSetId = await personChangeSet(ctx, block, participant._id, now);
     await grantLease(ctx, block, participant._id, now, changeSetId);
-    const ownBlock =
-      block.author.kind === "participant" &&
-      block.author.participantId === participant._id;
     const rev = await patchBlock(ctx, changeSetId, blockId, {
       text,
-      ...(ownBlock ? {} : { humanEditedAt: now }),
+      ...humanEdit(block, participant._id, now),
     });
     return { rev };
   },

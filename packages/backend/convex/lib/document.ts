@@ -183,6 +183,7 @@ export const insertBlock = async (
   changeSetId: Id<"changeSets">,
   fields: BlockState & {
     fromTemplate?: boolean;
+    humanEditedAt?: number;
     sourceBlockIds?: Id<"blocks">[];
   }
 ) => {

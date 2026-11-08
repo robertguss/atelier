@@ -2,7 +2,6 @@ import { generateNKeysBetween } from "fractional-indexing";
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { matchQuote, selectorAt } from "./anchor";
 import type { Selector } from "./anchor";
 import {
   deleteBlock,
@@ -14,6 +13,7 @@ import {
   takeCheckpoint,
 } from "./document";
 import { required } from "./required";
+import { bestHome, rehomeThreads } from "./threads";
 
 // A scribe run rewrites the document as one draft. The scribe's turn records
 // small operations, one row each; nothing touches the document until the
@@ -215,14 +215,10 @@ export type ThreadOutcome =
   | { key: string; selector: Selector }
   | null;
 
-// Where an attached thread ends up. A thread whose block the draft leaves
-// alone stays put. Otherwise its passage is looked for in the block's new
-// text, then in each block that lists its block as a source, in document
-// order. Null means the passage is gone and the thread detaches.
-export const resolveThread = (
-  thread: Doc<"threads">,
-  plan: DraftPlan
-): ThreadOutcome => {
+// Where an attached thread's passage may now be: the block's new text and
+// each block that lists its block as a source. A thread whose block the
+// draft leaves alone stays put.
+const threadHomes = (thread: Doc<"threads">, plan: DraftPlan) => {
   const item = plan.items.get(thread.blockId);
   if (!item || (!item.removed && item.sources === undefined)) {
     return "unchanged";
@@ -230,16 +226,21 @@ export const resolveThread = (
   const successors = finalItems(plan).filter(
     (i) => i !== item && i.sources?.includes(thread.blockId) === true
   );
-  for (const candidate of item.removed ? successors : [item, ...successors]) {
-    const match = matchQuote(candidate.text, thread);
-    if (match) {
-      return {
-        key: candidate.key,
-        selector: selectorAt(candidate.text, match.start, match.end),
-      };
-    }
+  return item.removed ? successors : [item, ...successors];
+};
+
+// Where an attached thread ends up: the home that holds its passage best.
+// Null means the passage is gone and the thread detaches.
+export const resolveThread = (
+  thread: Doc<"threads">,
+  plan: DraftPlan
+): ThreadOutcome => {
+  const homes = threadHomes(thread, plan);
+  if (homes === "unchanged") {
+    return "unchanged";
   }
-  return null;
+  const found = bestHome(thread, homes);
+  return found && { key: found.home.key, selector: found.selector };
 };
 
 export const draftOps = async (ctx: QueryCtx, scribeRunId: Id<"scribeRuns">) =>
@@ -479,25 +480,20 @@ export const commitScribe = async (ctx: MutationCtx, turn: Doc<"turns">) => {
   });
 
   // Threads open when the turn ended, including any started during the run.
-  const outcomes = threads.map((thread) => ({
-    outcome: resolveThread(thread, plan),
-    thread,
-  }));
   await Promise.all(
-    outcomes.map(async ({ outcome, thread }) => {
-      if (outcome === "unchanged") {
+    threads.map(async (thread) => {
+      const homes = threadHomes(thread, plan);
+      if (homes === "unchanged") {
         return;
       }
-      const blockId = outcome ? ids.get(outcome.key) : undefined;
-      await ctx.db.patch(
-        thread._id,
-        outcome && blockId
-          ? {
-              blockId,
-              ...outcome.selector,
-              detachedBeforeChangeSetId: undefined,
-            }
-          : { detachedBeforeChangeSetId: changeSetId }
+      await rehomeThreads(
+        ctx,
+        [thread],
+        homes.map((home) => ({
+          blockId: required(ids.get(home.key), "block id"),
+          text: home.text,
+        })),
+        changeSetId
       );
     })
   );

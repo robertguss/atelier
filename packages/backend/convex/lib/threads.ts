@@ -1,6 +1,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { matchQuote, selectorAt } from "./anchor";
+import type { Selector } from "./anchor";
 import { dispatchNext } from "./dispatch";
 import { record } from "./ledger";
 import { required } from "./required";
@@ -159,5 +160,75 @@ export const detachThreads = async (
           detachedBeforeChangeSetId: changeSetId,
         });
       })
+  );
+};
+
+// The block's open threads that are still attached to their passage.
+export const attachedThreadsOn = async (
+  ctx: QueryCtx,
+  blockId: Id<"blocks">
+) => {
+  const threads = await threadsOn(ctx, blockId);
+  return threads.filter(
+    (thread) =>
+      thread.state === "open" && thread.detachedBeforeChangeSetId === undefined
+  );
+};
+
+// A block text a thread's passage may have moved into. `shift` maps the
+// passage's old position into this text, when the caller knows it.
+export interface ThreadHome {
+  text: string;
+  shift?: number;
+}
+
+// The candidate whose text holds the passage best, with fresh selectors for
+// it there, or null when none holds it.
+export const bestHome = <H extends ThreadHome>(
+  selector: Selector,
+  candidates: H[]
+) => {
+  let best: { home: H; start: number; end: number; score: number } | null =
+    null;
+  for (const home of candidates) {
+    const match = matchQuote(home.text, {
+      ...selector,
+      position: selector.position + (home.shift ?? 0),
+    });
+    if (match && (!best || match.score > best.score)) {
+      best = { home, ...match };
+    }
+  }
+  return (
+    best && {
+      home: best.home,
+      selector: selectorAt(best.home.text, best.start, best.end),
+    }
+  );
+};
+
+// Moves each thread onto the candidate block that holds its passage best, or
+// detaches it by this change set when none does. Used when a change splits,
+// joins or rewrites blocks, so a passage may now live in another block.
+export const rehomeThreads = async (
+  ctx: MutationCtx,
+  threads: Doc<"threads">[],
+  candidates: (ThreadHome & { blockId: Id<"blocks"> })[],
+  changeSetId: Id<"changeSets">
+) => {
+  await Promise.all(
+    threads.map(async (thread) => {
+      const found = bestHome(thread, candidates);
+      await ctx.db.patch(
+        thread._id,
+        found
+          ? {
+              blockId: found.home.blockId,
+              ...found.selector,
+              detachedBeforeChangeSetId: undefined,
+            }
+          : { detachedBeforeChangeSetId: changeSetId }
+      );
+    })
   );
 };

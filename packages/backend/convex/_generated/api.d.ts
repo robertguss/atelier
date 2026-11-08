@@ -9,6 +9,7 @@
  */
 
 import type * as agent from "../agent.js";
+import type * as blockOps from "../blockOps.js";
 import type * as blocks from "../blocks.js";
 import type * as crons from "../crons.js";
 import type * as documentTools from "../documentTools.js";
@@ -54,6 +55,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   agent: typeof agent;
+  blockOps: typeof blockOps;
   blocks: typeof blocks;
   crons: typeof crons;
   documentTools: typeof documentTools;

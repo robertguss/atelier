@@ -66,6 +66,18 @@ export const refuseIfStale = (block: Doc<"blocks">, baseRev: number) => {
   }
 };
 
+// The mark a person's write leaves on a block someone else wrote. The block
+// keeps its author.
+export const humanEdit = (
+  block: Doc<"blocks">,
+  participantId: Id<"participants">,
+  now: number
+) =>
+  block.author.kind === "participant" &&
+  block.author.participantId === participantId
+    ? {}
+    : { humanEditedAt: now };
+
 // Every lease is granted here, so taking one releases the person's others.
 export const grantLease = async (
   ctx: MutationCtx,
