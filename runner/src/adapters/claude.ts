@@ -465,6 +465,13 @@ const turnOptions = (
                   req.scribe === true ? scribeTools : claudeTools
                 ),
               },
+              // Context-mode replaces large tool replies with a search pointer,
+              // but that plugin's search needs approval this room cannot give.
+              // Keep room reads intact without widening tool permissions or
+              // changing the user's settings outside this turn.
+              settings: {
+                enabledPlugins: { "context-mode@context-mode": false },
+              },
             }
           : {}),
         ...sessionOptions(req),

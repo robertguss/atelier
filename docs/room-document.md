@@ -130,6 +130,11 @@ what you typed; **Discard my draft** gives it up.
 
 ### What the models do
 
+Claude room turns disable the `context-mode@context-mode` plugin for that turn:
+its large-output replacement requires a search tool that the room cannot
+approve. This keeps document reads available without changing global plugin
+settings or granting extra tool permissions. Other plugins still load.
+
 The models are told to keep the document current without being asked:
 whenever something in the session is worth keeping, they add a short block in
 the section it belongs to. They can write every kind of block, and are told to

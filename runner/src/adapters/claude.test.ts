@@ -963,6 +963,10 @@ describe(claudeHarness, () => {
       "--setting-sources=user,project,local",
       "--permission-mode=default",
       "--include-partial-messages",
+      "--settings",
+      JSON.stringify({
+        enabledPlugins: { "context-mode@context-mode": false },
+      }),
     ]);
     expect(atelierToolNames(calls)).toStrictEqual([
       "read_document",
@@ -976,6 +980,23 @@ describe(claudeHarness, () => {
     ]);
     expect(JSON.stringify(calls)).not.toMatch(/ROOM-TOKEN-SECRET|40123/u);
   });
+
+  it.each([{ resumeSessionId: "ordinary-session" }, { scribe: true }])(
+    "keeps large room replies readable for resumed and scribe turns: %j",
+    async (mode) => {
+      const { calls } = await runFake([init, result("ok")], {
+        ...mode,
+        roomTools,
+      });
+      const argv = at(calls[0], "argv");
+      assert(Array.isArray(argv));
+      expect(
+        JSON.parse(String(argv[argv.indexOf("--settings") + 1]))
+      ).toStrictEqual({
+        enabledPlugins: { "context-mode@context-mode": false },
+      });
+    }
+  );
 
   it("canUseTool allows the Atelier document tools and still denies other unapproved tools", async () => {
     const { decision } = await runFake(
