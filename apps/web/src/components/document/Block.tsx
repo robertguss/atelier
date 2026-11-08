@@ -6,11 +6,10 @@ import {
   ArrowUpIcon,
   MessageSquareIcon,
   MessageSquarePlusIcon,
-  PencilIcon,
   PlusIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 
 import { errorText } from "~/components/room/errors";
@@ -23,11 +22,11 @@ import {
   openThreadsText,
 } from "~/lib/document";
 import type { BlockKind, DocBlock, Passage } from "~/lib/document";
+import type { Session } from "~/lib/editor/session";
 import type { Names, Participant } from "~/lib/room";
 import { cn, hasContent, logFailure } from "~/lib/utils";
 
-import { BlockText } from "./BlockText";
-import { TextareaBlockEditor } from "./TextareaBlockEditor";
+import { BlockEditor } from "./BlockEditor";
 import { NewComment } from "./ThreadCard";
 
 /** Where a new block goes: after a block, at the end of a heading's section, or at the end of the document. */
@@ -46,9 +45,13 @@ interface BlockProps {
   locked: boolean;
   isFirst: boolean;
   isLast: boolean;
-  editing: boolean;
-  onEditing: (blockId: Id<"blocks">) => void;
-  onDoneEditing: (blockId: Id<"blocks">) => void;
+  /** The person's editing session, and the key it knows this block by. */
+  session: Session<Id<"blocks">>;
+  sessionKey: Id<"blocks">;
+  /** Puts the caret in the block when it first renders. */
+  autoFocus: boolean;
+  /** A block was added from this block's Add below. */
+  onAdded: (blockId: Id<"blocks">) => void;
   /** The room's model participants, offered as mentions. */
   models: readonly Participant[];
   /** Whether the reader has selected text in this block that a comment can anchor to. */
@@ -154,25 +157,21 @@ export const AddChoices = ({
 /** The row of actions on a block. */
 const BlockTools = ({
   kind,
-  editing,
   blocked,
   locked,
   adding,
   isFirst,
   isLast,
-  onEdit,
   onToggleAdd,
   onMove,
   onDelete,
 }: {
   kind: BlockKind;
-  editing: boolean;
   blocked: boolean;
   locked: boolean;
   adding: boolean;
   isFirst: boolean;
   isLast: boolean;
-  onEdit: () => void;
   onToggleAdd: () => void;
   onMove: (direction: "up" | "down") => void;
   onDelete: () => void;
@@ -182,9 +181,6 @@ const BlockTools = ({
     aria-label={`${KIND_LABEL[kind]} actions`}
     className="ml-auto flex items-center gap-0.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
   >
-    <ToolButton label="Edit" disabled={editing || blocked} onClick={onEdit}>
-      <PencilIcon />
-    </ToolButton>
     <ToolButton
       label="Add below"
       disabled={locked}
@@ -211,11 +207,54 @@ const BlockTools = ({
     >
       <ArrowDownIcon />
     </ToolButton>
-    <ToolButton label="Delete" disabled={editing || blocked} onClick={onDelete}>
+    <ToolButton label="Delete" disabled={blocked} onClick={onDelete}>
       <Trash2Icon />
     </ToolButton>
   </div>
 );
+
+// "Robert Guss" -> "RG", "Dana" -> "D".
+const initials = (name: string) =>
+  name
+    .split(/\s+/u)
+    .map((word) => word.charAt(0))
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+
+/** What a refused write left behind: the reason, and the person's text to copy or set aside. */
+const DraftNotice = ({
+  draft,
+  onDiscard,
+}: {
+  draft: { text: string; message: string };
+  onDiscard: () => void;
+}) => {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    await navigator.clipboard.writeText(draft.text);
+    setCopied(true);
+  };
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+      <p role="alert" className="text-destructive-foreground mr-auto">
+        {draft.message}
+      </p>
+      <Button
+        size="xs"
+        variant="outline"
+        onClick={() => {
+          copy().catch(logFailure);
+        }}
+      >
+        {copied ? "Copied" : "Copy my draft"}
+      </Button>
+      <Button size="xs" variant="ghost" onClick={onDiscard}>
+        Discard my draft
+      </Button>
+    </div>
+  );
+};
 
 export const Block = ({
   roomId,
@@ -226,9 +265,10 @@ export const Block = ({
   locked,
   isFirst,
   isLast,
-  editing,
-  onEditing,
-  onDoneEditing,
+  session,
+  sessionKey,
+  autoFocus,
+  onAdded,
   models,
   commentable,
   onComment,
@@ -236,9 +276,11 @@ export const Block = ({
   onCommentDone,
 }: BlockProps) => {
   const blockId = block._id;
-  const startEdit = useMutation(api.blocks.startEdit);
   const move = useMutation(api.blocks.move);
   const remove = useMutation(api.blocks.remove);
+  const local = useSyncExternalStore(session.subscribe, () =>
+    session.local(sessionKey)
+  );
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -253,46 +295,64 @@ export const Block = ({
       setError(errorText(error_));
     }
   };
-  const edit = async () => {
-    await run(async () => {
-      await startEdit({ blockId });
-      onEditing(blockId);
-    });
-  };
 
   return (
     <div
       data-block-id={block._id}
       className="group hover:bg-accent/30 focus-within:bg-accent/30 relative rounded-lg px-2 py-1.5"
     >
-      {editing ? (
-        <TextareaBlockEditor
-          block={block}
-          otherHolder={otherHolder}
-          onDone={() => {
-            onDoneEditing(blockId);
+      <div
+        onFocus={() => {
+          session.focus(sessionKey);
+        }}
+        onBlur={() => {
+          session.blur(sessionKey);
+        }}
+      >
+        <BlockEditor
+          blockId={blockId}
+          kind={block.kind}
+          text={local.text ?? block.text}
+          editable={!blocked}
+          autoFocus={autoFocus}
+          onChange={(text) => {
+            session.change(sessionKey, text, block.rev);
           }}
         />
-      ) : (
-        // Comments start from a selection here; the document maps it to the stored text.
-        <div data-block-text={block.text.trim() ? block._id : undefined}>
-          <BlockText kind={block.kind} text={block.text} />
-        </div>
-      )}
+      </div>
+      {local.draft ? (
+        <DraftNotice
+          draft={local.draft}
+          onDiscard={() => {
+            session.discard(sessionKey);
+          }}
+        />
+      ) : null}
       <div className="text-muted-foreground mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
         <span className="text-foreground/80 font-medium">
           {authorText(block.author, names)}
         </span>
-        {otherHolder === null ? null : (
-          <Badge variant="warning">{names(otherHolder)} is editing</Badge>
-        )}
+        {/* Present before anyone holds the block, so a new holder is announced. */}
+        <span aria-live="polite" className="contents">
+          {otherHolder === null ? null : (
+            <Badge variant="warning">
+              <span
+                aria-hidden
+                className="bg-background/60 inline-flex size-4 items-center justify-center rounded-full text-[0.6rem] font-semibold"
+              >
+                {initials(names(otherHolder))}
+              </span>
+              {names(otherHolder)} is editing
+            </Badge>
+          )}
+        </span>
         {block.openThreads > 0 ? (
           <Badge variant="outline">
             <MessageSquareIcon />
             {openThreadsText(block.openThreads)}
           </Badge>
         ) : null}
-        {commentable && !editing ? (
+        {commentable ? (
           <Button
             size="xs"
             variant="outline"
@@ -308,15 +368,11 @@ export const Block = ({
         ) : null}
         <BlockTools
           kind={block.kind}
-          editing={editing}
           blocked={blocked}
           locked={locked}
           adding={adding}
           isFirst={isFirst}
           isLast={isLast}
-          onEdit={() => {
-            edit().catch(logFailure);
-          }}
           onToggleAdd={() => {
             setAdding((a) => !a);
           }}
@@ -365,7 +421,7 @@ export const Block = ({
           </Button>
         </fieldset>
       ) : null}
-      {commentDraft && !editing ? (
+      {commentDraft ? (
         <NewComment
           passage={commentDraft}
           exact={block.text.slice(commentDraft.start, commentDraft.end)}
@@ -381,7 +437,7 @@ export const Block = ({
           onClose={() => {
             setAdding(false);
           }}
-          onAdded={onEditing}
+          onAdded={onAdded}
         />
       ) : null}
     </div>

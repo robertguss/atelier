@@ -177,10 +177,21 @@ const openRoom = async () => {
   return await screen.findByRole("region", { name: "Room document" });
 };
 
-const toolbarOf = (text: string) => {
+const blockOf = (text: string) => {
   const block = screen.getByText(text).closest<HTMLElement>("[data-block-id]");
   assert(block);
-  return within(block).getByRole("toolbar");
+  return block;
+};
+const toolbarOf = (text: string) => within(blockOf(text)).getByRole("toolbar");
+
+// The block's editor, once the pointer has reached it; null for a read-only block.
+const editorOf = (text: string) => {
+  const content = screen
+    .getByText(text)
+    .closest<HTMLElement>("[data-block-text]");
+  assert(content);
+  fireEvent.pointerEnter(content);
+  return within(blockOf(text)).queryByRole("textbox");
 };
 
 const setUp = () => {
@@ -245,11 +256,7 @@ describe("calling in the scribe", () => {
     expect(
       screen.queryByRole("region", { name: "The scribe is working" })
     ).not.toBeInTheDocument();
-    expect(
-      within(toolbarOf("Charge per seat.")).getByRole("button", {
-        name: "Edit",
-      })
-    ).toBeEnabled();
+    expect(editorOf("Charge per seat.")).not.toBeNull();
   });
 });
 
@@ -257,7 +264,7 @@ describe("while the scribe works", () => {
   beforeEach(setUp);
   afterEach(tearDown);
 
-  it("shows the banner with the model, who started it and the time so far, and every block’s edit, add, move and delete is disabled", async () => {
+  it("shows the banner with the model, who started it and the time so far, every block is read-only, and its add, move and delete are disabled", async () => {
     working();
     await openRoom();
     const banner = screen.getByRole("region", {
@@ -271,14 +278,9 @@ describe("while the scribe works", () => {
       "Charge per seat.",
       "Try a free tier",
     ]) {
+      expect(editorOf(text)).toBeNull();
       const toolbar = toolbarOf(text);
-      for (const name of [
-        "Edit",
-        "Add below",
-        "Move up",
-        "Move down",
-        "Delete",
-      ]) {
+      for (const name of ["Add below", "Move up", "Move down", "Delete"]) {
         expect(within(toolbar).getByRole("button", { name })).toBeDisabled();
       }
     }
@@ -318,11 +320,7 @@ describe("while the scribe works", () => {
     expect(
       screen.queryByRole("region", { name: "The scribe is working" })
     ).not.toBeInTheDocument();
-    expect(
-      within(toolbarOf("Charge per seat.")).getByRole("button", {
-        name: "Edit",
-      })
-    ).toBeEnabled();
+    expect(editorOf("Charge per seat.")).not.toBeNull();
 
     fireEvent.click(within(notice).getByRole("button", { name: "Dismiss" }));
     expect(

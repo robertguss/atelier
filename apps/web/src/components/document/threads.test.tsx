@@ -278,7 +278,7 @@ describe("starting a thread", () => {
 
   it("posts a comment without a mention as a plain body", async () => {
     await openRoom();
-    const item = must(document.querySelector('[data-block-text="b2"] li'));
+    const item = must(document.querySelector('[data-block-text="b2"] p'));
     const block = selectInBlock(
       "b2",
       [must(item.firstChild), 4],

@@ -25,10 +25,6 @@ export const KIND_LABEL: Record<BlockKind, string> = {
   todo: "To-do",
 };
 
-// The server lets a lease lapse two minutes after its last renewal; renewing
-// this often while the person types keeps it held with room to spare.
-export const RENEW_EVERY_MS = 30_000;
-
 /** A heading and the blocks under it. Blocks before the first heading form a section with no heading. */
 export interface Section {
   heading: DocBlock | null;

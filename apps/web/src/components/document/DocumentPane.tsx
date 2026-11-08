@@ -2,7 +2,13 @@ import { api } from "@atelier/backend/api";
 import type { Id } from "@atelier/backend/dataModel";
 import { useMutation, useQuery } from "convex/react";
 import { FileTextIcon, PlusIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { RefObject, SyntheticEvent } from "react";
 
 import { PageSpinner } from "~/components/page";
@@ -11,6 +17,7 @@ import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { leaseHolder, scribeLocked, sectionsOf } from "~/lib/document";
 import type { DocBlock, Passage, Section, ThreadsData } from "~/lib/document";
+import { createSession } from "~/lib/editor/session";
 import { useNow } from "~/lib/room";
 import type { Names, Participant } from "~/lib/room";
 import { renderedRange, selectionIn, sourceRange } from "~/lib/selection";
@@ -284,7 +291,25 @@ export const DocumentPane = ({
   const scribeRun = useQuery(api.scribe.latest, { roomId });
   const ensure = useMutation(api.documents.ensure);
   const [ensureError, setEnsureError] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<Id<"blocks"> | null>(null);
+  const startEdit = useMutation(api.blocks.startEdit);
+  const stopEdit = useMutation(api.blocks.stopEdit);
+  const save = useMutation(api.blocks.save);
+  const split = useMutation(api.blockOps.split);
+  // Convex hands back the same mutation functions on every render, so the
+  // session lives as long as the pane.
+  const session = useMemo(
+    () =>
+      createSession(
+        { save, split, startEdit, stopEdit },
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- a split's new block goes by this key until the server returns its id, and the session swaps it for that id before any call
+        (n) => `temp-${n}` as Id<"blocks">
+      ),
+    [save, split, startEdit, stopEdit]
+  );
+  // Split blocks the server has not returned yet.
+  useSyncExternalStore(session.subscribe, session.temps);
+  // The block an Add just created, to put the caret in.
+  const [addedId, setAddedId] = useState<Id<"blocks"> | null>(null);
   // Leases lapse on the clock; re-check who holds a block now and then.
   const now = useNow(10_000);
   const blocks = doc?.blocks;
@@ -310,8 +335,24 @@ export const DocumentPane = ({
     });
   }, [ensure, roomId]);
 
-  const doneEditing = (blockId: Id<"blocks">) => {
-    setEditingId((current) => (current === blockId ? null : current));
+  // A hidden tab or a closed pane saves what was typed and releases its lease.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        session.hide();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      session.hide();
+    };
+  }, [session]);
+
+  // Adding a block leases it to the person, who starts typing in it.
+  const added = (blockId: Id<"blocks">) => {
+    session.leased(blockId);
+    setAddedId(blockId);
   };
 
   let body;
@@ -327,7 +368,17 @@ export const DocumentPane = ({
       </p>
     );
   } else {
-    const sections = sectionsOf(doc.blocks);
+    const sections = sectionsOf(
+      session.blocks(doc.blocks, (temp, head) => ({
+        ...head,
+        _id: temp.key,
+        checked: temp.checked,
+        kind: temp.kind,
+        openThreads: 0,
+        rev: 0,
+        text: temp.text,
+      }))
+    );
     const onlyLoose = sections.every((s) => s.heading === null);
     body = (
       <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-5 @4xl:flex-row @4xl:items-start">
@@ -342,7 +393,7 @@ export const DocumentPane = ({
             >
               {sectionBlocks(section).map((block) => (
                 <Block
-                  key={block._id}
+                  key={session.keyOf(block._id)}
                   roomId={roomId}
                   block={block}
                   names={names}
@@ -351,9 +402,10 @@ export const DocumentPane = ({
                   locked={locked}
                   isFirst={block._id === doc.blocks[0]?._id}
                   isLast={block._id === doc.blocks.at(-1)?._id}
-                  editing={editingId === block._id}
-                  onEditing={setEditingId}
-                  onDoneEditing={doneEditing}
+                  session={session}
+                  sessionKey={session.keyOf(block._id)}
+                  autoFocus={addedId === block._id}
+                  onAdded={added}
                   models={models}
                   commentable={selected?.blockId === block._id}
                   onComment={() => {
@@ -373,7 +425,7 @@ export const DocumentPane = ({
                   label={`Add to ${section.heading.text || "this section"}`}
                   place={{ endOfSectionId: section.heading._id }}
                   locked={locked}
-                  onAdded={setEditingId}
+                  onAdded={added}
                 />
               ) : null}
             </div>
@@ -384,7 +436,7 @@ export const DocumentPane = ({
               label="Add to the document"
               place={{}}
               locked={locked}
-              onAdded={setEditingId}
+              onAdded={added}
             />
           ) : null}
         </div>

@@ -40,6 +40,24 @@ const startEditing = (blockId: string) => {
   return screen.getByRole("textbox");
 };
 
+// The editor instance that Tiptap leaves on the content element.
+const editorOf = (element: HTMLElement) => {
+  const editor: unknown = Reflect.get(element, "editor");
+  assert(editor instanceof Editor);
+  return editor;
+};
+
+// The same within the open room, where every editable block is a text box.
+const startEditingIn = (blockId: string) => {
+  fireEvent.pointerEnter(blockText(blockId));
+  return blockText(blockId);
+};
+
+const must = <T,>(value: T | null): T => {
+  assert(value !== null);
+  return value;
+};
+
 vi.mock(import("convex/react"), async () => {
   const { convexMock } = await import("~/test/backend");
   return convexMock;
@@ -193,7 +211,8 @@ describe("reading the document", () => {
   it("renders a line break inside a block", async () => {
     patchBlock(1, { text: "one\ntwo" });
     await openRoom();
-    expect(blockWith("one two").querySelector(".block-text")).not.toBeNull();
+    expect(blockText("b1")).toHaveTextContent("onetwo");
+    expect(blockText("b1").querySelector("br")).not.toBeNull();
   });
 
   it("shows each block's text, author and open thread count", async () => {
@@ -209,19 +228,25 @@ describe("reading the document", () => {
     ).toBeInTheDocument();
   });
 
-  it('shows "Robert is editing" to the teammate on a block Robert holds, and disables its controls', async () => {
+  it('announces "Robert is editing" with his initials on a block Robert holds, which the teammate can read but not edit', async () => {
     patchBlock(1, {
       leaseExpiresAt: Date.now() + 60_000,
       leaseHolderParticipantId: ROBERT,
     });
     await openRoom("member");
     const held = blockWith("Charge per seat.");
-    expect(within(held).getByText("Robert is editing")).toBeInTheDocument();
-    expect(within(held).getByRole("button", { name: "Edit" })).toBeDisabled();
+    const presence = within(held).getByText("Robert is editing");
+    expect(presence.closest("[aria-live]")).toHaveAttribute(
+      "aria-live",
+      "polite"
+    );
+    expect(presence).toHaveTextContent("RRobert is editing");
+    fireEvent.pointerEnter(blockText("b1"));
+    expect(within(held).queryByRole("textbox")).toBeNull();
     expect(within(held).getByRole("button", { name: "Delete" })).toBeDisabled();
     expect(
-      within(blockWith("Try a free tier")).getByRole("button", { name: "Edit" })
-    ).toBeEnabled();
+      within(blockWith("Try a free tier")).getByRole("textbox")
+    ).toBeInTheDocument();
   });
 
   it("ignores a lease that has already lapsed", async () => {
@@ -234,7 +259,7 @@ describe("reading the document", () => {
     expect(
       within(lapsed).queryByText("Robert is editing")
     ).not.toBeInTheDocument();
-    expect(within(lapsed).getByRole("button", { name: "Edit" })).toBeEnabled();
+    expect(within(lapsed).getByRole("textbox")).toBeInTheDocument();
   });
 });
 
@@ -242,142 +267,22 @@ describe("editing a block", () => {
   beforeEach(setUp);
   afterEach(tearDown);
 
-  it("shows the server's sentence when starting an edit is refused", async () => {
-    mutation("blocks:startEdit").mockRejectedValue(
-      convexError("Robert is editing this block")
-    );
-    await openRoom("member");
-    const paragraph = blockWith("Charge per seat.");
-    fireEvent.click(within(paragraph).getByRole("button", { name: "Edit" }));
-    await within(paragraph).findByText("Robert is editing this block");
-    expect(
-      screen.queryByRole("textbox", { name: "Edit paragraph" })
-    ).not.toBeInTheDocument();
-  });
-
-  it("saves the edited text on Enter, Shift+Enter adds a line, and a live update re-renders the block", async () => {
-    mutationEffect("blocks:save", (args) => {
-      patchBlock(1, { text: String(args?.text) });
-      pushBackend();
-    });
+  it("takes the lease on the first change to a block, not on pointing at it or focusing it", async () => {
     await openRoom();
-    fireEvent.click(
-      within(blockWith("Charge per seat.")).getByRole("button", {
-        name: "Edit",
-      })
-    );
+    const content = startEditingIn("b1");
+    fireEvent.focus(content);
+    expect(mutation("blocks:startEdit")).not.toHaveBeenCalled();
+    act(() => {
+      editorOf(content).commands.insertContentAt(1, "We ");
+    });
     await waitFor(() => {
-      expect(mutation("blocks:startEdit")).toHaveBeenCalledWith({
+      expect(mutation("blocks:startEdit")).toHaveBeenCalledExactlyOnceWith({
         blockId: "b1",
       });
     });
-    const editor = await screen.findByRole("textbox", {
-      name: "Edit paragraph",
-    });
-    expect(editor).toHaveValue("Charge per seat.");
-
-    fireEvent.change(editor, {
-      target: { value: "Charge per seat, with a floor." },
-    });
-    fireEvent.keyDown(editor, { key: "Enter", shiftKey: true });
-    expect(mutation("blocks:save")).not.toHaveBeenCalled();
-
-    fireEvent.keyDown(editor, { key: "Enter" });
-    await waitFor(() => {
-      expect(mutation("blocks:save")).toHaveBeenCalledWith({
-        blockId: "b1",
-        text: "Charge per seat, with a floor.",
-      });
-    });
-    await waitFor(() => {
-      expect(mutation("blocks:stopEdit")).toHaveBeenCalledWith({
-        blockId: "b1",
-      });
-    });
-    expect(
-      screen.queryByRole("textbox", { name: "Edit paragraph" })
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByText("Charge per seat, with a floor.")
-    ).toBeInTheDocument();
   });
 
-  it("saves when the person leaves the textarea", async () => {
-    await openRoom();
-    fireEvent.click(
-      within(blockWith("Try a free tier")).getByRole("button", { name: "Edit" })
-    );
-    const editor = await screen.findByRole("textbox", {
-      name: "Edit list item",
-    });
-    fireEvent.change(editor, {
-      target: { value: "Try a free tier for teams" },
-    });
-    fireEvent.blur(editor);
-    await waitFor(() => {
-      expect(mutation("blocks:save")).toHaveBeenCalledWith({
-        blockId: "b2",
-        text: "Try a free tier for teams",
-      });
-    });
-  });
-
-  it("renews the lease while the person keeps typing", async () => {
-    await openRoom();
-    fireEvent.click(
-      within(blockWith("Charge per seat.")).getByRole("button", {
-        name: "Edit",
-      })
-    );
-    const editor = await screen.findByRole("textbox", {
-      name: "Edit paragraph",
-    });
-    vi.useFakeTimers({ toFake: ["Date"] });
-    fireEvent.change(editor, { target: { value: "Charge per seat" } });
-    expect(mutation("blocks:renew")).not.toHaveBeenCalled();
-
-    vi.setSystemTime(Date.now() + 31_000);
-    fireEvent.change(editor, { target: { value: "Charge per seat, monthly" } });
-    fireEvent.change(editor, {
-      target: { value: "Charge per seat, monthly." },
-    });
-    expect(mutation("blocks:renew")).toHaveBeenCalledExactlyOnceWith({
-      blockId: "b1",
-    });
-  });
-
-  it("keeps the textarea open with the typed text when the lease has lapsed, and lets the person retake it", async () => {
-    await openRoom();
-    fireEvent.click(
-      within(blockWith("Charge per seat.")).getByRole("button", {
-        name: "Edit",
-      })
-    );
-    const editor = await screen.findByRole("textbox", {
-      name: "Edit paragraph",
-    });
-    mutation("blocks:save").mockRejectedValue(
-      convexError("Your edit lock on this block has lapsed")
-    );
-    fireEvent.change(editor, { target: { value: "Charge per seat, yearly" } });
-    fireEvent.keyDown(editor, { key: "Enter" });
-
-    await screen.findByText("Your edit lock on this block has lapsed");
-    expect(screen.getByRole("textbox", { name: "Edit paragraph" })).toHaveValue(
-      "Charge per seat, yearly"
-    );
-    expect(mutation("blocks:stopEdit")).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Retake the block" }));
-    await waitFor(() => {
-      expect(mutation("blocks:startEdit")).toHaveBeenCalledTimes(2);
-    });
-    expect(screen.getByRole("textbox", { name: "Edit paragraph" })).toHaveValue(
-      "Charge per seat, yearly"
-    );
-  });
-
-  it("offers to copy the draft when someone else now holds the block", async () => {
+  it("puts a refused block back to the server's text and offers what was typed as a draft", async () => {
     const writeText = vi
       .fn<(text: string) => Promise<void>>()
       .mockResolvedValue();
@@ -385,35 +290,28 @@ describe("editing a block", () => {
       configurable: true,
       value: { writeText },
     });
-    await openRoom("member");
-    fireEvent.click(
-      within(blockWith("Charge per seat.")).getByRole("button", {
-        name: "Edit",
-      })
-    );
-    const editor = await screen.findByRole("textbox", {
-      name: "Edit paragraph",
-    });
-
-    patchBlock(1, {
-      leaseExpiresAt: Date.now() + 60_000,
-      leaseHolderParticipantId: ROBERT,
-    });
-    act(() => {
-      pushBackend();
-    });
-    mutation("blocks:save").mockRejectedValue(
+    mutation("blocks:startEdit").mockRejectedValue(
       convexError("Robert is editing this block")
     );
-    fireEvent.change(editor, { target: { value: "My version" } });
-    fireEvent.keyDown(editor, { key: "Enter" });
+    await openRoom("member");
+    const paragraph = blockWith("Charge per seat.");
+    const content = startEditingIn("b1");
+    act(() => {
+      editorOf(content).commands.insertContentAt(1, "My ");
+    });
 
-    await screen.findByText("Robert is editing this block");
-    expect(
-      screen.queryByRole("button", { name: "Retake the block" })
-    ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Copy my draft" }));
-    expect(writeText).toHaveBeenCalledWith("My version");
+    const alert = await within(paragraph).findByRole("alert");
+    expect(alert).toHaveTextContent("Robert is editing this block");
+    expect(content).toHaveTextContent(/^Charge per seat\.$/u);
+    fireEvent.click(
+      within(paragraph).getByRole("button", { name: "Copy my draft" })
+    );
+    expect(writeText).toHaveBeenCalledWith("My Charge per seat.");
+
+    fireEvent.click(
+      within(paragraph).getByRole("button", { name: "Discard my draft" })
+    );
+    expect(within(paragraph).queryByRole("alert")).not.toBeInTheDocument();
   });
 });
 
@@ -421,7 +319,7 @@ describe("adding, deleting and moving blocks", () => {
   beforeEach(setUp);
   afterEach(tearDown);
 
-  it("adds a paragraph after a block and opens it for editing", async () => {
+  it("adds a paragraph after a block and puts the caret in it", async () => {
     mutationEffect(
       "blocks:add",
       () => {
@@ -454,10 +352,13 @@ describe("adding, deleting and moving blocks", () => {
         text: "",
       });
     });
-    const textbox = await screen.findByRole("textbox", {
-      name: "Edit paragraph",
+    await waitFor(() => {
+      expect(
+        within(
+          must(document.querySelector('[data-block-id="b-new"]'))
+        ).getByRole("textbox")
+      ).toHaveFocus();
     });
-    expect(textbox).toHaveValue("");
   });
 
   it("adds a list item at the end of a section", async () => {
@@ -548,13 +449,6 @@ describe("saving the document as a template", () => {
     ).not.toBeInTheDocument();
   });
 });
-
-// The editor instance that Tiptap leaves on the content element.
-const editorOf = (element: HTMLElement) => {
-  const editor: unknown = Reflect.get(element, "editor");
-  assert(editor instanceof Editor);
-  return editor;
-};
 
 describe("a block's editor", () => {
   it("renders read-only text in place with the block id for comments, and writes nothing on mount or blur", () => {

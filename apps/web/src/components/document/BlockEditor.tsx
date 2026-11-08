@@ -13,11 +13,12 @@ interface BlockEditorProps {
   editable: boolean;
   /** The block's new text, after the person changed its content. */
   onChange?: (text: string) => void;
+  /** Opens the editor with the caret in it, as for a block just added. */
+  autoFocus?: boolean;
 }
 
 interface TextEditorProps extends BlockEditorProps {
   kind: TextKind;
-  autofocus: boolean;
 }
 
 const TextEditor = ({
@@ -26,8 +27,13 @@ const TextEditor = ({
   text,
   editable,
   onChange,
-  autofocus,
+  autoFocus,
 }: TextEditorProps) => {
+  // The editor is created once, so it calls the latest handler through this.
+  const onChangeRef = useRef(onChange);
+  useLayoutEffect(() => {
+    onChangeRef.current = onChange;
+  });
   // Created once per block; later kind, text and editable changes are applied below.
   const editor = useEditor(
     {
@@ -41,7 +47,7 @@ const TextEditor = ({
       // Only transactions that change the document land here, so mounting,
       // focusing and blurring never write.
       onUpdate: ({ editor: changed }) => {
-        onChange?.(fromDoc(changed.getJSON()));
+        onChangeRef.current?.(fromDoc(changed.getJSON()));
       },
     },
     []
@@ -53,15 +59,16 @@ const TextEditor = ({
 
   // Keyboard focus reached the static block this editor replaced.
   useEffect(() => {
-    if (autofocus) {
+    if (autoFocus === true) {
       editor.commands.focus("start");
     }
-  }, [editor, autofocus]);
+  }, [editor, autoFocus]);
 
   // A change from elsewhere replaces the one node in place, kind included,
   // without remounting. It is not the person's edit: it writes nothing back
-  // and undo cannot bring the old text back.
-  useEffect(() => {
+  // and undo cannot bring the old text back. It runs before the browser
+  // takes the next keystroke, so it never compares against stale text.
+  useLayoutEffect(() => {
     const doc = editor.getJSON();
     if (doc.content?.[0]?.type === nodeName(kind) && fromDoc(doc) === text) {
       return;
@@ -118,14 +125,16 @@ const StaticBlock = ({ blockId, kind, text, onActivate }: StaticBlockProps) => {
 };
 
 const TextBlock = (props: TextEditorProps) => {
-  const [active, setActive] = useState<"pointer" | "focus" | null>(null);
+  const [reached, setReached] = useState<"pointer" | "focus" | null>(null);
+  const active =
+    reached ?? (props.autoFocus === true && props.editable ? "focus" : null);
   return active === null ? (
     <StaticBlock
       {...props}
-      onActivate={props.editable ? setActive : undefined}
+      onActivate={props.editable ? setReached : undefined}
     />
   ) : (
-    <TextEditor {...props} autofocus={active === "focus"} />
+    <TextEditor {...props} autoFocus={active === "focus"} />
   );
 };
 
@@ -134,5 +143,5 @@ export const BlockEditor = ({ kind, ...props }: BlockEditorProps) =>
   kind === "divider" ? (
     <hr data-kind="divider" className="border-border my-3" />
   ) : (
-    <TextBlock kind={kind} autofocus={false} {...props} />
+    <TextBlock kind={kind} {...props} />
   );
