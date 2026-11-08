@@ -1,6 +1,10 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { afterEach } from "vitest";
+
+// The jsdom suites slow down when every workspace tests at once, and the
+// first `findBy` in a file timed out at the 1 s default then.
+configure({ asyncUtilTimeout: 5000 });
 
 afterEach(() => {
   cleanup();
