@@ -99,12 +99,20 @@ export const humanEdit = (
 // Every lease is granted here, so taking one releases the person's others.
 export const grantLease = async (
   ctx: MutationCtx,
-  block: Pick<Doc<"blocks">, "_id" | "roomId">,
+  block: Pick<Doc<"blocks">, "_id" | "roomId"> &
+    Partial<Pick<Doc<"blocks">, "leaseHolderParticipantId" | "leaseExpiresAt">>,
   participantId: Id<"participants">,
   now: number,
   leaseChangeSetId?: Id<"changeSets">
 ) => {
-  await releaseLeasesOf(ctx, block.roomId, participantId, block._id);
+  // Every grant releases the person's other leases, so renewing a lease they
+  // still hold has nothing to release and skips reading the whole document.
+  const renewing =
+    block.leaseHolderParticipantId === participantId &&
+    (block.leaseExpiresAt ?? 0) > now;
+  if (!renewing) {
+    await releaseLeasesOf(ctx, block.roomId, participantId, block._id);
+  }
   const expiresAt = now + LEASE_MS;
   await ctx.db.patch(block._id, {
     leaseChangeSetId,
