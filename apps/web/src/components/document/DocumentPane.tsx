@@ -26,7 +26,7 @@ import { hasContent, logFailure } from "~/lib/utils";
 
 import { Block } from "./Block";
 import type { CaretRequest } from "./Block";
-import { useBlockMoves } from "./DragHandle";
+import { FRESH_FOCUS_MS, useBlockMoves } from "./DragHandle";
 import { HistoryControl } from "./HistoryPanel";
 import type { HistoryView } from "./HistoryPanel";
 import {
@@ -341,7 +341,7 @@ export const DocumentPane = ({
         });
         for (const { blockId } of inserted.blocks) {
           session.leased(blockId);
-          setCaret({ at: "start", key: blockId });
+          setCaret({ at: "start", key: blockId, madeAt: Date.now() });
         }
         return [];
       }
@@ -415,9 +415,18 @@ export const DocumentPane = ({
                     number={numbers[at]}
                     session={session}
                     sessionKey={key}
-                    caret={caret?.key === key ? caret : undefined}
+                    caret={
+                      caret?.key === key &&
+                      Date.now() - caret.madeAt < FRESH_FOCUS_MS
+                        ? caret
+                        : undefined
+                    }
                     onCaret={(target, caretAt) => {
-                      setCaret({ at: caretAt, key: target });
+                      setCaret({
+                        at: caretAt,
+                        key: target,
+                        madeAt: Date.now(),
+                      });
                     }}
                     models={models}
                     commentable={selected?.blockId === block._id}

@@ -96,7 +96,8 @@ export const useBlockActions = ({
     const key = keyOf(target);
     session
       .run([[key, target.rev]], async (find) => {
-        await remove({ blockId: find(key).id });
+        const { id, rev } = find(key);
+        await remove({ baseRev: rev, blockId: id });
         return [[key, null]];
       })
       .catch(fail);
@@ -297,7 +298,11 @@ export const useBlockActions = ({
             }
             return revs;
           },
-          { text: headText + pasted + tailText }
+          {
+            draftMessage:
+              "What you typed while the paste went in was not saved",
+            text: headText + pasted + tailText,
+          }
         )
         .catch(fail);
     },
@@ -325,6 +330,10 @@ export const useBlockActions = ({
         previous: previous && { heldBy: previousHeldBy, kind: previous.kind },
       }),
       onIntent: intent,
+    },
+    /** Deletes the block, after its pending save. */
+    remove: () => {
+      removeBlock(block);
     },
   };
 };

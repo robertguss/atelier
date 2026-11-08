@@ -88,11 +88,16 @@ export const save = mutation({
   },
 });
 
+// Refused, like a save, when someone else holds the block or when it has
+// changed since `baseRev`.
 export const remove = mutation({
-  args: { blockId: v.id("blocks") },
-  handler: async (ctx, { blockId }) => {
-    const { block, participant, now } = await loadForEdit(ctx, blockId);
-    await refuseIfHeldByOther(ctx, block, participant._id, now);
+  args: { baseRev: v.number(), blockId: v.id("blocks") },
+  handler: async (ctx, { baseRev, blockId }) => {
+    const { block, participant, now } = await loadForChange(
+      ctx,
+      blockId,
+      baseRev
+    );
     const changeSetId = await personChangeSet(ctx, block, participant._id, now);
     const live = await liveBlocks(ctx, block.documentId);
     const last = live.length === 1;

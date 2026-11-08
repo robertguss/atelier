@@ -625,7 +625,10 @@ describe("comment threads", () => {
     const { t, owner, dana, roomId, blockId } = await setup();
     const threadId = await comment(dana, blockId, "on Friday", "Friday?");
     const beforeDelete = await latestChangeSet(owner, roomId);
-    await owner.mutation(api.blocks.remove, { blockId });
+    const { rev } = defined(
+      await t.run(async (ctx) => await ctx.db.get(blockId))
+    );
+    await owner.mutation(api.blocks.remove, { baseRev: rev, blockId });
     const removal = await latestChangeSet(owner, roomId);
     const awaited4 = await thread(t, threadId);
     expect(awaited4.detachedBeforeChangeSetId).toBe(removal);

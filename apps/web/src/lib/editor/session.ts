@@ -43,6 +43,15 @@ interface Shown {
   checked?: boolean;
 }
 
+/** What a write shows, and how typing while it is in flight is kept. */
+interface RunShown extends Shown {
+  /**
+   * The write leaves other text in the block than `text`, so typing while it
+   * is in flight cannot be saved on top: it becomes a draft with this message.
+   */
+  draftMessage?: string;
+}
+
 /** What the session holds for a block over the server's copy. */
 interface Local extends Shown {
   /** Text a refused write left behind, with the server's reason. */
@@ -298,7 +307,7 @@ export const createSession = <K extends string>(
       call: (
         block: (key: K) => { id: K; rev: number }
       ) => Promise<readonly (readonly [K, number | null])[]>,
-      shown: Shown = {}
+      { draftMessage, ...shown }: RunShown = {}
     ) => {
       const first = blocks[0]?.[0];
       for (const [key, rev] of blocks) {
@@ -338,11 +347,20 @@ export const createSession = <K extends string>(
           const now = local(first);
           const landed = <F extends keyof Shown>(field: F) =>
             now[field] === shown[field] ? undefined : now[field];
+          const typed = landed("text");
+          // Typing on top of text the write replaced would undo the write.
+          const keep = draftMessage === undefined || typed === undefined;
+          if (!keep) {
+            clearTimeout(entry(first).saveTimer);
+          }
           setLocal(first, {
             ...now,
             checked: landed("checked"),
             kind: landed("kind"),
-            text: landed("text"),
+            text: keep ? typed : undefined,
+            ...(keep
+              ? {}
+              : { draft: now.draft ?? { message: draftMessage, text: typed } }),
           });
         }
       };

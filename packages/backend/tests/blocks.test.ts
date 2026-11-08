@@ -281,7 +281,10 @@ describe("block editing", () => {
             text: "Mine now",
           }),
         async () =>
-          await dana.mutation(api.blocks.remove, { blockId: ideas._id }),
+          await dana.mutation(api.blocks.remove, {
+            baseRev: ideas.rev,
+            blockId: ideas._id,
+          }),
       ])
     ).resolves.toStrictEqual([editing, editing, editing]);
     await expect(texts(owner, roomId)).resolves.toStrictEqual([
@@ -524,7 +527,10 @@ describe("block editing", () => {
             blockId: ideas._id,
           }),
         async () =>
-          await owner.mutation(api.blocks.remove, { blockId: ideas._id }),
+          await owner.mutation(api.blocks.remove, {
+            baseRev: ideas.rev,
+            blockId: ideas._id,
+          }),
       ])
     ).resolves.toStrictEqual(Array.from({ length: 5 }, () => working));
     await expect(texts(owner, roomId)).resolves.toStrictEqual([
@@ -569,7 +575,10 @@ describe("block editing", () => {
 
   it("a removed block is recorded as a delete and can no longer be edited", async () => {
     const { owner, roomId, happened } = await setup();
-    await owner.mutation(api.blocks.remove, { blockId: happened._id });
+    await owner.mutation(api.blocks.remove, {
+      baseRev: happened.rev,
+      blockId: happened._id,
+    });
     await expect(texts(owner, roomId)).resolves.toStrictEqual([
       "Ideas & notes",
       "Open questions",
@@ -587,11 +596,46 @@ describe("block editing", () => {
     expect(diff.map((r) => r.op)).toStrictEqual(["delete"]);
   });
 
+  it("a removal based on an old rev is refused with the block's current text and rev, and removes nothing", async () => {
+    const { owner, dana, roomId, ideas } = await setup();
+    const { rev } = await dana.mutation(api.blocks.save, {
+      baseRev: ideas.rev,
+      blockId: ideas._id,
+      text: "Dana's ideas",
+    });
+    await dana.mutation(api.blocks.stopEdit, { blockId: ideas._id });
+
+    // Robert still sees the block as it was before Dana's save.
+    const refusal = await owner
+      .mutation(api.blocks.remove, { baseRev: ideas.rev, blockId: ideas._id })
+      .catch((error: unknown) => error);
+    assert(refusal instanceof ConvexError, "the removal was refused");
+    expect(refusal.data).toStrictEqual({
+      message: "This block changed since you last saw it",
+      rev,
+      text: "Dana's ideas",
+    });
+    await expect(texts(owner, roomId)).resolves.toStrictEqual([
+      "What's happened",
+      "Dana's ideas",
+      "Open questions",
+    ]);
+  });
+
   it("removing the last block leaves one empty paragraph of the person's, in the same change set", async () => {
     const { owner, roomId, happened, ideas, questions, robert } = await setup();
-    await owner.mutation(api.blocks.remove, { blockId: happened._id });
-    await owner.mutation(api.blocks.remove, { blockId: ideas._id });
-    await owner.mutation(api.blocks.remove, { blockId: questions._id });
+    await owner.mutation(api.blocks.remove, {
+      baseRev: happened.rev,
+      blockId: happened._id,
+    });
+    await owner.mutation(api.blocks.remove, {
+      baseRev: ideas.rev,
+      blockId: ideas._id,
+    });
+    await owner.mutation(api.blocks.remove, {
+      baseRev: questions.rev,
+      blockId: questions._id,
+    });
 
     const doc = defined(await owner.query(api.documents.get, { roomId }));
     expect(

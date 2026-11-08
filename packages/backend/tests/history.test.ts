@@ -185,7 +185,10 @@ describe("document history", () => {
       text: "Ideas",
     });
     vi.advanceTimersByTime(1000);
-    await owner.mutation(api.blocks.remove, { blockId: questions._id });
+    await owner.mutation(api.blocks.remove, {
+      baseRev: questions.rev,
+      blockId: questions._id,
+    });
 
     const first = await owner.query(api.history.list, {
       paginationOpts: { cursor: null, numItems: 2 },
@@ -304,7 +307,7 @@ describe("document history", () => {
       "paragraph",
       "Yesterday's plan"
     );
-    const { blockId: note } = await insert(
+    const { blockId: note, rev: noteRev } = await insert(
       dana,
       ideas._id,
       "listItem",
@@ -321,7 +324,10 @@ describe("document history", () => {
       text: "Today's plan",
     });
     await dana.mutation(api.blocks.stopEdit, { blockId: plan });
-    await owner.mutation(api.blocks.remove, { blockId: note });
+    await owner.mutation(api.blocks.remove, {
+      baseRev: noteRev,
+      blockId: note,
+    });
     const { blockId: added } = await insert(
       owner,
       questions._id,

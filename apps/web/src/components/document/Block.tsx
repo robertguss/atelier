@@ -1,7 +1,5 @@
-import { api } from "@atelier/backend/api";
 import type { Id } from "@atelier/backend/dataModel";
 import { BLOCK_CHARS } from "@atelier/shared";
-import { useMutation } from "convex/react";
 import {
   MessageSquareIcon,
   MessageSquarePlusIcon,
@@ -10,7 +8,6 @@ import {
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 
-import { errorText } from "~/components/room/errors";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { KIND_LABEL, authorText, openThreadsText } from "~/lib/document";
@@ -32,6 +29,8 @@ import { useBlockActions } from "./useBlockActions";
 export interface CaretRequest {
   key: Id<"blocks">;
   at: Caret;
+  /** When it was made, from `Date.now()`. */
+  madeAt: number;
 }
 
 interface BlockProps {
@@ -241,7 +240,6 @@ export const Block = ({
   onCommentDone,
 }: BlockProps) => {
   const blockId = block._id;
-  const remove = useMutation(api.blocks.remove);
   const local = useSyncExternalStore(session.subscribe, () =>
     session.local(sessionKey)
   );
@@ -268,15 +266,6 @@ export const Block = ({
     session,
     sessionKey,
   });
-
-  const run = async (action: () => Promise<unknown>) => {
-    setError(null);
-    try {
-      await action();
-    } catch (error_) {
-      setError(errorText(error_));
-    }
-  };
 
   return (
     <div
@@ -418,7 +407,7 @@ export const Block = ({
             autoFocus
             onClick={() => {
               setConfirmingDelete(false);
-              run(async () => await remove({ blockId })).catch(logFailure);
+              actions.remove();
             }}
           >
             Delete this block

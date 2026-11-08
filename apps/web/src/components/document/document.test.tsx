@@ -184,6 +184,9 @@ const blockWith = (text: string) => {
   return found;
 };
 
+const added = () =>
+  must(document.querySelector<HTMLElement>('[data-block-id="b-new"]'));
+
 const setUp = () => {
   resetBackend();
   window.localStorage.clear();
@@ -396,6 +399,47 @@ describe("adding, deleting and moving blocks", () => {
     });
   });
 
+  it("does not take focus back to a block that had the caret once, when it remounts later", async () => {
+    mutationEffect(
+      "blockOps:insertMany",
+      () => {
+        blocks.push(block("b-new", "a4", "paragraph", "", ROBERT));
+        pushBackend();
+      },
+      { blocks: [{ blockId: "b-new", rev: 5 }] }
+    );
+    await openRoom();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add a paragraph at the end" })
+    );
+    await waitFor(() => {
+      expect(within(added()).getByRole("textbox")).toHaveFocus();
+    });
+    const first = added();
+
+    // Robert moves on; a while later Dana adds a heading above the new block,
+    // which moves it into another section.
+    const elsewhere = startEditingIn("b1");
+    act(() => {
+      elsewhere.focus();
+    });
+    vi.useFakeTimers({
+      toFake: ["Date", "requestAnimationFrame", "setTimeout"],
+    });
+    vi.setSystemTime(Date.now() + 5000);
+    blocks.splice(4, 0, block("h3", "a3V", "heading", "Later", DANA));
+    act(() => {
+      pushBackend();
+    });
+
+    expect(added()).not.toBe(first);
+    // Focusing an editor waits for the next frame.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(elsewhere).toHaveFocus();
+  });
+
   it("asks for confirmation before deleting a block", async () => {
     await openRoom();
     const item = blockWith("Try a free tier");
@@ -413,8 +457,35 @@ describe("adding, deleting and moving blocks", () => {
     );
     await waitFor(() => {
       expect(mutation("blocks:remove")).toHaveBeenCalledWith({
+        baseRev: 1,
         blockId: "b2",
       });
+    });
+  });
+
+  it("saves what was just typed before deleting a block from its toolbar, removing it on the saved rev", async () => {
+    mutation("blocks:save").mockResolvedValue({ rev: 2 });
+    await openRoom();
+    const item = blockWith("Try a free tier");
+    const content = startEditingIn("b2");
+    act(() => {
+      editorOf(content).commands.insertContentAt(1, "Maybe ");
+    });
+    fireEvent.click(within(item).getByRole("button", { name: "Delete" }));
+    fireEvent.click(
+      within(item).getByRole("button", { name: "Delete this block" })
+    );
+
+    await waitFor(() => {
+      expect(mutation("blocks:remove")).toHaveBeenCalledWith({
+        baseRev: 2,
+        blockId: "b2",
+      });
+    });
+    expect(mutation("blocks:save")).toHaveBeenCalledExactlyOnceWith({
+      baseRev: 1,
+      blockId: "b2",
+      text: "Maybe Try a free tier",
     });
   });
 
@@ -908,6 +979,7 @@ describe("shaping blocks with the keyboard", () => {
 
     await waitFor(() => {
       expect(mutation("blocks:remove")).toHaveBeenCalledExactlyOnceWith({
+        baseRev: 1,
         blockId: "d1",
       });
     });

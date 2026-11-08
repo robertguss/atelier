@@ -508,6 +508,27 @@ describe("the editing session", () => {
       });
     });
 
+    it("keeps typing during a write that leaves other text in the block as a draft, not as a save over what landed", async () => {
+      const paste = deferred<(readonly [string, number])[]>();
+      const message = "Typed while the paste went in";
+      const session = open();
+      const pasted = session.run([[B1, 5]], async () => await paste.promise, {
+        draftMessage: message,
+        text: "Head, pasted, tail",
+      });
+      session.change(B1, "Head, pasted, tail!", 5);
+      paste.resolve([[B1, 6]]);
+      await pasted;
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(api.save).not.toHaveBeenCalled();
+      expect(session.local(B1).text).toBeUndefined();
+      expect(session.local(B1).draft).toStrictEqual({
+        message,
+        text: "Head, pasted, tail!",
+      });
+    });
+
     it("shows a tick at once, until the write lands and the server's copy carries it", async () => {
       const session = open();
       const ticked = session.run(

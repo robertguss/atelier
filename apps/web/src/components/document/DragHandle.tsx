@@ -16,10 +16,11 @@ export interface HandleFocus {
   at: number;
 }
 
-// A move can remount the block in another section, so the request outlives
-// the old handle. One older than this is not from a move just made, and a
-// block that remounts later must not take focus from wherever the person is.
-const FRESH_FOCUS_MS = 2000;
+// A move can remount the block in another section, so a focus request
+// outlives the old handle or editor. One older than this is not from an action
+// just taken, and a block that remounts later must not take focus from
+// wherever the person is.
+export const FRESH_FOCUS_MS = 2000;
 // How close to the scroller's top or bottom a drag scrolls it, and how far
 // it scrolls per frame.
 const EDGE_PX = 48;
