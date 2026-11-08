@@ -1,13 +1,11 @@
 import { v } from "convex/values";
 
-import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { requireMember } from "./lib/auth";
 import {
   DOCUMENT_BLOCKS,
-  LEASE_MS,
   SCRIBE_WORKING,
   blockTextProblem,
   clearLease,
@@ -18,53 +16,23 @@ import {
   liveBlocks,
   openChangeSet,
   orderBetween,
-  participantName,
   patchBlock,
   scribeWorking,
   sectionEnd,
 } from "./lib/document";
-import { required } from "./lib/required";
+import {
+  grantLease,
+  loadForEdit,
+  personChangeSet,
+  refuseIfHeldByOther,
+  refuseIfStale,
+} from "./lib/leases";
 import { blockKind } from "./schema";
 
-// People edit the document one block at a time. Starting to edit takes a
-// lease on the block; the browser renews it while the person types, and it
-// lapses LEASE_MS after the last renewal. Everything a person writes under
-// one lease forms one change set.
+// People edit the document one block at a time; lib/leases.ts holds the
+// lease rules. Saves carry the block rev they were based on.
 
 const LAPSED = "Your edit lock on this block has lapsed";
-
-// The block and the member acting on it, refusing while the scribe works.
-const loadForEdit = async (ctx: MutationCtx, blockId: Id<"blocks">) => {
-  const block = await ctx.db.get(blockId);
-  if (!block) {
-    throw new Error("Unknown block");
-  }
-  const { participant } = await requireMember(ctx, block.roomId);
-  if (block.deletedAt !== undefined) {
-    throw new Error("This block has been removed");
-  }
-  const now = Date.now();
-  const document = required(await ctx.db.get(block.documentId), "document");
-  if (scribeWorking(document, now)) {
-    throw new Error(SCRIBE_WORKING);
-  }
-  return { block, now, participant };
-};
-
-// Refuses when someone else holds an unexpired lease on the block.
-const refuseIfHeldByOther = async (
-  ctx: MutationCtx,
-  block: Doc<"blocks">,
-  participantId: Id<"participants">,
-  now: number
-) => {
-  const holder = leaseHolder(block, now);
-  if (holder && holder !== participantId) {
-    throw new Error(
-      `${await participantName(ctx, holder)} is editing this block`
-    );
-  }
-};
 
 // Refuses unless the person holds an unexpired lease on the block.
 const requireOwnLease = async (
@@ -79,58 +47,17 @@ const requireOwnLease = async (
   }
 };
 
-const grantLease = async (
-  ctx: MutationCtx,
-  blockId: Id<"blocks">,
-  participantId: Id<"participants">,
-  now: number,
-  leaseChangeSetId?: Id<"changeSets">
-) => {
-  const expiresAt = now + LEASE_MS;
-  await ctx.db.patch(blockId, {
-    leaseChangeSetId,
-    leaseExpiresAt: expiresAt,
-    leaseHolderParticipantId: participantId,
-  });
-  await ctx.scheduler.runAt(expiresAt, internal.blocks.expireLease, {
-    blockId,
-  });
-  return { expiresAt };
-};
-
-// The change set a person's write to the block joins: their lease's, opened
-// on its first write, or a new one when they hold no lease on it.
-const personChangeSet = async (
-  ctx: MutationCtx,
-  block: Doc<"blocks">,
-  participantId: Id<"participants">,
-  now: number
-) => {
-  const holdsLease = leaseHolder(block, now) === participantId;
-  if (holdsLease && block.leaseChangeSetId) {
-    return block.leaseChangeSetId;
-  }
-  const changeSetId = await openChangeSet(ctx, block.documentId, {
-    actorParticipantId: participantId,
-    kind: "human_edit",
-  });
-  if (holdsLease) {
-    await ctx.db.patch(block._id, { leaseChangeSetId: changeSetId });
-  }
-  return changeSetId;
-};
-
 export const startEdit = mutation({
   args: { blockId: v.id("blocks") },
   handler: async (ctx, { blockId }) => {
     const { block, participant, now } = await loadForEdit(ctx, blockId);
     await refuseIfHeldByOther(ctx, block, participant._id, now);
-    // Taking the block again while the lease is still yours keeps its change set.
+    // Taking the block again while the lease is still yours renews it and keeps its change set.
     const kept =
       leaseHolder(block, now) === participant._id
         ? block.leaseChangeSetId
         : undefined;
-    return await grantLease(ctx, blockId, participant._id, now, kept);
+    return await grantLease(ctx, block, participant._id, now, kept);
   },
 });
 
@@ -141,7 +68,7 @@ export const renew = mutation({
     await requireOwnLease(ctx, block, participant._id, now);
     return await grantLease(
       ctx,
-      blockId,
+      block,
       participant._id,
       now,
       block.leaseChangeSetId
@@ -164,36 +91,45 @@ export const stopEdit = mutation({
   },
 });
 
-// Writes the block's text and renews the lease. The block keeps its author;
-// a block someone else wrote is marked as edited by a human.
+// Writes the block's text, taking the lease if it is free and renewing it.
+// Refused when someone else holds the block or, given `baseRev`, when the
+// block has changed since. The block keeps its author; a block someone else
+// wrote is marked as edited by a human. Returns the block's rev.
 export const save = mutation({
-  args: { blockId: v.id("blocks"), text: v.string() },
-  handler: async (ctx, { blockId, text }) => {
+  args: {
+    baseRev: v.optional(v.number()),
+    blockId: v.id("blocks"),
+    text: v.string(),
+  },
+  handler: async (ctx, { baseRev, blockId, text }) => {
     const { block, participant, now } = await loadForEdit(ctx, blockId);
-    await requireOwnLease(ctx, block, participant._id, now);
+    await refuseIfHeldByOther(ctx, block, participant._id, now);
+    if (baseRev !== undefined) {
+      refuseIfStale(block, baseRev);
+    }
     const problem = blockTextProblem(text);
     if (problem !== null) {
       throw new Error(problem);
     }
+    // A lapsed lease of the person's own is retaken with a fresh change set.
+    const kept =
+      leaseHolder(block, now) === participant._id
+        ? block.leaseChangeSetId
+        : undefined;
     if (text === block.text) {
-      await grantLease(
-        ctx,
-        blockId,
-        participant._id,
-        now,
-        block.leaseChangeSetId
-      );
-      return;
+      await grantLease(ctx, block, participant._id, now, kept);
+      return { rev: block.rev };
     }
     const changeSetId = await personChangeSet(ctx, block, participant._id, now);
-    await grantLease(ctx, blockId, participant._id, now, changeSetId);
+    await grantLease(ctx, block, participant._id, now, changeSetId);
     const ownBlock =
       block.author.kind === "participant" &&
       block.author.participantId === participant._id;
-    await patchBlock(ctx, changeSetId, blockId, {
+    const rev = await patchBlock(ctx, changeSetId, blockId, {
       text,
       ...(ownBlock ? {} : { humanEditedAt: now }),
     });
+    return { rev };
   },
 });
 
@@ -259,7 +195,13 @@ export const add = mutation({
       order,
       text,
     });
-    await grantLease(ctx, blockId, participant._id, now, changeSetId);
+    await grantLease(
+      ctx,
+      { _id: blockId, roomId },
+      participant._id,
+      now,
+      changeSetId
+    );
     return blockId;
   },
 });

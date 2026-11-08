@@ -714,9 +714,13 @@ describe("scribe", () => {
     });
   });
 
-  it("calling in the scribe while the teammate edits a block is refused, naming her", async () => {
+  it("calling in the scribe while the teammate has typed in a block is refused, naming her", async () => {
     const s = await setup();
     await s.dana.mutation(api.blocks.startEdit, { blockId: s.ideas._id });
+    await s.dana.mutation(api.blocks.save, {
+      blockId: s.ideas._id,
+      text: "Ideas",
+    });
     await expect(
       s.owner.mutation(api.scribe.begin, {
         participantId: s.claude._id,
@@ -728,6 +732,25 @@ describe("scribe", () => {
     await expect(
       s.t.run(async (ctx) => await ctx.db.query("scribeRuns").collect())
     ).resolves.toStrictEqual([]);
+  });
+
+  it("calling in the scribe while the teammate only holds a block she has not typed in starts the run, clears her lease, and refuses her next save", async () => {
+    const s = await setup();
+    await s.dana.mutation(api.blocks.startEdit, { blockId: s.ideas._id });
+    await beginScribe(s.t, s.owner, s.roomId, s.claude._id);
+    const ideas = defined(
+      await s.t.run(async (ctx) => await ctx.db.get(s.ideas._id))
+    );
+    expect([
+      ideas.leaseHolderParticipantId,
+      ideas.leaseExpiresAt,
+    ]).toStrictEqual([undefined, undefined]);
+    await expect(
+      s.dana.mutation(api.blocks.save, {
+        blockId: s.ideas._id,
+        text: "Ideas",
+      })
+    ).rejects.toThrow("The scribe is working on the document");
   });
 
   it("calling in the scribe is refused while that model is answering, and allowed once its turn ends", async () => {

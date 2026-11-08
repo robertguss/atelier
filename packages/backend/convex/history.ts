@@ -7,7 +7,6 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireMember } from "./lib/auth";
 import {
   SCRIBE_WORKING,
-  anyLeaseHolder,
   deleteBlock,
   getDocument,
   openChangeSet,
@@ -18,6 +17,7 @@ import {
   takeCheckpoint,
   versionAt,
 } from "./lib/document";
+import { writingLeaseHolder } from "./lib/leases";
 import { record } from "./lib/ledger";
 import { required } from "./lib/required";
 
@@ -196,7 +196,7 @@ export const restore = mutation({
       .query("blocks")
       .withIndex("by_document_order", (q) => q.eq("documentId", document._id))
       .collect();
-    const holder = anyLeaseHolder(rows, now);
+    const holder = writingLeaseHolder(rows, now);
     if (holder !== undefined) {
       throw new Error(
         `${await participantName(ctx, holder)} is editing a block`

@@ -2,7 +2,16 @@ import { register as registerWorkflow } from "@convex-dev/workflow/test";
 /// <reference types="vite/client" />
 import { convexTest } from "convex-test";
 import type { TestConvex } from "convex-test";
-import { beforeEach, afterEach, expect, vi, it, describe } from "vitest";
+import { ConvexError } from "convex/values";
+import {
+  beforeEach,
+  afterEach,
+  assert,
+  expect,
+  vi,
+  it,
+  describe,
+} from "vitest";
 
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
@@ -295,25 +304,38 @@ describe("block editing", () => {
     await dana.mutation(api.blocks.startEdit, { blockId: ideas._id });
   });
 
-  it("after two minutes without renewal, Robert's save is refused as lapsed, the teammate can take the block, and Robert's later save names her", async () => {
-    const { t, owner, dana, roomId, danaParticipant, ideas } = await setup();
+  it("after two minutes idle, Robert's save with the block's rev retakes the free lease and writes, but is refused naming the teammate once she has taken the block", async () => {
+    const { t, owner, dana, roomId, robert, ideas } = await setup();
     await owner.mutation(api.blocks.startEdit, { blockId: ideas._id });
     vi.advanceTimersByTime(2 * MINUTE + 1);
     await expect(
-      owner.mutation(api.blocks.save, { blockId: ideas._id, text: "Late" })
-    ).rejects.toThrow("Your edit lock on this block has lapsed");
-    await expect(
       owner.mutation(api.blocks.renew, { blockId: ideas._id })
     ).rejects.toThrow("Your edit lock on this block has lapsed");
+    const savedAt = Date.now();
+    const { rev } = await owner.mutation(api.blocks.save, {
+      baseRev: ideas.rev,
+      blockId: ideas._id,
+      text: "Late",
+    });
+    const retaken = defined(
+      defined(await owner.query(api.documents.get, { roomId })).blocks.find(
+        (b) => b._id === ideas._id
+      )
+    );
+    expect([
+      retaken.text,
+      retaken.rev,
+      retaken.leaseHolderParticipantId,
+      retaken.leaseExpiresAt,
+    ]).toStrictEqual(["Late", rev, robert._id, about(savedAt + 2 * MINUTE)]);
 
+    vi.advanceTimersByTime(2 * MINUTE + 1);
     // The scheduled cleanup clears the lapsed lease.
     await t.finishInProgressScheduledFunctions();
     const cleared = defined(
-      defined(
-        await owner.query(api.documents.get, {
-          roomId,
-        })
-      ).blocks.find((b) => b._id === ideas._id)
+      defined(await owner.query(api.documents.get, { roomId })).blocks.find(
+        (b) => b._id === ideas._id
+      )
     );
     expect([
       cleared.leaseHolderParticipantId,
@@ -322,20 +344,71 @@ describe("block editing", () => {
 
     await dana.mutation(api.blocks.startEdit, { blockId: ideas._id });
     await expect(
-      owner.mutation(api.blocks.save, { blockId: ideas._id, text: "Late" })
+      owner.mutation(api.blocks.save, {
+        baseRev: rev,
+        blockId: ideas._id,
+        text: "Later",
+      })
     ).rejects.toThrow("Dana is editing this block");
-    await dana.mutation(api.blocks.save, { blockId: ideas._id, text: "Ideas" });
-    const block = defined(
-      defined(
-        await owner.query(api.documents.get, {
-          roomId,
-        })
-      ).blocks.find((b) => b._id === ideas._id)
-    );
-    expect([block.text, block.leaseHolderParticipantId]).toStrictEqual([
-      "Ideas",
-      danaParticipant._id,
+    await expect(texts(owner, roomId)).resolves.toStrictEqual([
+      "What's happened",
+      "Late",
+      "Open questions",
     ]);
+  });
+
+  it("a save based on an old rev is refused with the block's current text, checked state and rev, and changes nothing", async () => {
+    const { owner, dana, roomId, ideas } = await setup();
+    await dana.mutation(api.blocks.startEdit, { blockId: ideas._id });
+    const { rev } = await dana.mutation(api.blocks.save, {
+      baseRev: ideas.rev,
+      blockId: ideas._id,
+      text: "Dana's ideas",
+    });
+    await dana.mutation(api.blocks.stopEdit, { blockId: ideas._id });
+
+    // Robert's second browser still has the block as it was before Dana's save.
+    const refusal = await owner
+      .mutation(api.blocks.save, {
+        baseRev: ideas.rev,
+        blockId: ideas._id,
+        text: "Robert's ideas",
+      })
+      .catch((error: unknown) => error);
+    assert(refusal instanceof ConvexError, "the save was refused");
+    // An unticked block carries no checked state.
+    expect(refusal.data).toStrictEqual({
+      message: "This block changed since you last saw it",
+      rev,
+      text: "Dana's ideas",
+    });
+    const block = defined(
+      defined(await owner.query(api.documents.get, { roomId })).blocks.find(
+        (b) => b._id === ideas._id
+      )
+    );
+    expect([
+      block.text,
+      block.rev,
+      block.leaseHolderParticipantId,
+    ]).toStrictEqual(["Dana's ideas", rev, undefined]);
+  });
+
+  it("starting to edit a second block releases the person's lease on the first", async () => {
+    const { owner, dana, roomId, robert, ideas, questions } = await setup();
+    await owner.mutation(api.blocks.startEdit, { blockId: ideas._id });
+    await owner.mutation(api.blocks.startEdit, { blockId: questions._id });
+    const { blocks } = defined(
+      await owner.query(api.documents.get, { roomId })
+    );
+    expect(
+      blocks.map((b) => [b.text, b.leaseHolderParticipantId])
+    ).toStrictEqual([
+      ["What's happened", undefined],
+      ["Ideas & notes", undefined],
+      ["Open questions", robert._id],
+    ]);
+    await dana.mutation(api.blocks.startEdit, { blockId: ideas._id });
   });
 
   it("two saves by the same person within one lease form one change set, and the next lease starts another", async () => {

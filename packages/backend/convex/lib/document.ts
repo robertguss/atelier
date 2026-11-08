@@ -218,7 +218,8 @@ export type BlockPatch = Partial<
   >
 >;
 
-// Changing a block's text also clears its template-guidance mark.
+// Changing a block's text also clears its template-guidance mark. Returns the
+// block's new rev.
 export const patchBlock = async (
   ctx: MutationCtx,
   changeSetId: Id<"changeSets">,
@@ -254,6 +255,7 @@ export const patchBlock = async (
   if (textChanged) {
     await reanchorThreads(ctx, blockId, after.text, changeSetId);
   }
+  return rev;
 };
 
 export const deleteBlock = async (
@@ -380,14 +382,6 @@ export const participantName = async (
   return participant?.displayName ?? "Someone";
 };
 
-// Who holds an unexpired lease on any live block, if anyone.
-export const anyLeaseHolder = (blocks: Doc<"blocks">[], now: number) => {
-  const held = blocks
-    .filter((block) => block.deletedAt === undefined)
-    .map((block) => leaseHolder(block, now));
-  return held.find((holder) => holder !== undefined);
-};
-
 // The index of the last block in the section that holds block `index`: the
 // blocks after a heading, up to the next heading.
 export const sectionEnd = (blocks: Doc<"blocks">[], index: number) => {
@@ -406,11 +400,12 @@ export const clearLease = async (ctx: MutationCtx, blockId: Id<"blocks">) => {
   });
 };
 
-// Releases every lease a person holds in the room's document.
+// Releases every lease a person holds in the room's document, except on `keep`.
 export const releaseLeasesOf = async (
   ctx: MutationCtx,
   roomId: Id<"rooms">,
-  participantId: Id<"participants">
+  participantId: Id<"participants">,
+  keep?: Id<"blocks">
 ) => {
   const document = await getDocument(ctx, roomId);
   if (!document) {
@@ -422,7 +417,10 @@ export const releaseLeasesOf = async (
     .collect();
   await Promise.all(
     blocks
-      .filter((block) => block.leaseHolderParticipantId === participantId)
+      .filter(
+        (block) =>
+          block.leaseHolderParticipantId === participantId && block._id !== keep
+      )
       .map(async (block) => {
         await clearLease(ctx, block._id);
       })

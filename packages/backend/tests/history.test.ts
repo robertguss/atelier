@@ -507,7 +507,7 @@ describe("document history", () => {
     ]);
   });
 
-  it("restore is refused while anyone holds an edit lease, naming them, and while the scribe is working", async () => {
+  it("restore is refused while anyone has typed under an edit lease, naming them, and while the scribe is working", async () => {
     const { t, owner, dana, roomId, claude, documentId, ideas } = await setup();
     const seedId = await latestChangeSet(owner, roomId);
     await dana.mutation(api.blocks.startEdit, { blockId: ideas._id });
@@ -547,6 +547,24 @@ describe("document history", () => {
         (b) => b.text
       )
     ).toContain("Ideas");
+  });
+
+  it("a lease nobody has typed under does not block a restore", async () => {
+    const { owner, dana, roomId, ideas } = await setup();
+    const seedId = await latestChangeSet(owner, roomId);
+    await owner.mutation(api.blocks.startEdit, { blockId: ideas._id });
+    await owner.mutation(api.blocks.save, {
+      blockId: ideas._id,
+      text: "Ideas",
+    });
+    await owner.mutation(api.blocks.stopEdit, { blockId: ideas._id });
+    await dana.mutation(api.blocks.startEdit, { blockId: ideas._id });
+    await owner.mutation(api.history.restore, { changeSetId: seedId });
+    expect(
+      defined(await owner.query(api.documents.get, { roomId })).blocks.map(
+        (b) => b.text
+      )
+    ).toStrictEqual(["What's happened", "Ideas & notes", "Open questions"]);
   });
 
   it("someone outside the room cannot read its history", async () => {
