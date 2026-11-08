@@ -42,11 +42,33 @@ describe("mapping a selection to the stored text", () => {
     expect(select(source, "the pricing", "See ")?.passage).toBe("the pricing");
   });
 
-  it("ignores line breaks and list markers the browser renders differently", () => {
-    const source = "Options:\n\n1. Per seat\n2. Per call";
-    expect(select(source, "Per seat\nPer call", "Options:")?.passage).toBe(
-      "Per seat\n2. Per call"
+  it("ignores line breaks the browser renders differently", () => {
+    const source = "Options:\nPer seat\nPer call";
+    expect(select(source, "Per seat Per call", "Options: ")?.passage).toBe(
+      "Per seat\nPer call"
     );
+  });
+
+  it("keeps a list marker written in a block's text, which shows as text", () => {
+    expect(select("1. Per seat\n- Per call", "1. Per seat", "")?.passage).toBe(
+      "1. Per seat"
+    );
+    expect(
+      select("1. Per seat\n+ Per call", "+ Per call", "1. Per seat ")?.passage
+    ).toBe("+ Per call");
+  });
+
+  it("maps a to-do or numbered item from its text alone, its box and number drawn outside it", () => {
+    expect(select("Email **Dana**", "Email Dana", "")).toStrictEqual({
+      end: 12,
+      passage: "Email **Dana",
+      start: 0,
+    });
+    expect(select("Ship v1 by Friday", "v1", "Ship ")).toStrictEqual({
+      end: 7,
+      passage: "v1",
+      start: 5,
+    });
   });
 
   it("keeps underscores and asterisks that are part of the visible text", () => {

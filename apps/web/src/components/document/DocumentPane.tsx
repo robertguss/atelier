@@ -54,7 +54,7 @@ interface DocumentPaneProps {
   isOwner: boolean;
 }
 
-/** The passage of a read-view block the reader has selected, as offsets in its stored text. */
+/** The passage of a block the reader has selected, editable or not, as offsets in its stored text. */
 const useBlockSelection = (
   blocks: readonly DocBlock[] | undefined
 ): Passage | null => {
@@ -123,6 +123,8 @@ const markPassages = (
   const drafting = draft && rangeOf(draft.blockId, draft.start, draft.end);
   if (drafting) {
     registry.set(DRAFT_HIGHLIGHT, new Highlight(drafting));
+  } else {
+    registry.delete(DRAFT_HIGHLIGHT);
   }
 };
 
@@ -140,14 +142,28 @@ const useCommentHighlights = (
       typeof Highlight !== "undefined"
         ? CSS.highlights
         : null;
+    const mark = () => {
+      if (root && registry) {
+        markPassages(root, registry, blocks, threads, draft);
+      }
+    };
+    // An editor replacing a block's static text, or a transaction in one,
+    // swaps the text nodes the marks point into, without a render here.
+    const observer = new MutationObserver(mark);
     if (root && registry) {
-      markPassages(root, registry, blocks, threads, draft);
+      mark();
+      observer.observe(root, {
+        characterData: true,
+        childList: true,
+        subtree: true,
+      });
     }
     return () => {
+      observer.disconnect();
       registry?.delete(COMMENT_HIGHLIGHT);
       registry?.delete(DRAFT_HIGHLIGHT);
     };
-  });
+  }, [rootRef, blocks, threads, draft]);
 };
 
 const sectionBlocks = (section: Section) =>
