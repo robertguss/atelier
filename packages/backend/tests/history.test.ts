@@ -179,7 +179,11 @@ describe("document history", () => {
     const seededAt = Date.now();
     vi.advanceTimersByTime(1000);
     await dana.mutation(api.blocks.startEdit, { blockId: ideas._id });
-    await dana.mutation(api.blocks.save, { blockId: ideas._id, text: "Ideas" });
+    await dana.mutation(api.blocks.save, {
+      baseRev: ideas.rev,
+      blockId: ideas._id,
+      text: "Ideas",
+    });
     vi.advanceTimersByTime(1000);
     await owner.mutation(api.blocks.remove, { blockId: questions._id });
 
@@ -209,11 +213,13 @@ describe("document history", () => {
   it("a change set's diff lists its revisions in order with the text before and after", async () => {
     const { owner, roomId, ideas } = await setup();
     await owner.mutation(api.blocks.startEdit, { blockId: ideas._id });
-    await owner.mutation(api.blocks.save, {
+    const { rev } = await owner.mutation(api.blocks.save, {
+      baseRev: ideas.rev,
       blockId: ideas._id,
       text: "Ideas",
     });
     await owner.mutation(api.blocks.save, {
+      baseRev: rev,
       blockId: ideas._id,
       text: "Ideas!",
     });
@@ -277,41 +283,55 @@ describe("document history", () => {
       ideas,
       questions,
     } = await setup();
-    const plan = await owner.mutation(api.blocks.add, {
-      endOfSectionId: happened._id,
-      kind: "paragraph",
-      roomId,
-      text: "Yesterday's plan",
-    });
-    await owner.mutation(api.blocks.stopEdit, { blockId: plan });
-    const note = await dana.mutation(api.blocks.add, {
-      endOfSectionId: ideas._id,
-      kind: "listItem",
-      roomId,
-      text: "Dana's note",
-    });
-    await dana.mutation(api.blocks.stopEdit, { blockId: note });
+    const insert = async (
+      caller: Caller,
+      afterBlockId: Id<"blocks">,
+      kind: "listItem" | "paragraph",
+      text: string
+    ) => {
+      const { blocks } = await caller.mutation(api.blockOps.insertMany, {
+        afterBlockId,
+        blocks: [{ kind, text }],
+        roomId,
+      });
+      const inserted = defined(blocks[0]);
+      await caller.mutation(api.blocks.stopEdit, { blockId: inserted.blockId });
+      return inserted;
+    };
+    const { blockId: plan, rev: planRev } = await insert(
+      owner,
+      happened._id,
+      "paragraph",
+      "Yesterday's plan"
+    );
+    const { blockId: note } = await insert(
+      dana,
+      ideas._id,
+      "listItem",
+      "Dana's note"
+    );
     const yesterdayId = await latestChangeSet(owner, roomId);
     const yesterday = await current(t, documentId);
 
     vi.advanceTimersByTime(DAY);
     await dana.mutation(api.blocks.startEdit, { blockId: plan });
     await dana.mutation(api.blocks.save, {
+      baseRev: planRev,
       blockId: plan,
       text: "Today's plan",
     });
     await dana.mutation(api.blocks.stopEdit, { blockId: plan });
     await owner.mutation(api.blocks.remove, { blockId: note });
-    const added = await owner.mutation(api.blocks.add, {
-      endOfSectionId: questions._id,
-      kind: "paragraph",
-      roomId,
-      text: "Added today",
-    });
-    await owner.mutation(api.blocks.stopEdit, { blockId: added });
-    await dana.mutation(api.blocks.move, {
+    const { blockId: added } = await insert(
+      owner,
+      questions._id,
+      "paragraph",
+      "Added today"
+    );
+    await dana.mutation(api.blockOps.moveTo, {
+      afterBlockId: plan,
+      baseRev: questions.rev,
       blockId: questions._id,
-      direction: "up",
     });
     const todayId = await latestChangeSet(owner, roomId);
     const today = await current(t, documentId);
@@ -511,7 +531,11 @@ describe("document history", () => {
     const { t, owner, dana, roomId, claude, documentId, ideas } = await setup();
     const seedId = await latestChangeSet(owner, roomId);
     await dana.mutation(api.blocks.startEdit, { blockId: ideas._id });
-    await dana.mutation(api.blocks.save, { blockId: ideas._id, text: "Ideas" });
+    await dana.mutation(api.blocks.save, {
+      baseRev: ideas.rev,
+      blockId: ideas._id,
+      text: "Ideas",
+    });
     await expect(
       owner.mutation(api.history.restore, { changeSetId: seedId })
     ).rejects.toThrow("Dana is editing a block");
@@ -554,6 +578,7 @@ describe("document history", () => {
     const seedId = await latestChangeSet(owner, roomId);
     await owner.mutation(api.blocks.startEdit, { blockId: ideas._id });
     await owner.mutation(api.blocks.save, {
+      baseRev: ideas.rev,
       blockId: ideas._id,
       text: "Ideas",
     });

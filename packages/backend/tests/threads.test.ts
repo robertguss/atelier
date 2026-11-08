@@ -175,12 +175,16 @@ const runAndFinish = async (t: T, turnId: Id<"turns">, finalText: string) => {
 };
 
 const editBlock = async (
+  t: TestConvex<typeof schema>,
   caller: Caller,
   blockId: Id<"blocks">,
   text: string
 ) => {
+  const { rev } = defined(
+    await t.run(async (ctx) => await ctx.db.get(blockId))
+  );
   await caller.mutation(api.blocks.startEdit, { blockId });
-  await caller.mutation(api.blocks.save, { blockId, text });
+  await caller.mutation(api.blocks.save, { baseRev: rev, blockId, text });
   await caller.mutation(api.blocks.stopEdit, { blockId });
 };
 
@@ -574,7 +578,7 @@ describe("comment threads", () => {
     );
     const edited =
       "After the call we agreed to ship the pricing page on Friday, with the old plans kept for existing customers until March.";
-    await editBlock(dana, blockId, edited);
+    await editBlock(t, dana, blockId, edited);
 
     const anchored = await thread(t, threadId);
     expect(anchored.detachedBeforeChangeSetId).toBeUndefined();
@@ -596,6 +600,7 @@ describe("comment threads", () => {
       "Friday is tight."
     );
     await editBlock(
+      t,
       owner,
       blockId,
       "Launch is postponed until the security review signs off."
@@ -635,7 +640,7 @@ describe("comment threads", () => {
   it("a thread on the second of two identical passages stays on the second when the block changes elsewhere", async () => {
     const { t, dana, blockId } = await setup();
     const text = "Pricing: old plans stay. Billing: old plans stay too.";
-    await editBlock(dana, blockId, text);
+    await editBlock(t, dana, blockId, text);
     const second = text.lastIndexOf("old plans");
     const threadId = await dana.mutation(api.threads.create, {
       blockId,
@@ -645,7 +650,7 @@ describe("comment threads", () => {
     });
 
     const edited = `${text} Support is unchanged.`;
-    await editBlock(dana, blockId, edited);
+    await editBlock(t, dana, blockId, edited);
     const awaited = await thread(t, threadId);
     expect(awaited.position).toBe(second);
   });

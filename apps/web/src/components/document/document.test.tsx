@@ -167,6 +167,15 @@ const patchBlock = (index: number, patch: Partial<TestBlock>) => {
   blocks = blocks.map((b, i) => (i === index ? { ...b, ...patch } : b));
 };
 
+// jsdom has no layout, so a drag finds `target` under every point it reaches.
+const pointOver = (target: HTMLElement) => {
+  document.elementFromPoint = () => target;
+  Object.defineProperty(HTMLElement.prototype, "setPointerCapture", {
+    configurable: true,
+    value: () => null,
+  });
+};
+
 const blockWith = (text: string) => {
   const found = screen.getByText(text).closest<HTMLElement>("[data-block-id]");
   if (!found) {
@@ -447,6 +456,57 @@ describe("adding, deleting and moving blocks", () => {
         })
       ).toHaveFocus();
     });
+  });
+
+  it("drags a block by its handle, marking the gap it would drop into, and moves it there on release", async () => {
+    mutation("blockOps:moveTo").mockResolvedValue({ rev: 5 });
+    await openRoom();
+    const dragged = blockWith("Charge per seat.");
+    const target = blockWith("Try a free tier");
+    // jsdom has no layout: the target spans 100 to 140 px, under any point the pointer reaches.
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ height: 40, width: 600, x: 0, y: 100 })
+    );
+    pointOver(target);
+    const handle = within(dragged).getByRole("button", {
+      name: "Reorder block",
+    });
+
+    fireEvent.pointerDown(handle, { button: 0, clientX: 10, clientY: 60 });
+    fireEvent.pointerMove(handle, { clientX: 10, clientY: 110 });
+    expect(target.dataset.drop).toBe("before");
+    fireEvent.pointerMove(handle, { clientX: 10, clientY: 130 });
+    expect(target.dataset.drop).toBe("after");
+    fireEvent.pointerUp(handle, { clientX: 10, clientY: 130 });
+
+    expect(target.dataset.drop).toBeUndefined();
+    await waitFor(() => {
+      expect(mutation("blockOps:moveTo")).toHaveBeenCalledWith({
+        afterBlockId: "b2",
+        baseRev: 1,
+        blockId: "b1",
+      });
+    });
+    const announced = await screen.findByText("Moved to position 3 of 4");
+    expect(announced).toBeInTheDocument();
+  });
+
+  it("leaves a block in place when its drag is cancelled", async () => {
+    await openRoom();
+    const target = blockWith("Try a free tier");
+    pointOver(target);
+    const handle = within(blockWith("Charge per seat.")).getByRole("button", {
+      name: "Reorder block",
+    });
+
+    fireEvent.pointerDown(handle, { button: 0, clientX: 10, clientY: 60 });
+    fireEvent.pointerMove(handle, { clientX: 10, clientY: 130 });
+    expect(target.dataset.drop).toBeDefined();
+    fireEvent.keyDown(handle, { key: "Escape" });
+    fireEvent.pointerUp(handle, { clientX: 10, clientY: 130 });
+
+    expect(target.dataset.drop).toBeUndefined();
+    expect(mutation("blockOps:moveTo")).not.toHaveBeenCalled();
   });
 
   it("refuses a multi-block paste that would pass the document limit, inserting nothing and keeping the paste as a draft", async () => {
@@ -796,6 +856,62 @@ describe("shaping blocks with the keyboard", () => {
         previousBaseRev: 1,
       });
     });
+  });
+
+  it("adds an empty block of the same kind above on Enter at the start of a block, keeping the caret where it was", async () => {
+    await openRoom();
+    const content = startEditingIn("b2");
+    act(() => {
+      editorOf(content).commands.setTextSelection(1);
+    });
+    fireEvent.keyDown(content, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(mutation("blockOps:insertMany")).toHaveBeenCalledExactlyOnceWith({
+        afterBlockId: "b1",
+        blocks: [{ kind: "listItem", text: "" }],
+        roomId: ROOM,
+      });
+    });
+    expect(content).toHaveTextContent(/^Try a free tier$/u);
+    expect(mutation("blockOps:split")).not.toHaveBeenCalled();
+  });
+
+  it("refuses to merge into a block Robert holds on Backspace, naming him", async () => {
+    patchBlock(2, { kind: "paragraph" });
+    patchBlock(1, {
+      leaseExpiresAt: Date.now() + 60_000,
+      leaseHolderParticipantId: ROBERT,
+    });
+    await openRoom("member");
+    const paragraph = blockWith("Try a free tier");
+    const content = startEditingIn("b2");
+    act(() => {
+      editorOf(content).commands.setTextSelection(1);
+    });
+    fireEvent.keyDown(content, { key: "Backspace" });
+
+    const alert = await within(paragraph).findByRole("alert");
+    expect(alert).toHaveTextContent("Robert is editing the block above");
+    expect(mutation("blockOps:merge")).not.toHaveBeenCalled();
+  });
+
+  it("removes a divider above on Backspace at the start of the block below it", async () => {
+    patchBlock(2, { kind: "paragraph" });
+    blocks.splice(2, 0, block("d1", "a1V", "divider", "", ROBERT));
+    await openRoom();
+    const content = startEditingIn("b2");
+    act(() => {
+      editorOf(content).commands.setTextSelection(1);
+    });
+    fireEvent.keyDown(content, { key: "Backspace" });
+
+    await waitFor(() => {
+      expect(mutation("blocks:remove")).toHaveBeenCalledExactlyOnceWith({
+        blockId: "d1",
+      });
+    });
+    expect(mutation("blockOps:merge")).not.toHaveBeenCalled();
   });
 
   it("ticks a to-do at once and records the tick", async () => {

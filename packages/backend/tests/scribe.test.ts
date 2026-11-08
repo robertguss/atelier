@@ -718,6 +718,7 @@ describe("scribe", () => {
     const s = await setup();
     await s.dana.mutation(api.blocks.startEdit, { blockId: s.ideas._id });
     await s.dana.mutation(api.blocks.save, {
+      baseRev: s.ideas.rev,
       blockId: s.ideas._id,
       text: "Ideas",
     });
@@ -747,6 +748,7 @@ describe("scribe", () => {
     ]).toStrictEqual([undefined, undefined]);
     await expect(
       s.dana.mutation(api.blocks.save, {
+        baseRev: s.ideas.rev,
         blockId: s.ideas._id,
         text: "Ideas",
       })

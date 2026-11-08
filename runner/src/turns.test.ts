@@ -566,6 +566,54 @@ describe(createTurns, () => {
     expect(!JSON.stringify(s.calls).includes("RAW FILE CONTENTS")).toBeTruthy();
   });
 
+  it("tool items that Convex fails to record go again with the next progress tick", async () => {
+    vi.useFakeTimers({
+      now: 0,
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+        "Date",
+      ],
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {
+      // The runner reports the failed tick; the test checks what Convex hears next.
+    });
+    const s = setup();
+    let failures = 1;
+    s.replies["runner:recordTurnItems"] = () => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error("Network error");
+      }
+      return null;
+    };
+    const turn = s.turns.handle("c-run");
+    await until(() => s.runs.length > 0);
+    const [run] = s.runs;
+    assert(run);
+
+    run.events.push({
+      id: "call-1",
+      name: "Read",
+      summary: "src/plan.md",
+      type: "tool_call",
+    });
+    await idle();
+    vi.advanceTimersByTime(500);
+    await until(() => s.named("runner:recordTurnItems").length === 1);
+    await idle();
+    vi.advanceTimersByTime(500);
+    await until(() => s.named("runner:recordTurnItems").length === 2);
+    expect(s.named("runner:recordTurnItems")[1]?.items).toStrictEqual([
+      { callId: "call-1", name: "Read", seq: 0, summary: "src/plan.md" },
+    ]);
+
+    end(run, { text: "done", type: "final" });
+    await turn;
+  });
+
   it("the session id is saved as soon as it arrives, before the turn finishes", async () => {
     const s = setup();
     const turn = s.turns.handle("c-run");

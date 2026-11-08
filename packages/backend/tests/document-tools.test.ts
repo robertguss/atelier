@@ -197,11 +197,11 @@ const block = async (t: T, rawId: string) =>
 
 const editBlock = async (
   caller: Caller,
-  blockId: Id<"blocks">,
+  { blockId, rev }: { blockId: Id<"blocks">; rev: number },
   text: string
 ) => {
   await caller.mutation(api.blocks.startEdit, { blockId });
-  await caller.mutation(api.blocks.save, { blockId, text });
+  await caller.mutation(api.blocks.save, { baseRev: rev, blockId, text });
   await caller.mutation(api.blocks.stopEdit, { blockId });
 };
 
@@ -424,7 +424,7 @@ describe("document tools for models", () => {
     });
     await editBlock(
       dana,
-      added.blockId,
+      added,
       "Use the smaller plan, but keep annual billing."
     );
 
@@ -475,7 +475,7 @@ describe("document tools for models", () => {
       transcriptRef: "/t",
       turnId: first.turnId,
     });
-    await editBlock(dana, added.blockId, "Draft finding, corrected by Dana.");
+    await editBlock(dana, added, "Draft finding, corrected by Dana.");
 
     const { turnId } = await runningTurn(t, owner, roomId, claude._id);
     const awaited2 = await block(t, added.blockId);

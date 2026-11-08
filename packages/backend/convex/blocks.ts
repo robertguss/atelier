@@ -1,24 +1,15 @@
-import { DOCUMENT_BLOCKS } from "@atelier/shared";
 import { v } from "convex/values";
 
-import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation } from "./_generated/server";
-import type { MutationCtx } from "./_generated/server";
 import { requireMember } from "./lib/auth";
 import {
-  SCRIBE_WORKING,
   blockTextProblem,
   clearLease,
   deleteBlock,
-  getDocument,
   insertBlock,
   leaseHolder,
   liveBlocks,
-  openChangeSet,
-  orderBetween,
   patchBlock,
-  scribeWorking,
-  sectionEnd,
 } from "./lib/document";
 import {
   grantLease,
@@ -28,25 +19,9 @@ import {
   refuseIfHeldByOther,
   refuseIfStale,
 } from "./lib/leases";
-import { blockKind } from "./schema";
 
 // People edit the document one block at a time; lib/leases.ts holds the
 // lease rules. Saves carry the block rev they were based on.
-
-const LAPSED = "Your edit lock on this block has lapsed";
-
-// Refuses unless the person holds an unexpired lease on the block.
-const requireOwnLease = async (
-  ctx: MutationCtx,
-  block: Doc<"blocks">,
-  participantId: Id<"participants">,
-  now: number
-) => {
-  await refuseIfHeldByOther(ctx, block, participantId, now);
-  if (leaseHolder(block, now) !== participantId) {
-    throw new Error(LAPSED);
-  }
-};
 
 export const startEdit = mutation({
   args: { blockId: v.id("blocks") },
@@ -59,21 +34,6 @@ export const startEdit = mutation({
         ? block.leaseChangeSetId
         : undefined;
     return await grantLease(ctx, block, participant._id, now, kept);
-  },
-});
-
-export const renew = mutation({
-  args: { blockId: v.id("blocks") },
-  handler: async (ctx, { blockId }) => {
-    const { block, participant, now } = await loadForEdit(ctx, blockId);
-    await requireOwnLease(ctx, block, participant._id, now);
-    return await grantLease(
-      ctx,
-      block,
-      participant._id,
-      now,
-      block.leaseChangeSetId
-    );
   },
 });
 
@@ -93,21 +53,19 @@ export const stopEdit = mutation({
 });
 
 // Writes the block's text, taking the lease if it is free and renewing it.
-// Refused when someone else holds the block or, given `baseRev`, when the
-// block has changed since. The block keeps its author; a block someone else
+// Refused when someone else holds the block or when the block has changed
+// since `baseRev`. The block keeps its author; a block someone else
 // wrote is marked as edited by a human. Returns the block's rev.
 export const save = mutation({
   args: {
-    baseRev: v.optional(v.number()),
+    baseRev: v.number(),
     blockId: v.id("blocks"),
     text: v.string(),
   },
   handler: async (ctx, { baseRev, blockId, text }) => {
     const { block, participant, now } = await loadForEdit(ctx, blockId);
     await refuseIfHeldByOther(ctx, block, participant._id, now);
-    if (baseRev !== undefined) {
-      refuseIfStale(block, baseRev);
-    }
+    refuseIfStale(block, baseRev);
     const problem = blockTextProblem(text);
     if (problem !== null) {
       throw new Error(problem);
@@ -131,79 +89,6 @@ export const save = mutation({
   },
 });
 
-// Adds a block after another, at the end of a heading's section, or at the
-// end of the document when neither is given. The person who adds it is its
-// author and starts editing it, so the add and their typing form one change set.
-export const add = mutation({
-  args: {
-    afterBlockId: v.optional(v.id("blocks")),
-    endOfSectionId: v.optional(v.id("blocks")),
-    kind: blockKind,
-    roomId: v.id("rooms"),
-    text: v.string(),
-  },
-  handler: async (
-    ctx,
-    { roomId, afterBlockId, endOfSectionId, kind, text }
-  ) => {
-    const { participant } = await requireMember(ctx, roomId);
-    if (afterBlockId && endOfSectionId) {
-      throw new Error("Choose one place for the new block");
-    }
-    const document = await getDocument(ctx, roomId);
-    if (!document) {
-      throw new Error("This room has no document yet");
-    }
-    const now = Date.now();
-    if (scribeWorking(document, now)) {
-      throw new Error(SCRIBE_WORKING);
-    }
-    const problem = blockTextProblem(text);
-    if (problem !== null) {
-      throw new Error(problem);
-    }
-    const blocks = await liveBlocks(ctx, document._id);
-    if (blocks.length >= DOCUMENT_BLOCKS) {
-      throw new Error(
-        `The document holds at most ${DOCUMENT_BLOCKS} blocks. Merge or remove some first.`
-      );
-    }
-    const anchorId = afterBlockId ?? endOfSectionId;
-    let index = blocks.length - 1;
-    if (anchorId) {
-      index = blocks.findIndex((b) => b._id === anchorId);
-      if (index < 0) {
-        throw new Error("That block has been removed");
-      }
-      if (endOfSectionId) {
-        index = sectionEnd(blocks, index);
-      }
-    }
-    const order = orderBetween(
-      blocks[index]?.order ?? null,
-      blocks[index + 1]?.order ?? null
-    );
-    const changeSetId = await openChangeSet(ctx, document._id, {
-      actorParticipantId: participant._id,
-      kind: "human_edit",
-    });
-    const blockId = await insertBlock(ctx, changeSetId, {
-      author: { kind: "participant", participantId: participant._id },
-      kind,
-      order,
-      text,
-    });
-    await grantLease(
-      ctx,
-      { _id: blockId, roomId },
-      participant._id,
-      now,
-      changeSetId
-    );
-    return blockId;
-  },
-});
-
 export const remove = mutation({
   args: { blockId: v.id("blocks") },
   handler: async (ctx, { blockId }) => {
@@ -223,31 +108,6 @@ export const remove = mutation({
         text: "",
       });
     }
-  },
-});
-
-// Moves a block one place up or down. At the top or bottom it stays put.
-export const move = mutation({
-  args: {
-    blockId: v.id("blocks"),
-    direction: v.union(v.literal("up"), v.literal("down")),
-  },
-  handler: async (ctx, { blockId, direction }) => {
-    const { block, participant, now } = await loadForEdit(ctx, blockId);
-    await refuseIfHeldByOther(ctx, block, participant._id, now);
-    const blocks = await liveBlocks(ctx, block.documentId);
-    const index = blocks.findIndex((b) => b._id === blockId);
-    const [before, after] =
-      direction === "up"
-        ? [blocks[index - 2], blocks[index - 1]]
-        : [blocks[index + 1], blocks[index + 2]];
-    const neighbour = direction === "up" ? after : before;
-    if (!neighbour) {
-      return;
-    }
-    const order = orderBetween(before?.order ?? null, after?.order ?? null);
-    const changeSetId = await personChangeSet(ctx, block, participant._id, now);
-    await patchBlock(ctx, changeSetId, blockId, { order });
   },
 });
 
