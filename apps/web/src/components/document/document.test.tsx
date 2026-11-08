@@ -250,6 +250,19 @@ describe("reading the document", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps a block Robert holds in place, its handle disabled and naming him", async () => {
+    patchBlock(1, {
+      leaseExpiresAt: Date.now() + 60_000,
+      leaseHolderParticipantId: ROBERT,
+    });
+    await openRoom("member");
+    expect(
+      within(blockWith("Charge per seat.")).getByRole("button", {
+        name: "Reorder block, Robert is editing",
+      })
+    ).toBeDisabled();
+  });
+
   it("ignores a lease that has already lapsed", async () => {
     patchBlock(1, {
       leaseExpiresAt: Date.now() - 1000,
@@ -314,6 +327,25 @@ describe("editing a block", () => {
     );
     expect(within(paragraph).queryByRole("alert")).not.toBeInTheDocument();
   });
+
+  it("stops input that would take a block past 4,000 characters, counting from 3,800", async () => {
+    patchBlock(1, { text: "x".repeat(3995) });
+    await openRoom();
+    const paragraph = must(
+      document.querySelector<HTMLElement>('[data-block-id="b1"]')
+    );
+    const content = startEditingIn("b1");
+    expect(paragraph).toHaveTextContent("3,995 of 4,000 characters");
+
+    act(() => {
+      editorOf(content).commands.insertContentAt(1, "123456");
+    });
+    expect(paragraph).toHaveTextContent("3,995 of 4,000 characters");
+    act(() => {
+      editorOf(content).commands.insertContentAt(1, "12345");
+    });
+    expect(paragraph).toHaveTextContent("4,000 of 4,000 characters");
+  });
 });
 
 describe("adding, deleting and moving blocks", () => {
@@ -377,24 +409,89 @@ describe("adding, deleting and moving blocks", () => {
     });
   });
 
-  it("moves a block down, and offers no move up for the first block", async () => {
-    await openRoom();
-    fireEvent.click(
-      within(blockWith("Charge per seat.")).getByRole("button", {
-        name: "Move down",
-      })
+  it("moves a block below the next one on Alt+Shift+Down on its handle, announces its new place, and keeps focus on the handle", async () => {
+    mutationEffect(
+      "blockOps:moveTo",
+      () => {
+        const [h1, b1, b2, h2] = blocks;
+        assert(h1 && b1 && b2 && h2);
+        blocks = [h1, b1, h2, { ...b2, order: "a4", rev: 5 }];
+        pushBackend();
+      },
+      { rev: 5 }
     );
+    await openRoom();
+    const handle = within(blockWith("Try a free tier")).getByRole("button", {
+      name: "Reorder block",
+    });
+    handle.focus();
+    fireEvent.keyDown(handle, {
+      altKey: true,
+      key: "ArrowDown",
+      shiftKey: true,
+    });
+
     await waitFor(() => {
-      expect(mutation("blocks:move")).toHaveBeenCalledWith({
-        blockId: "b1",
-        direction: "down",
+      expect(mutation("blockOps:moveTo")).toHaveBeenCalledWith({
+        afterBlockId: "h2",
+        baseRev: 1,
+        blockId: "b2",
       });
     });
-    expect(
-      within(blockWith("Ideas & notes")).getByRole("button", {
-        name: "Move up",
-      })
-    ).toBeDisabled();
+    const announced = await screen.findByText("Moved to position 4 of 4");
+    expect(announced).toHaveAttribute("aria-live", "polite");
+    await waitFor(() => {
+      expect(
+        within(blockWith("Try a free tier")).getByRole("button", {
+          name: "Reorder block",
+        })
+      ).toHaveFocus();
+    });
+  });
+
+  it("refuses a multi-block paste that would pass the document limit, inserting nothing and keeping the paste as a draft", async () => {
+    const writeText = vi
+      .fn<(text: string) => Promise<void>>()
+      .mockResolvedValue();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const limit =
+      "This would add 5 blocks to a document of 598, and a document holds at most 600 blocks.";
+    mutation("blockOps:insertMany").mockRejectedValue(convexError(limit));
+    await openRoom();
+    const paragraph = blockWith("Charge per seat.");
+    const content = startEditingIn("b1");
+    act(() => {
+      editorOf(content).commands.setTextSelection(17);
+    });
+    const pasted = "One\n\nTwo\n\nThree\n\nFour\n\nFive";
+    fireEvent.paste(content, {
+      clipboardData: {
+        getData: (type: string) => (type === "text/plain" ? pasted : ""),
+      },
+    });
+
+    await waitFor(() => {
+      expect(mutation("blockOps:insertMany")).toHaveBeenCalledWith({
+        afterBlockId: "b1",
+        blocks: ["One", "Two", "Three", "Four", "Five"].map((text) => ({
+          kind: "paragraph",
+          text,
+        })),
+        roomId: ROOM,
+        source: { baseRev: 1, headText: "Charge per seat.", tailText: "" },
+      });
+    });
+    const alert = await within(paragraph).findByRole("alert");
+    expect(alert).toHaveTextContent(limit);
+    expect(content).toHaveTextContent(/^Charge per seat\.$/u);
+    expect(screen.queryByText("One")).not.toBeInTheDocument();
+    fireEvent.click(
+      within(paragraph).getByRole("button", { name: "Copy my draft" })
+    );
+    expect(writeText).toHaveBeenCalledWith(`Charge per seat.${pasted}`);
   });
 });
 

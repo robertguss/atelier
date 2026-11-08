@@ -13,6 +13,11 @@ export const BLOCK_KINDS = [
 
 export type BlockKind = (typeof BLOCK_KINDS)[number];
 
+// Limits on one block and on the whole document, for people and models alike.
+// Passage matching, the scribe commit and the tools' reads are sized for them.
+export const BLOCK_CHARS = 4000;
+export const DOCUMENT_BLOCKS = 600;
+
 // A numbered item's number is its place in the run of consecutive numbered
 // items it belongs to. Nothing stores it, so moves renumber for free.
 export const numberedPositions = (

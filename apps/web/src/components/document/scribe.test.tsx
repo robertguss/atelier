@@ -182,8 +182,6 @@ const blockOf = (text: string) => {
   assert(block);
   return block;
 };
-const toolbarOf = (text: string) => within(blockOf(text)).getByRole("toolbar");
-
 // The block's editor, once the pointer has reached it; null for a read-only block.
 const editorOf = (text: string) => {
   const content = screen
@@ -279,9 +277,10 @@ describe("while the scribe works", () => {
       "Try a free tier",
     ]) {
       expect(editorOf(text)).toBeNull();
-      const toolbar = toolbarOf(text);
-      for (const name of ["Move up", "Move down", "Delete"]) {
-        expect(within(toolbar).getByRole("button", { name })).toBeDisabled();
+      for (const name of ["Reorder block", "Delete"]) {
+        expect(
+          within(blockOf(text)).getByRole("button", { name })
+        ).toBeDisabled();
       }
     }
     expect(

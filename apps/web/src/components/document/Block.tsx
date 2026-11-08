@@ -1,9 +1,8 @@
 import { api } from "@atelier/backend/api";
 import type { Id } from "@atelier/backend/dataModel";
+import { BLOCK_CHARS } from "@atelier/shared";
 import { useMutation } from "convex/react";
 import {
-  ArrowDownIcon,
-  ArrowUpIcon,
   MessageSquareIcon,
   MessageSquarePlusIcon,
   Trash2Icon,
@@ -24,6 +23,8 @@ import { hasContent, logFailure } from "~/lib/utils";
 
 import { BlockEditor, KindMarker } from "./BlockEditor";
 import type { Caret } from "./BlockEditor";
+import { DragHandle } from "./DragHandle";
+import type { HandleFocus } from "./DragHandle";
 import { NewComment } from "./ThreadCard";
 import { useBlockActions } from "./useBlockActions";
 
@@ -42,8 +43,15 @@ interface BlockProps {
   holderId: string | null;
   /** A scribe run holds the document: the block can be read and commented on, not changed. */
   locked: boolean;
-  isFirst: boolean;
-  isLast: boolean;
+  /** The block's place among `count` blocks as shown, from 0. */
+  position: number;
+  count: number;
+  /** Moves the block so it lands at `to` among the others. */
+  onMove: (to: number) => Promise<void>;
+  /** A request to put focus on this block's handle after a move. */
+  handleFocus: HandleFocus | undefined;
+  /** The document holds as many blocks as it can. */
+  full: boolean;
   /** The blocks around this one as shown, and whoever else is editing the one above. */
   previous: DocBlock | null;
   next: DocBlock | null;
@@ -92,16 +100,10 @@ const ToolButton = ({
 const BlockTools = ({
   kind,
   blocked,
-  isFirst,
-  isLast,
-  onMove,
   onDelete,
 }: {
   kind: BlockKind;
   blocked: boolean;
-  isFirst: boolean;
-  isLast: boolean;
-  onMove: (direction: "up" | "down") => void;
   onDelete: () => void;
 }) => (
   <div
@@ -109,24 +111,6 @@ const BlockTools = ({
     aria-label={`${KIND_LABEL[kind]} actions`}
     className="ml-auto flex items-center gap-0.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
   >
-    <ToolButton
-      label="Move up"
-      disabled={isFirst || blocked}
-      onClick={() => {
-        onMove("up");
-      }}
-    >
-      <ArrowUpIcon />
-    </ToolButton>
-    <ToolButton
-      label="Move down"
-      disabled={isLast || blocked}
-      onClick={() => {
-        onMove("down");
-      }}
-    >
-      <ArrowDownIcon />
-    </ToolButton>
     <ToolButton label="Delete" disabled={blocked} onClick={onDelete}>
       <Trash2Icon />
     </ToolButton>
@@ -175,6 +159,16 @@ const DraftNotice = ({
     </div>
   );
 };
+
+// A block's length shows once it nears the limit.
+const COUNT_FROM = 3800;
+const CharCount = ({ length }: { length: number }) =>
+  length < COUNT_FROM ? null : (
+    <p className="text-muted-foreground mt-1 text-xs tabular-nums">
+      {length.toLocaleString("en-US")} of {BLOCK_CHARS.toLocaleString("en-US")}{" "}
+      characters
+    </p>
+  );
 
 const DIVIDER_KEYS: readonly KeyContext["key"][] = [
   "Enter",
@@ -227,8 +221,11 @@ export const Block = ({
   meId,
   holderId,
   locked,
-  isFirst,
-  isLast,
+  position,
+  count,
+  onMove,
+  handleFocus,
+  full,
   previous,
   next,
   previousHeldBy,
@@ -244,7 +241,6 @@ export const Block = ({
   onCommentDone,
 }: BlockProps) => {
   const blockId = block._id;
-  const move = useMutation(api.blocks.move);
   const remove = useMutation(api.blocks.remove);
   const local = useSyncExternalStore(session.subscribe, () =>
     session.local(sessionKey)
@@ -262,6 +258,7 @@ export const Block = ({
   };
   const actions = useBlockActions({
     block: shown,
+    full,
     next,
     onCaret,
     onError: setError,
@@ -295,6 +292,21 @@ export const Block = ({
           session.blur(sessionKey);
         }}
       >
+        <DragHandle
+          holder={otherHolder === null ? null : names(otherHolder)}
+          disabled={blocked}
+          position={position}
+          count={count}
+          onMove={(to) => {
+            onMove(to).catch((error_: unknown) => {
+              // A refusal that left a draft already says why.
+              if (!session.local(sessionKey).draft) {
+                setError(errorText(error_));
+              }
+            });
+          }}
+          focus={handleFocus}
+        />
         <KindMarker
           kind={shown.kind}
           checked={shown.checked ?? false}
@@ -331,11 +343,13 @@ export const Block = ({
               onChange={actions.handleChange}
               onKind={actions.handleKind}
               onDivider={actions.handleDivider}
+              onPaste={actions.handlePaste}
               keys={actions.keys}
             />
           )}
         </div>
       </div>
+      <CharCount length={shown.text.length} />
       {local.draft ? (
         <DraftNotice
           draft={local.draft}
@@ -385,13 +399,6 @@ export const Block = ({
         <BlockTools
           kind={block.kind}
           blocked={blocked}
-          isFirst={isFirst}
-          isLast={isLast}
-          onMove={(direction) => {
-            run(async () => await move({ blockId, direction })).catch(
-              logFailure
-            );
-          }}
           onDelete={() => {
             setConfirmingDelete(true);
           }}

@@ -1,3 +1,4 @@
+import { DOCUMENT_BLOCKS } from "@atelier/shared";
 import { v } from "convex/values";
 import { generateNKeysBetween } from "fractional-indexing";
 
@@ -6,7 +7,6 @@ import { mutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { requireMember } from "./lib/auth";
 import {
-  DOCUMENT_BLOCKS,
   SCRIBE_WORKING,
   blockTextProblem,
   clearLease,

@@ -16,6 +16,8 @@ import {
   staticContent,
 } from "~/lib/editor/extensions";
 import type { BlockKeyHandlers } from "~/lib/editor/extensions";
+import { pastedBlocks } from "~/lib/editor/paste";
+import type { PastedBlock } from "~/lib/editor/paste";
 
 import { optionId, SlashMenu, useSlashMenu } from "./SlashMenu";
 
@@ -37,6 +39,12 @@ interface BlockEditorProps {
   onKind?: (kind: BlockKind, text: string) => void;
   /** The person asked for a divider here; `text` is the block's text without what asked. */
   onDivider?: (text: string) => void;
+  /** The person pasted text that makes several blocks; `text` is the text as pasted. */
+  onPaste?: (
+    rows: readonly PastedBlock[],
+    text: string,
+    editor: Editor
+  ) => void;
   /** Keys that act on the block as a whole. */
   keys?: BlockKeyHandlers;
   /** Puts the caret in the block; each request is a new object. */
@@ -108,6 +116,18 @@ const TextEditor = (props: TextEditorProps) => {
           ...(highlighted
             ? { "aria-activedescendant": optionId(menuId, highlighted) }
             : {}),
+        },
+        // Text in several parts becomes several blocks; one part is an
+        // ordinary edit, and code keeps its blank lines.
+        handlePaste: (_view, event) => {
+          const { kind: shownKind, onPaste } = latest.current;
+          const pasted = event.clipboardData?.getData("text/plain") ?? "";
+          const rows = pastedBlocks(pasted);
+          if (!onPaste || shownKind === "code" || rows.length < 2) {
+            return false;
+          }
+          onPaste(rows, pasted, editor);
+          return true;
         },
       },
       extensions: [

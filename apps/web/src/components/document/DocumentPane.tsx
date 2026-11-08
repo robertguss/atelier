@@ -1,6 +1,6 @@
 import { api } from "@atelier/backend/api";
 import type { Id } from "@atelier/backend/dataModel";
-import { numberedPositions } from "@atelier/shared";
+import { DOCUMENT_BLOCKS, numberedPositions } from "@atelier/shared";
 import { useMutation, useQuery } from "convex/react";
 import { FileTextIcon } from "lucide-react";
 import {
@@ -26,6 +26,7 @@ import { hasContent, logFailure } from "~/lib/utils";
 
 import { Block } from "./Block";
 import type { CaretRequest } from "./Block";
+import { useBlockMoves } from "./DragHandle";
 import { HistoryControl } from "./HistoryPanel";
 import type { HistoryView } from "./HistoryPanel";
 import {
@@ -35,6 +36,7 @@ import {
   useEndedRun,
 } from "./ScribeControl";
 import { ThreadMargin } from "./ThreadMargin";
+import { FULL } from "./useBlockActions";
 
 // Names of the CSS highlights that mark commented passages and the one a
 // new comment is being written on; index.css styles them.
@@ -266,6 +268,7 @@ export const DocumentPane = ({
   );
   // Split blocks the server has not returned yet.
   useSyncExternalStore(session.subscribe, session.temps);
+  const moves = useBlockMoves(session);
   const [caret, setCaret] = useState<CaretRequest | undefined>();
   const [appendError, setAppendError] = useState<string | null>(null);
   // Leases lapse on the clock; re-check who holds a block now and then.
@@ -352,6 +355,7 @@ export const DocumentPane = ({
       text: temp.text,
     }));
     const numbers = numberedPositions(shown.map((b) => b.kind));
+    const full = shown.length >= DOCUMENT_BLOCKS;
     const indexOf = new Map(shown.map((b, i) => [b._id, i]));
     const heldByOther = (other: DocBlock | undefined) => {
       const holder = other ? leaseHolder(other, now) : null;
@@ -380,8 +384,15 @@ export const DocumentPane = ({
                     meId={meId}
                     holderId={leaseHolder(block, now)}
                     locked={locked}
-                    isFirst={block._id === doc.blocks[0]?._id}
-                    isLast={block._id === doc.blocks.at(-1)?._id}
+                    position={at}
+                    count={shown.length}
+                    onMove={async (to) => {
+                      await moves.move(shown, at, to);
+                    }}
+                    handleFocus={
+                      moves.focus?.key === key ? moves.focus : undefined
+                    }
+                    full={full}
                     previous={shown[at - 1] ?? null}
                     next={shown[at + 1] ?? null}
                     previousHeldBy={heldByOther(shown[at - 1])}
@@ -408,10 +419,16 @@ export const DocumentPane = ({
               })}
             </div>
           ))}
+          <p aria-live="polite" className="sr-only">
+            {moves.announcement}
+          </p>
+          {full ? (
+            <p className="text-muted-foreground text-xs">{FULL}</p>
+          ) : null}
           <button
             type="button"
             aria-label="Add a paragraph at the end"
-            disabled={locked}
+            disabled={locked || full}
             className="block min-h-24 w-full cursor-text"
             onClick={() => {
               append(shown.at(-1)).catch((error_: unknown) => {

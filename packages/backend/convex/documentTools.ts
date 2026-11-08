@@ -1,4 +1,8 @@
-import { numberedPositions } from "@atelier/shared";
+import {
+  BLOCK_CHARS,
+  DOCUMENT_BLOCKS,
+  numberedPositions,
+} from "@atelier/shared";
 import type { BlockKind } from "@atelier/shared";
 import { v } from "convex/values";
 import type { Infer } from "convex/values";
@@ -8,8 +12,6 @@ import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireRunnerSecret } from "./lib/auth";
 import {
-  BLOCK_CHARS,
-  DOCUMENT_BLOCKS,
   SCRIBE_WORKING,
   blockTextProblem,
   deleteBlock,

@@ -1,3 +1,4 @@
+import { BLOCK_CHARS } from "@atelier/shared";
 import type { Infer } from "convex/values";
 import { generateKeyBetween, generateNKeysBetween } from "fractional-indexing";
 
@@ -36,11 +37,6 @@ export const getDocument = async (ctx: QueryCtx, roomId: Id<"rooms">) =>
     .query("documents")
     .withIndex("by_room", (q) => q.eq("roomId", roomId))
     .unique();
-
-// Limits on one block and on the whole document, for people and models alike.
-// Passage matching, the scribe commit and the tools' reads are sized for them.
-export const BLOCK_CHARS = 4000;
-export const DOCUMENT_BLOCKS = 600;
 
 // A reason the text cannot be a block, or null.
 export const blockTextProblem = (text: string): string | null =>

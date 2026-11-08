@@ -286,6 +286,26 @@
   color: var(--contrast-muted-foreground);
 }
 
+/* Where a dragged block would land: a line in the gap above or below the
+   block under the pointer. */
+[data-drop]::after {
+  position: absolute;
+  inset-inline: 0.5rem;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--primary);
+  content: "";
+  pointer-events: none;
+}
+
+[data-drop="before"]::after {
+  top: -2px;
+}
+
+[data-drop="after"]::after {
+  bottom: -2px;
+}
+
 /* Chat markdown, trimmed from T3 Code's .chat-markdown rules. */
 .chat-markdown > :first-child {
   margin-top: 0;

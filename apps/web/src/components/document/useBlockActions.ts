@@ -1,5 +1,6 @@
 import { api } from "@atelier/backend/api";
 import type { Id } from "@atelier/backend/dataModel";
+import { DOCUMENT_BLOCKS } from "@atelier/shared";
 import type { Editor } from "@tiptap/core";
 import { useMutation } from "convex/react";
 
@@ -8,11 +9,28 @@ import type { BlockKind, DocBlock } from "~/lib/document";
 import { fromDoc, sliceDoc } from "~/lib/editor/codec";
 import { endOf } from "~/lib/editor/extensions";
 import type { Intent } from "~/lib/editor/keymap";
+import type { PastedBlock } from "~/lib/editor/paste";
 import type { Session } from "~/lib/editor/session";
 
 import type { Caret } from "./BlockEditor";
 
 type Key = Id<"blocks">;
+
+/** Why nothing more can be added to the document. */
+export const FULL = `A document holds at most ${DOCUMENT_BLOCKS} blocks. Merge or remove some first.`;
+const ADDS_A_BLOCK = new Set<Intent>([
+  "insertAbove",
+  "insertBelow",
+  "splitParagraph",
+  "splitSame",
+]);
+
+// The block's text before and after the selection.
+const around = (editor: Editor) => {
+  const doc = editor.getJSON();
+  const { from, to } = editor.state.selection;
+  return [fromDoc(sliceDoc(doc, 0, from)), fromDoc(sliceDoc(doc, to))] as const;
+};
 
 interface Options {
   roomId: Id<"rooms">;
@@ -20,6 +38,8 @@ interface Options {
   sessionKey: Key;
   /** The block as shown, with the person's unsaved text and kind. */
   block: DocBlock;
+  /** The document holds as many blocks as it can. */
+  full: boolean;
   previous: DocBlock | null;
   next: DocBlock | null;
   /** Whoever else is editing the block above. */
@@ -35,6 +55,7 @@ export const useBlockActions = ({
   session,
   sessionKey,
   block,
+  full,
   previous,
   next,
   previousHeldBy,
@@ -67,14 +88,8 @@ export const useBlockActions = ({
     if (!editor) {
       return;
     }
-    const doc = editor.getJSON();
-    const { from, to } = editor.state.selection;
-    const tail = split(
-      fromDoc(sliceDoc(doc, 0, from)),
-      tailKind,
-      fromDoc(sliceDoc(doc, to))
-    );
-    onCaret(tail, "start");
+    const [headText, tailText] = around(editor);
+    onCaret(split(headText, tailKind, tailText), "start");
   };
 
   const removeBlock = (target: DocBlock) => {
@@ -180,6 +195,10 @@ export const useBlockActions = ({
       onError(`${heldBy} is editing the block above`);
       return;
     }
+    if (full && ADDS_A_BLOCK.has(what)) {
+      onError(FULL);
+      return;
+    }
     const act: Partial<Record<Intent, () => void>> = {
       convertToParagraph: () => {
         editor?.commands.setNode("paragraph");
@@ -231,10 +250,56 @@ export const useBlockActions = ({
         changeKind("divider", "");
         return;
       }
+      if (full) {
+        onError(FULL);
+        return;
+      }
       // The person types on here, so the lease the divider came with goes back.
       session.blur(split(text, "divider", ""));
     },
     handleKind: changeKind,
+    /**
+     * Pasted text that makes several blocks: they go in after this block, which
+     * keeps the text before the caret, and the last takes the text after it,
+     * all in one write. A refusal keeps the block with the paste as a draft.
+     */
+    handlePaste: (
+      rows: readonly PastedBlock[],
+      pasted: string,
+      editor: Editor
+    ) => {
+      const [headText, tailText] = around(editor);
+      session
+        .run(
+          [[sessionKey, block.rev]],
+          async (find) => {
+            const { id, rev } = find(sessionKey);
+            const inserted = await insertMany({
+              afterBlockId: id,
+              blocks: [...rows],
+              roomId,
+              source: { baseRev: rev, headText, tailText },
+            });
+            const revs: [Key, number][] = [[sessionKey, inserted.rev ?? rev]];
+            const last = inserted.blocks.at(-1);
+            const lastRow = rows.at(-1);
+            if (last && lastRow) {
+              session.leased(last.blockId);
+              revs.push([last.blockId, last.rev]);
+              // The caret goes where the pasted text ends.
+              onCaret(
+                last.blockId,
+                lastRow.kind === "divider"
+                  ? "start"
+                  : endOf(lastRow.kind, lastRow.text)
+              );
+            }
+            return revs;
+          },
+          { text: headText + pasted + tailText }
+        )
+        .catch(fail);
+    },
     handleToggle: (checked: boolean) => {
       session
         .run(

@@ -1,3 +1,4 @@
+import { DOCUMENT_BLOCKS } from "@atelier/shared";
 import { v } from "convex/values";
 
 import type { Doc, Id } from "./_generated/dataModel";
@@ -5,7 +6,6 @@ import { internalMutation, mutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { requireMember } from "./lib/auth";
 import {
-  DOCUMENT_BLOCKS,
   SCRIBE_WORKING,
   blockTextProblem,
   clearLease,

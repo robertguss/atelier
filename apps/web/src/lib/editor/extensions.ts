@@ -1,4 +1,4 @@
-import { BLOCK_KINDS } from "@atelier/shared";
+import { BLOCK_CHARS, BLOCK_KINDS } from "@atelier/shared";
 import type { BlockKind } from "@atelier/shared";
 import {
   Extension,
@@ -12,14 +12,14 @@ import {
 import type { AnyExtension, Editor } from "@tiptap/core";
 import { Placeholder } from "@tiptap/extensions";
 import { DOMSerializer, Node as ProseMirrorNode } from "@tiptap/pm/model";
-import { PluginKey } from "@tiptap/pm/state";
+import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { StarterKit } from "@tiptap/starter-kit";
 import { Suggestion } from "@tiptap/suggestion";
 import type { SuggestionOptions } from "@tiptap/suggestion";
 
 import { KIND_LABEL } from "~/lib/document";
 
-import { kindOf, nodeName, TEXT_KINDS, toDoc } from "./codec";
+import { fromDoc, kindOf, nodeName, TEXT_KINDS, toDoc } from "./codec";
 import type { TextKind } from "./codec";
 import { intentFor } from "./keymap";
 import type { Intent, KeyContext } from "./keymap";
@@ -62,6 +62,25 @@ const LABEL = new Map(
   TEXT_KINDS.map((kind) => [nodeName(kind), KIND_LABEL[kind]])
 );
 
+const storedLength = (doc: ProseMirrorNode) => {
+  const json: unknown = doc.toJSON();
+  return typeof json === "object" && json !== null ? fromDoc(json).length : 0;
+};
+
+// Input that would take a block past its limit never lands. Shorter text
+// always does, so a block can still be cut, and so does text from elsewhere.
+const CharLimit = Extension.create({
+  addProseMirrorPlugins: () => [
+    new Plugin({
+      filterTransaction: (tr, state) =>
+        !tr.docChanged ||
+        tr.getMeta("addToHistory") === false ||
+        storedLength(tr.doc) <= Math.max(BLOCK_CHARS, storedLength(state.doc)),
+    }),
+  ],
+  name: "charLimit",
+});
+
 /** The schema and behaviour every block editor shares. */
 export const blockExtensions: AnyExtension[] = [
   BlockDocument,
@@ -86,6 +105,7 @@ export const blockExtensions: AnyExtension[] = [
   Placeholder.configure({
     placeholder: ({ node }) => LABEL.get(node.type.name) ?? "",
   }),
+  CharLimit,
 ];
 
 const schema = getSchema(blockExtensions);
