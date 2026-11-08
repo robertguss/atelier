@@ -72,10 +72,14 @@ const storedLength = (doc: ProseMirrorNode) => {
 const CharLimit = Extension.create({
   addProseMirrorPlugins: () => [
     new Plugin({
-      filterTransaction: (tr, state) =>
-        !tr.docChanged ||
-        tr.getMeta("addToHistory") === false ||
-        storedLength(tr.doc) <= Math.max(BLOCK_CHARS, storedLength(state.doc)),
+      filterTransaction: (tr, state) => {
+        if (!tr.docChanged || tr.getMeta("addToHistory") === false) {
+          return true;
+        }
+        // Measure the old text only when the new one is over the limit.
+        const after = storedLength(tr.doc);
+        return after <= BLOCK_CHARS || after <= storedLength(state.doc);
+      },
     }),
   ],
   name: "charLimit",
@@ -122,7 +126,7 @@ export const endOf = (kind: TextKind, text: string) =>
   ProseMirrorNode.fromJSON(schema, toDoc(kind, text)).content.size - 1;
 
 /** Marks a transaction that asked for a divider, by `---` or the slash menu, instead of changing the text. */
-export const DIVIDER = "blockDivider";
+export const DIVIDER_META = "blockDivider";
 
 export const slashKey = new PluginKey<{ active: boolean }>("slashMenu");
 
@@ -166,7 +170,7 @@ export const blockKeys = (handlers: BlockKeyHandlers) =>
         new InputRule({
           find: /^---$/u,
           handler: ({ state, range }) => {
-            state.tr.delete(range.from, range.to).setMeta(DIVIDER, true);
+            state.tr.delete(range.from, range.to).setMeta(DIVIDER_META, true);
           },
         }),
       ];
@@ -252,7 +256,7 @@ export const slashMenu = (render: SlashRender) =>
           command: ({ editor, range, props: item }) => {
             const chain = editor.chain().focus().deleteRange(range);
             (item.kind === "divider"
-              ? chain.setMeta(DIVIDER, true)
+              ? chain.setMeta(DIVIDER_META, true)
               : chain.setNode(nodeName(item.kind))
             ).run();
           },

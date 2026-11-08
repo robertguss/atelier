@@ -3,21 +3,21 @@ import { v } from "convex/values";
 import { internalMutation, mutation } from "./_generated/server";
 import { requireMember } from "./lib/auth";
 import {
-  blockTextProblem,
   clearLease,
   deleteBlock,
   insertBlock,
   leaseHolder,
   liveBlocks,
   patchBlock,
+  refuseBadText,
 } from "./lib/document";
 import {
   grantLease,
   humanEdit,
+  loadForChange,
   loadForEdit,
   personChangeSet,
   refuseIfHeldByOther,
-  refuseIfStale,
 } from "./lib/leases";
 
 // People edit the document one block at a time; lib/leases.ts holds the
@@ -63,13 +63,12 @@ export const save = mutation({
     text: v.string(),
   },
   handler: async (ctx, { baseRev, blockId, text }) => {
-    const { block, participant, now } = await loadForEdit(ctx, blockId);
-    await refuseIfHeldByOther(ctx, block, participant._id, now);
-    refuseIfStale(block, baseRev);
-    const problem = blockTextProblem(text);
-    if (problem !== null) {
-      throw new Error(problem);
-    }
+    const { block, participant, now } = await loadForChange(
+      ctx,
+      blockId,
+      baseRev
+    );
+    refuseBadText([text]);
     // A lapsed lease of the person's own is retaken with a fresh change set.
     const kept =
       leaseHolder(block, now) === participant._id

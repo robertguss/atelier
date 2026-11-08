@@ -298,12 +298,7 @@ export const Block = ({
           position={position}
           count={count}
           onMove={(to) => {
-            onMove(to).catch((error_: unknown) => {
-              // A refusal that left a draft already says why.
-              if (!session.local(sessionKey).draft) {
-                setError(errorText(error_));
-              }
-            });
+            onMove(to).catch(actions.fail);
           }}
           focus={handleFocus}
         />

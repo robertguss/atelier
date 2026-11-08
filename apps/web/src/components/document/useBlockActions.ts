@@ -241,6 +241,7 @@ export const useBlockActions = ({
   };
 
   return {
+    fail,
     handleChange: (text: string) => {
       session.change(sessionKey, text, block.rev);
     },

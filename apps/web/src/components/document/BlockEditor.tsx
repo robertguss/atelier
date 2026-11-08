@@ -10,7 +10,7 @@ import type { TextKind } from "~/lib/editor/codec";
 import {
   blockExtensions,
   blockKeys,
-  DIVIDER,
+  DIVIDER_META,
   slashKey,
   slashMenu,
   staticContent,
@@ -142,7 +142,7 @@ const TextEditor = (props: TextEditorProps) => {
         const doc = changed.getJSON();
         const changedText = fromDoc(doc);
         const changedKind = kindOf(doc.content?.[0]?.type ?? "");
-        if (transaction.getMeta(DIVIDER) === true) {
+        if (transaction.getMeta(DIVIDER_META) === true) {
           onDivider?.(changedText);
         } else if (changedKind === latest.current.kind) {
           onChange?.(changedText);

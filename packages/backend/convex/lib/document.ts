@@ -44,6 +44,15 @@ export const blockTextProblem = (text: string): string | null =>
     ? `A block holds at most ${BLOCK_CHARS} characters; this one has ${text.length}. Split it into several blocks.`
     : null;
 
+export const refuseBadText = (texts: string[]) => {
+  for (const text of texts) {
+    const problem = blockTextProblem(text);
+    if (problem !== null) {
+      throw new Error(problem);
+    }
+  }
+};
+
 // The document's blocks in order, without deleted ones.
 export const liveBlocks = async (ctx: QueryCtx, documentId: Id<"documents">) =>
   await ctx.db

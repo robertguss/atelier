@@ -8,7 +8,6 @@ import type { MutationCtx } from "./_generated/server";
 import { requireMember } from "./lib/auth";
 import {
   SCRIBE_WORKING,
-  blockTextProblem,
   clearLease,
   deleteBlock,
   getDocument,
@@ -17,12 +16,13 @@ import {
   openChangeSet,
   orderBetween,
   patchBlock,
+  refuseBadText,
   scribeWorking,
 } from "./lib/document";
 import {
   grantLease,
   humanEdit,
-  loadForEdit,
+  loadForChange,
   refuseIfHeldByOther,
   refuseIfStale,
 } from "./lib/leases";
@@ -34,33 +34,6 @@ import { blockKind } from "./schema";
 // change, tick, move and paste. Each is one mutation and one change set,
 // based on the rev of every block it touches and returning the new revs, and
 // comment threads follow their passages into whichever block now holds them.
-
-// The block, refused while the scribe works, while someone else holds it, or
-// when it changed since `baseRev`.
-const loadForChange = async (
-  ctx: MutationCtx,
-  blockId: Id<"blocks">,
-  baseRev: number
-) => {
-  const loaded = await loadForEdit(ctx, blockId);
-  await refuseIfHeldByOther(
-    ctx,
-    loaded.block,
-    loaded.participant._id,
-    loaded.now
-  );
-  refuseIfStale(loaded.block, baseRev);
-  return loaded;
-};
-
-const refuseBadText = (texts: string[]) => {
-  for (const text of texts) {
-    const problem = blockTextProblem(text);
-    if (problem !== null) {
-      throw new Error(problem);
-    }
-  }
-};
 
 const refuseIfFull = (count: number, adding: number) => {
   if (count + adding > DOCUMENT_BLOCKS) {

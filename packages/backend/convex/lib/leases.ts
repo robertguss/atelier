@@ -66,6 +66,24 @@ export const refuseIfStale = (block: Doc<"blocks">, baseRev: number) => {
   }
 };
 
+// The block, refused while the scribe works, while someone else holds it, or
+// when it changed since `baseRev`.
+export const loadForChange = async (
+  ctx: MutationCtx,
+  blockId: Id<"blocks">,
+  baseRev: number
+) => {
+  const loaded = await loadForEdit(ctx, blockId);
+  await refuseIfHeldByOther(
+    ctx,
+    loaded.block,
+    loaded.participant._id,
+    loaded.now
+  );
+  refuseIfStale(loaded.block, baseRev);
+  return loaded;
+};
+
 // The mark a person's write leaves on a block someone else wrote. The block
 // keeps its author.
 export const humanEdit = (
